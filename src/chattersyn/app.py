@@ -6,11 +6,13 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import shutil
 import sys
 import traceback
+from pathlib import Path
 
 import qasync
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtCore import QCoreApplication, QStandardPaths
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .config.paths import config_dir
@@ -20,6 +22,22 @@ from .ui import theme
 from .ui.main_window import MainWindow
 
 log = logging.getLogger("chattersyn")
+
+# v0.1.x used org "ChatterSync"; the rename moves the config dir, so carry
+# the user's files over once. Keyring entries are unaffected (service name
+# "red-chattersyn" did not change).
+_LEGACY_ORG = "ChatterSync"
+
+
+def _migrate_legacy_config(old_dir: Path, new_dir: Path) -> None:
+    if not old_dir.is_dir() or new_dir.exists():
+        return
+    new_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("settings.json", "secrets.json"):
+        src = old_dir / name
+        if src.is_file():
+            shutil.copy2(src, new_dir / name)
+            log.info("migrated %s from %s", name, old_dir)
 
 
 def _install_excepthook() -> None:
@@ -34,7 +52,7 @@ def _install_excepthook() -> None:
         except OSError:
             pass
         with contextlib.suppress(Exception):  # pragma: no cover - dialog unavailable
-            QMessageBox.critical(None, "ChatterSync",
+            QMessageBox.critical(None, "ChatterSyn",
                                  f"Unhandled error:\n{exc}\n\nDetails written to crash.log")
 
     sys.excepthook = hook
@@ -70,18 +88,26 @@ async def _main(app: QApplication, settings: Settings, demo: bool) -> None:
 
 
 def run(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="chattersyn", description="ChatterSync dual chat client")
+    parser = argparse.ArgumentParser(prog="chattersyn", description="ChatterSyn dual chat client")
     parser.add_argument("--demo", action="store_true",
                         help="start with the built-in fake feed (no credentials needed)")
     args = parser.parse_args(argv)
 
-    QCoreApplication.setOrganizationName("ChatterSync")
+    QCoreApplication.setOrganizationName("ChatterSyn")
     QCoreApplication.setApplicationName("chattersyn")
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     app = QApplication.instance() or QApplication(sys.argv[:1] if argv else sys.argv)
+    new_dir = Path(QStandardPaths.writableLocation(
+        QStandardPaths.StandardLocation.AppConfigLocation))
+    QCoreApplication.setOrganizationName(_LEGACY_ORG)  # resolve the old dir…
+    _migrate_legacy_config(
+        Path(QStandardPaths.writableLocation(QStandardPaths.StandardLocation.AppConfigLocation)),
+        new_dir,
+    )
+    QCoreApplication.setOrganizationName("ChatterSyn")  # …then switch back
     settings = Settings.load(config_dir())
     theme.apply(app, settings.get("theme", "dark"), settings.get("ui_scale", 1.0))
     _install_excepthook()

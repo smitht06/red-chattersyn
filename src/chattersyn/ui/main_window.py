@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QMainWindow,
     QMessageBox,
+    QStackedWidget,
 )
 
 from ..config.paths import config_dir
@@ -53,6 +54,7 @@ from ..services.youtube.auth import YouTubeAuthError
 from ..services.youtube.service import WatchState, YouTubeService, YoutubeState
 from . import theme
 from .emote_picker import EmotePickerPopup
+from .empty_tab_page import EmptyTabPage
 from .fake_feed import FakeFeed
 from .mentions_popup import MentionsPopup
 from .notebook import Notebook
@@ -82,6 +84,17 @@ def _chat_mode_text(state: dict) -> str:
     if state.get("slow"):
         parts.append(f"slow {state['slow']}s")
     return " · ".join(parts)
+
+
+def _tab_title(twitch_channel: str, youtube_target: str) -> str:
+    """Notebook label: only the chats the tab actually has, never a bare '?'."""
+    parts = []
+    if twitch_channel:
+        parts.append(twitch_channel)
+    if youtube_target:
+        target = youtube_target[:11] + "…" if len(youtube_target) > 11 else youtube_target
+        parts.append(target)
+    return " + ".join(parts)
 
 
 class MainWindow(QMainWindow):
@@ -114,7 +127,7 @@ class MainWindow(QMainWindow):
         self._twitch_live: dict[str, dt.datetime] = {}  # channel -> last poll saw it live
         self._twitch_offline_since: dict[str, dt.datetime] = {}  # channel -> went down at
 
-        self.setWindowTitle("ChatterSync")
+        self.setWindowTitle("ChatterSyn")
         self.resize(1080, 720)
 
         self._secrets = SecretsStore(config_dir())
@@ -142,7 +155,16 @@ class MainWindow(QMainWindow):
         self._notebook = Notebook(self)
         self._notebook.new_tab_requested.connect(self._new_tab_dialog)
         self._notebook.tabCloseRequested.connect(self._close_tab)
-        self.setCentralWidget(self._notebook)
+        # Stack: notebook while tabs exist, link page when the last one closes.
+        self._empty_tab_page = EmptyTabPage(self)
+        self._empty_tab_page.new_combo.connect(self._new_tab_dialog)
+        self._empty_tab_page.new_twitch.connect(self._new_twitch_tab)
+        self._empty_tab_page.new_youtube.connect(self._new_youtube_tab)
+        self._stack = QStackedWidget(self)
+        self._stack.addWidget(self._notebook)
+        self._stack.addWidget(self._empty_tab_page)
+        self.setCentralWidget(self._stack)
+        self._sync_empty_state()
 
         self._build_menus()
         self._setup_hotkeys()
@@ -180,9 +202,19 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         # Shortcuts for New Tab / Close Tab live in the hotkey registry
         # (settings hotkeys.*) — the menu actions carry no key of their own.
-        new_tab_action = QAction("New Tab", self)
-        new_tab_action.triggered.connect(self._new_tab_dialog)
-        file_menu.addAction(new_tab_action)
+        combo_tab_action = QAction("New Combo Tab", self)
+        combo_tab_action.triggered.connect(self._new_tab_dialog)
+        file_menu.addAction(combo_tab_action)
+
+        twitch_tab_action = QAction("New Twitch Tab", self)
+        twitch_tab_action.triggered.connect(self._new_twitch_tab)
+        file_menu.addAction(twitch_tab_action)
+
+        youtube_tab_action = QAction("New YouTube Tab", self)
+        youtube_tab_action.triggered.connect(self._new_youtube_tab)
+        file_menu.addAction(youtube_tab_action)
+
+        file_menu.addSeparator()
 
         close_tab_action = QAction("Close Tab", self)
         close_tab_action.triggered.connect(lambda: self._close_tab(self._notebook.currentIndex()))
@@ -233,7 +265,7 @@ class MainWindow(QMainWindow):
         view_menu.addAction(zoom_reset)
 
         help_menu = self.menuBar().addMenu("&Help")
-        about_action = QAction("About ChatterSync", self)
+        about_action = QAction("About ChatterSyn", self)
         about_action.triggered.connect(self._show_about)
         help_menu.addAction(about_action)
 
@@ -1333,7 +1365,7 @@ class MainWindow(QMainWindow):
         youtube_target = (youtube_target or "").strip()
         tab = Tab(self._settings, twitch_channel, youtube_target)
         self._tabs.append(tab)
-        title = f"{twitch_channel or '?'} + {youtube_target[:11] + '…' if youtube_target else '?'}"
+        title = _tab_title(twitch_channel, youtube_target)
         self._notebook.add_chat_tab(tab, title)
         tab.usercard_requested.connect(self._show_usercard)
         tab.reply_requested.connect(functools.partial(self._on_reply_requested, tab))
@@ -1355,6 +1387,7 @@ class MainWindow(QMainWindow):
         # still show the current modes.
         tab.header.set_chat_modes(self._roomstate_text.get(twitch_channel, ""))
         self._sync_send_limits(tab)
+        self._sync_empty_state()
 
         if self._demo:
             feed = FakeFeed(tab, twitch_channel or "forsen", "Demo Stream")
@@ -1400,6 +1433,29 @@ class MainWindow(QMainWindow):
         youtube = youtube.strip() if ok else ""
         self.add_tab(twitch or "forsen", youtube or None)
 
+    def _new_twitch_tab(self) -> None:
+        twitch, ok = QInputDialog.getText(self, "New Twitch Tab", "Twitch channel:")
+        if not ok:
+            return
+        twitch = twitch.strip().lstrip("#@").lower()
+        self.add_tab(twitch or "forsen", None)
+
+    def _new_youtube_tab(self) -> None:
+        youtube, ok = QInputDialog.getText(
+            self, "New YouTube Tab",
+            "YouTube live video URL / video ID / @handle:")
+        if not ok:
+            return
+        youtube = youtube.strip()
+        if not youtube:  # a tab with no chats at all would be useless
+            return
+        self.add_tab("", youtube)
+
+    def _sync_empty_state(self) -> None:
+        """Show the link page in place of an empty notebook, and vice versa."""
+        self._stack.setCurrentWidget(
+            self._empty_tab_page if self._notebook.count() == 0 else self._notebook)
+
     def _close_tab(self, index: int) -> None:
         if index < 0:
             return
@@ -1429,6 +1485,7 @@ class MainWindow(QMainWindow):
             else:
                 remaining.append(feed)
         self._feeds = remaining
+        self._sync_empty_state()
 
     # -- actions -----------------------------------------------------------------------
 
@@ -1596,8 +1653,8 @@ class MainWindow(QMainWindow):
     def _show_about(self) -> None:
         QMessageBox.about(
             self,
-            "About ChatterSync",
-            "ChatterSync — a Chatterino-style chat client for Twitch + YouTube live chat.\n\n"
+            "About ChatterSyn",
+            "ChatterSyn — a Chatterino-style chat client for Twitch + YouTube live chat.\n\n"
             "One input, two chats. Built with Python + PySide6.",
         )
 

@@ -641,7 +641,7 @@ class SettingsDialog(QDialog):
         page = QWidget(self)
         layout = QVBoxLayout(page)
         layout.addWidget(QLabel(
-            f"<h2>ChatterSync {VERSION}</h2>"
+            f"<h2>ChatterSyn {VERSION}</h2>"
             "A Chatterino-style chat client for Twitch and YouTube live chat "
             "in one merged feed.", page))
         layout.addWidget(QLabel(

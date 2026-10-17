@@ -161,7 +161,7 @@ async def test_full_loopback_flow_exchanges_and_saves():
         waiter = asyncio.ensure_future(auth.wait_for_code())
 
         body = await browser_get(f"http://127.0.0.1:{port}/?code=auth-code-1&scope=chat%3Aread")
-        assert "ChatterSync" in body
+        assert "ChatterSyn" in body
 
         tokens = await waiter
         assert tokens is not None

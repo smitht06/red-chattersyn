@@ -1,4 +1,4 @@
-"""Headless smoke run: boots ChatterSync offscreen with the demo feed,
+"""Headless smoke run: boots ChatterSyn offscreen with the demo feed,
 renders the window to a PNG after a few seconds, then quits.
 
 Usage: uv run python scripts/screenshot.py [output.png]

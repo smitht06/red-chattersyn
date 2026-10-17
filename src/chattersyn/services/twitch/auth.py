@@ -25,7 +25,7 @@ FLOW_TIMEOUT = 300.0  # user has 5 minutes to complete the browser flow
 OK_PAGE = (
     b"<html><body style='background:#1e1e1e;color:#eee;font-family:sans-serif;"
     b"display:grid;place-items:center;height:100vh'>"
-    b"<p>ChatterSync is connected to Twitch. You can close this window.</p>"
+    b"<p>ChatterSyn is connected to Twitch. You can close this window.</p>"
     b"</body></html>"
 )
 

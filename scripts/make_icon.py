@@ -1,4 +1,4 @@
-"""Draw the ChatterSync app icon: rounded tile + dual chat bubble, brand
+"""Draw the ChatterSyn app icon: rounded tile + dual chat bubble, brand
 purple on the app's dark palette. Writes packaging/icon.png and the derived
 packaging/icon.icns + packaging/icon.ico (build inputs for PyInstaller).
 

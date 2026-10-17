@@ -37,7 +37,7 @@ TOKEN_KEY = "youtube_token"  # Credentials.to_json() blob
 # Shown in the browser after a successful exchange.
 OK_PAGE = (
     "<html><body style='font-family:sans-serif;background:#1e1e1e;color:#eee;"
-    "padding:40px;text-align:center'><h2>ChatterSync is connected to YouTube</h2>"
+    "padding:40px;text-align:center'><h2>ChatterSyn is connected to YouTube</h2>"
     "<p>You can close this tab and return to the app.</p></body></html>"
 )
 

@@ -1,4 +1,4 @@
-# ChatterSync
+# ChatterSyn
 
 A Chatterino-style desktop chat client for **Twitch + YouTube live chat**, built
 in Python with PySide6. One window, one input box — every message posts to
@@ -90,8 +90,8 @@ credentials for everything else. Everything is configured from
    new application. Category "Chat Bot" is fine.
 2. Note the **Client ID** and **Client Secret**.
 3. In *OAuth Redirect URLs*, add exactly: `http://localhost:17821`
-   (ChatterSync tries ports 17821–17823; Twitch requires an exact URI match).
-4. In ChatterSync, **Settings → Accounts**: paste Client ID and Client Secret,
+   (ChatterSyn tries ports 17821–17823; Twitch requires an exact URI match).
+4. In ChatterSyn, **Settings → Accounts**: paste Client ID and Client Secret,
    then click **Connect** and complete the flow in your browser.
 
 The client secret is stored in your OS keychain (macOS Keychain), never in
@@ -111,11 +111,11 @@ Google **OAuth client** with `youtube.force-ssl` consent.
    user (no scopes needed on the consent screen itself).
 4. **Credentials → Create credentials → OAuth client ID** → *Desktop app* →
    **Download JSON** (this is `client_secrets.json`).
-5. In ChatterSync, **Settings → Accounts → Authorize** → pick
+5. In ChatterSyn, **Settings → Accounts → Authorize** → pick
    `client_secrets.json` → complete consent in your browser.
 
 > **Note on "Testing" publishing status:** test-project refresh tokens expire
-> after **7 days**. ChatterSync detects this, tells you in chat, and
+> after **7 days**. ChatterSyn detects this, tells you in chat, and
 > **Settings → Accounts → Authorize** re-consents in one click. Publishing
 > the app (or keeping it in Testing and re-consenting weekly) avoids this.
 
@@ -126,7 +126,7 @@ Google **OAuth client** with `youtube.force-ssl` consent.
 - The streamer-bar stats refresh polls `videos.list` every ~2 min while a
   stream is live (1 quota unit per call).
 - Each **send** costs 20 units (10,000/day default). When the quota is
-  exhausted, ChatterSync shows a banner, pauses reading, and blocks the
+  exhausted, ChatterSyn shows a banner, pauses reading, and blocks the
   YouTube send toggle until the midnight-PT reset.
 
 ## Settings
@@ -134,7 +134,7 @@ Google **OAuth client** with `youtube.force-ssl` consent.
 **Settings → Accounts** and the other pages — General (theme, UI scale,
 scrollback, timestamps, tab restore), Commands, Highlights, Moderation,
 Notifications, Hotkeys, About — persist to `settings.json`
-(macOS: `~/Library/Preferences/ChatterSync/chattersyn/`). Secrets live in the
+(macOS: `~/Library/Preferences/ChatterSyn/chattersyn/`). Secrets live in the
 OS keychain. Unhandled errors append to `crash.log` in the same directory.
 
 ## Development

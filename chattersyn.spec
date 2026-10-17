@@ -75,8 +75,8 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleShortVersionString": VERSION,
             "CFBundleVersion": VERSION,
-            "CFBundleDisplayName": "ChatterSync",
-            "CFBundleName": "ChatterSync",
+            "CFBundleDisplayName": "ChatterSyn",
+            "CFBundleName": "ChatterSyn",
             "NSHighResolutionCapable": True,
             "LSMinimumSystemVersion": "12.0",
         },
