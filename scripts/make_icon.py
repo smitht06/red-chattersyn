@@ -11,8 +11,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QGuiApplication, QImage, QLinearGradient, QPainter, QPainterPath
-from PySide6.QtGui import QPen
+from PySide6.QtGui import QColor, QGuiApplication, QImage, QLinearGradient, QPainter, QPainterPath, QPen
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "packaging"
