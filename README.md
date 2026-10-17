@@ -57,6 +57,27 @@ uv sync
 uv run chattersyn
 ```
 
+## Packaged builds
+
+Prebuilt bundles for macOS, Windows, and Linux are built by GitHub Actions on
+every push and published on the [Releases](https://github.com/smitht06/red-chattersyn/releases)
+page (tag `v*`), or as CI artifacts on the run itself. No Python install needed.
+
+**macOS** (Apple Silicon) — `chattersyn-<version>-macos-arm64.zip`: unzip and
+drag `chattersyn.app` to Applications. It is ad-hoc signed (not notarized), so
+the first launch needs right-click → Open → Open in Finder to get past
+Gatekeeper.
+
+**Windows** — `chattersyn-<version>-windows-x86_64.zip`: unzip anywhere and run
+`chattersyn.exe` (portable, nothing installed). First launch may show a
+SmartScreen prompt — More info → Run anyway.
+
+**Linux** — `chattersyn-<version>-linux-x86_64.tar.gz`: extract and run
+`./chattersyn`. Built on Ubuntu 22.04 (glibc 2.35), so it runs on Linux Mint
+21+ and similar. Credentials are stored via the Secret Service
+(gnome-keyring / KWallet) when available; otherwise keyring falls back to a
+local file (`~/.local/share/python_keyring/`).
+
 ## Credentials setup
 
 Out of the box the app runs **read-only on Twitch** (anonymous chat) and needs
