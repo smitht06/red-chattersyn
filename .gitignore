@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+.DS_Store
+crash.log
+
+# Generated at build time from packaging/icon.png
+packaging/icon.icns
+packaging/icon.ico
+packaging/icon.iconset/

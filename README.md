@@ -1,0 +1,130 @@
+# ChatterSync
+
+A Chatterino-style desktop chat client for **Twitch + YouTube live chat**, built
+in Python with PySide6. One window, one input box — every message posts to
+**both** chats.
+
+```text
+┌────────────────────────────────────────────────────┐
+│ ● Twitch: forsen · ● YouTube: The Stream           │
+│ [merged chat feed — Twitch + YouTube interleaved]  │
+│ [🛡] [Tw ✓] [Yt ✓]           Big Stream · 1,234…  │
+│ ▸ message goes here…                    [😀] [Send]│
+└────────────────────────────────────────────────────┘
+```
+
+## Features
+
+- **Merged feed** — one interleaved chat view per tab (Twitch channel + YouTube
+  stream pair), platform badge on every message, batch-rendered for 50+ msg/s.
+- **One input, dual send** — Enter posts to both chats (per-platform send
+  toggles, dual character counters, rate-limit queues, exactly-once echo).
+- **Full emotes** — Twitch + 7TV + BTTV + FFZ (animated WebP), per-provider
+  toggles and priority.
+- **Badges, usercards, replies** — Twitch badge sets, reply banners + `/reply`,
+  hover usercards with recent messages and moderation actions.
+- **Highlights & mentions** — regex/plain rules, colors, sounds, `/mentions`.
+- **Commands** — `/me /reply /clear /announce /timeout /ban /delete /mod /vip
+  /slow /subscribers /emoteonly /followers` plus your own `commands.json`.
+- **Moderation mode** — per-tab shield; Twitch IRC commands, YouTube
+  owner/mod-only delete with server ban + local hide.
+- **Live awareness** — live dots, streamer bar (title · viewers · uptime),
+  offline-since timestamps, live notifications.
+- **The rest** — Ctrl+F search popup (with predicates), text logging, emote
+  picker, autocomplete with thumbnails, dark/light themes, hotkeys, window
+  geometry and tab restore.
+
+## Install
+
+Requires Python ≥ 3.11 and < 3.14 (3.13 recommended), and [uv](https://docs.astral.sh/uv/).
+
+```sh
+git clone <this repo> && cd <this repo>
+uv tool install .          # puts `chattersyn` on your PATH
+chattersyn
+```
+
+Try it with the built-in fake feed first — no credentials needed:
+
+```sh
+chattersyn --demo
+```
+
+For development:
+
+```sh
+uv sync
+uv run chattersyn
+```
+
+## Credentials setup
+
+Out of the box the app runs **read-only on Twitch** (anonymous chat) and needs
+credentials for everything else. Everything is configured from
+**Settings → Accounts** (Cmd/Ctrl+,).
+
+### Twitch (sending, badge metadata, live status)
+
+1. Go to [dev.twitch.tv/console](https://dev.twitch.tv/console) → register a
+   new application. Category "Chat Bot" is fine.
+2. Note the **Client ID** and **Client Secret**.
+3. In *OAuth Redirect URLs*, add exactly: `http://localhost:17821`
+   (ChatterSync tries ports 17821–17823; Twitch requires an exact URI match).
+4. In ChatterSync, **Settings → Accounts**: paste Client ID and Client Secret,
+   then click **Connect** and complete the flow in your browser.
+
+The client secret is stored in your OS keychain (macOS Keychain), never in
+`settings.json`. Without credentials, chat reading + emotes still work
+anonymously; sending and live polling are disabled.
+
+### YouTube (reading, sending, moderation)
+
+Reading works with a plain **API key** (quota-free gRPC push). Sending needs a
+Google **OAuth client** with `youtube.force-ssl` consent.
+
+1. [console.cloud.google.com](https://console.cloud.google.com/) → create a
+   project → **APIs & Services → Library** → enable **YouTube Data API v3**.
+2. **Credentials → Create credentials → API key** — paste it into
+   **Settings → Accounts → Data API key**. Chat reading works now.
+3. For sending: **OAuth consent screen** → External, add yourself as a test
+   user (no scopes needed on the consent screen itself).
+4. **Credentials → Create credentials → OAuth client ID** → *Desktop app* →
+   **Download JSON** (this is `client_secrets.json`).
+5. In ChatterSync, **Settings → Accounts → Authorize** → pick
+   `client_secrets.json` → complete consent in your browser.
+
+> **Note on "Testing" publishing status:** test-project refresh tokens expire
+> after **7 days**. ChatterSync detects this, tells you in chat, and
+> **Settings → Accounts → Authorize** re-consents in one click. Publishing
+> the app (or keeping it in Testing and re-consenting weekly) avoids this.
+
+### Quota
+
+- Chat **reading** uses YouTube's gRPC `liveChatMessages.streamList` push —
+  quota-free; there is no polling cost.
+- The streamer-bar stats refresh polls `videos.list` every ~2 min while a
+  stream is live (1 quota unit per call).
+- Each **send** costs 20 units (10,000/day default). When the quota is
+  exhausted, ChatterSync shows a banner, pauses reading, and blocks the
+  YouTube send toggle until the midnight-PT reset.
+
+## Settings
+
+**Settings → Accounts** and the other pages — General (theme, UI scale,
+scrollback, timestamps, tab restore), Commands, Highlights, Moderation,
+Notifications, Hotkeys, About — persist to `settings.json`
+(macOS: `~/Library/Preferences/ChatterSync/chattersyn/`). Secrets live in the
+OS keychain. Unhandled errors append to `crash.log` in the same directory.
+
+## Development
+
+```sh
+uv sync
+uv run ruff check src/ tests/   # lint
+uv run pytest -q                 # 675 tests, no credentials needed
+```
+
+Architecture: one qasync loop on the main thread; Twitch over
+IRC-over-WebSocket plus Helix REST; YouTube over gRPC streamList (read) plus
+REST (send); Qt model/delegate chat rendering. See the plan in
+`~/.claude/plans/i-want-an-app-idempotent-pebble.md` for the full design.
