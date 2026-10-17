@@ -1,0 +1,107 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04 (glibc 2.35): runs on Linux Mint 21+, our Linux target.
+          - os: ubuntu-22.04
+            artifact: linux-x86_64
+          - os: macos-14
+            artifact: macos-arm64
+          - os: windows-latest
+            artifact: windows-x86_64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install (ubuntu GUI libs for Qt)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libfontconfig1 libxkbcommon-x11-0
+
+      - run: uv sync --group build --locked
+
+      - name: Stamp version
+        run: |
+          echo "APP_VERSION=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")" >> "$GITHUB_ENV"
+
+      - name: Generate icons
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run python scripts/make_icon.py
+
+      - name: Build
+        run: uv run pyinstaller --noconfirm chattersyn.spec
+
+      - name: Sign (macOS ad-hoc)
+        if: runner.os == 'macOS'
+        run: codesign --force --deep --sign - dist/chattersyn.app
+
+      - name: Smoke test (12s --demo, must stay alive)
+        env:
+          QT_QPA_PLATFORM: offscreen
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then BIN=dist/chattersyn.app/Contents/MacOS/chattersyn
+          elif [ "$RUNNER_OS" = "Windows" ]; then BIN=dist/chattersyn/chattersyn.exe
+          else BIN=dist/chattersyn/chattersyn; fi
+          "$BIN" --demo & APP_PID=$!
+          sleep 12
+          if ! kill -0 $APP_PID 2>/dev/null; then wait $APP_PID; echo "app exited early"; exit 1; fi
+          kill $APP_PID; wait $APP_PID 2>/dev/null || true
+          echo "smoke OK"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --keepParent dist/chattersyn.app "dist/chattersyn-${{ env.APP_VERSION }}-${{ matrix.artifact }}.zip"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: tar -czf "dist/chattersyn-${{ env.APP_VERSION }}-${{ matrix.artifact }}.tar.gz" -C dist chattersyn
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist\chattersyn -DestinationPath "dist\chattersyn-${{ env.APP_VERSION }}-${{ matrix.artifact }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chattersyn-${{ env.APP_VERSION }}-${{ matrix.artifact }}
+          path: dist/chattersyn-*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
