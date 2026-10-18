@@ -53,8 +53,7 @@ class TwitchService:
 
         self.irc = self._make_irc()
         self.irc.start()
-        for name in list(self._desired):
-            self.irc.join(name)
+        self._join_desired()
 
     async def reconnect(self) -> bool:
         """Drop the IRC connection and start a fresh one — the recovery path
@@ -82,8 +81,7 @@ class TwitchService:
             self.irc = None
         self.irc = self._make_irc()
         self.irc.start()
-        for name in list(self._desired):
-            self.irc.join(name)
+        self._join_desired()
         return True
 
     async def disconnect(self) -> None:
@@ -99,8 +97,7 @@ class TwitchService:
             self.irc = None
         self.irc = self._make_irc()
         self.irc.start()
-        for name in list(self._desired):
-            self.irc.join(name)
+        self._join_desired()
 
     async def _user_token(self) -> str | None:
         """Validated/refreshed access token for Helix's TokenProvider; None
@@ -162,7 +159,12 @@ class TwitchService:
     async def join_channel(self, name: str) -> bool:
         """Join IRC + load badges/emotes metadata. False = join cap reached."""
         name = name.lstrip("#").lower()
-        if not name or name in self._desired:
+        if not name:
+            return True
+        if name in self._desired:
+            # Already joined (or deferred pre-start): still make sure the
+            # metadata load wasn't skipped back then.
+            self._kick_metadata(name)
             return True
         if self.irc is None:
             # Service not started yet; will join on connect.
@@ -173,15 +175,31 @@ class TwitchService:
         if not self.irc.join(name):
             return False
         self._desired.add(name)
-        if self.helix is not None and name not in self._metadata_loaded:
+        self._kick_metadata(name)
+        return True
+
+    def _join_desired(self) -> None:
+        """Join every desired channel on a fresh connection. Channels that
+        were requested before the service started (join_channel with no live
+        IRC) are only in `_desired` — their metadata load was deferred, so
+        kick it here or the channel keeps a bare join with no Twitch emotes."""
+        for name in list(self._desired):
+            self.irc.join(name)
+            self._kick_metadata(name)
+
+    def _kick_metadata(self, name: str) -> None:
+        """Schedule badges/emotes loading for `name` when it hasn't run yet
+        and the prerequisites (live IRC + Helix) exist. Anonymous runs have
+        no Helix; their 7TV/BTTV/FFZ load is driven by _on_message room ids."""
+        if self.irc is not None and self.helix is not None and name not in self._metadata_loaded:
             self._metadata_loaded.add(name)
             asyncio.ensure_future(self._load_channel_metadata(name))
-        return True
 
     def part(self, name: str) -> None:
         name = name.lstrip("#").lower()
         self._desired.discard(name)
         self._metadata_loaded.discard(name)
+        self.registry.forget_channel(name)
         if self.irc is not None:
             self.irc.part(name)
 
@@ -227,7 +245,7 @@ class TwitchService:
                 for version_id, badge in versions.items():
                     self._badges[(badge.set_id, version_id)] = badge
             id_to_name = await self.helix.channel_emotes(broadcaster_id)
-            self.registry.set_twitch_emotes(id_to_name)
+            self.registry.set_twitch_emotes(name, id_to_name)
         except Exception as exc:
             log.warning("Helix metadata for %s failed: %s", name, exc)
         if broadcaster_id is None:

@@ -296,7 +296,7 @@ def test_registry_channel_shadows_global_within_provider():
 
 def test_registry_twitch_emotes_scoped_queries():
     registry = EmoteRegistry(Settings())
-    registry.set_twitch_emotes({"25": "Kappa"})  # channel set (Kappa appears as a sub emote)
+    registry.set_twitch_emotes("forsen", {"25": "Kappa"})  # channel set (Kappa appears as a sub emote)
     registry.set_twitch_global_emotes({"1": "BibleThump"})
     assert registry.name_for_twitch_id("25") == "Kappa"
     assert registry.lookup("Kappa") is None  # Twitch emotes matched by IRC tags, not tokens
@@ -308,7 +308,143 @@ def test_registry_twitch_emotes_scoped_queries():
     assert {"Kappa", "BibleThump"} <= all_names
     # The global Twitch emote carries no scope; channel ones carry the channel.
     assert all(e.scope is None for e in registry.global_emotes())
-    assert registry._twitch_channel["Kappa"].scope is None  # no channel loaded yet
+    assert registry._twitch_channel["Kappa"].scope == "forsen"
+
+
+def test_registry_lookup_by_name_all_providers():
+    registry = EmoteRegistry(Settings())
+    registry.set_twitch_emotes("forsen", {"25": "Kappa"})  # channel (sub) set
+    registry.set_twitch_global_emotes({"1": "BibleThump"})
+    registry._channel = {"7tv": {"KEKW": Emote("a", "KEKW", "7tv", {"1x": "https://x/a.png"})}}
+    assert registry.lookup_by_name("BibleThump").id == "1"
+    assert registry.lookup_by_name("Kappa").id == "25"
+    assert registry.lookup_by_name("KEKW").provider == "7tv"
+    assert registry.lookup_by_name("nope") is None
+    # The IRC-tag path stays third-party-only (tags are authoritative there).
+    assert registry.lookup("Kappa") is None
+
+
+def test_registry_lookup_by_name_twitch_channel_shadows_global():
+    registry = EmoteRegistry(Settings())
+    registry.set_twitch_global_emotes({"1": "Kappa"})
+    registry.set_twitch_emotes("forsen", {"25": "Kappa"})
+    assert registry.lookup_by_name("Kappa").id == "25"
+
+
+def test_registry_split_emote_text():
+    registry = EmoteRegistry(Settings())
+    registry.set_twitch_global_emotes({"1": "Kappa", "2": "LUL"})
+    registry._channel = {"7tv": {"KEKW": Emote("a", "KEKW", "7tv", {"1x": "https://x/a.png"})}}
+
+    def names(pieces):
+        return [(text, emote.name if emote else None) for text, emote in pieces]
+
+    assert names(registry.split_emote_text("Kappa KEKW")) == [
+        ("Kappa", "Kappa"), (" ", None), ("KEKW", "KEKW")]
+    # Trailing punctuation detaches from the emote as its own text piece.
+    assert names(registry.split_emote_text("Kappa, KEKW")) == [
+        ("Kappa", "Kappa"), (",", None), (" ", None), ("KEKW", "KEKW")]
+    # Adjacent emote names stay text — Twitch requires whitespace between
+    # emotes (verified live on twitch.tv), so the optimistic row must match.
+    assert names(registry.split_emote_text("KappaKappa")) == [("KappaKappa", None)]
+    # A word that merely starts with an emote name stays text (whole-word match).
+    assert names(registry.split_emote_text("hello KappaX")) == [
+        ("hello", None), (" ", None), ("KappaX", None)]
+    # Interior punctuation still separates emotes (`hey,Kappa` renders Kappa).
+    assert names(registry.split_emote_text("hey,Kappa")) == [
+        ("hey", None), (",", None), ("Kappa", "Kappa")]
+    assert names(registry.split_emote_text("hi")) == [("hi", None)]
+
+
+def test_registry_per_channel_twitch_emotes_independent():
+    """Parallel Twitch tabs each keep their own channel emotes: joining a
+    second channel no longer overwrites the first one's sets."""
+    registry = EmoteRegistry(Settings())
+    registry.set_twitch_emotes("#Alice", {"25": "Kappa"})
+    registry.set_twitch_emotes("bob", {"25": "Dedhed"})
+    # Scoped lookups resolve against the asked-for channel (names normalize).
+    assert registry.lookup_by_name("Kappa", "alice").id == "25"
+    assert registry.lookup_by_name("Kappa", "bob") is None
+    assert registry.lookup_by_name("Dedhed", "bob").id == "25"
+    assert registry.lookup_by_name("Dedhed", "alice") is None
+    # IRC emote tags resolve per channel too (same id, different names).
+    assert registry.name_for_twitch_id("25", "alice") == "Kappa"
+    assert registry.name_for_twitch_id("25", "bob") == "Dedhed"
+    # The active channel (picker view) is the last one loaded.
+    assert registry.sub_emotes()[0].name == "Dedhed"
+
+
+def test_registry_channel_lookup_falls_back_to_global():
+    """A channel's scoped map wins; other channels fall back to the global set."""
+    registry = EmoteRegistry(Settings())
+    registry.set_twitch_global_emotes({"g": "LUL"})
+    registry._channels["alice"] = {
+        "7tv": {"KEKW": Emote("a", "KEKW", "7tv", {"1x": "https://x/a.png"})}
+    }
+    registry._global["7tv"] = {"KEKW": Emote("g", "KEKW", "7tv", {"1x": "https://x/g.png"})}
+    assert registry.lookup("KEKW", "alice").id == "a"
+    assert registry.lookup("KEKW", "bob").id == "g"
+    assert registry.lookup_by_name("LUL", "alice").id == "g"
+
+
+def test_registry_split_emote_text_is_channel_aware():
+    """Optimistic sends scope to their own channel: a channel emote of one
+    tab must not render as an emote in another tab."""
+    registry = EmoteRegistry(Settings())
+    registry.set_twitch_emotes("alice", {"25": "Dedhed"})
+
+    def names(pieces):
+        return [(text, emote.name if emote else None) for text, emote in pieces]
+
+    text = "DedhedDedhed Dedhed"
+    # Adjacent names stay text (Twitch parity); only the whole token matches.
+    assert names(registry.split_emote_text(text, channel="alice")) == [
+        ("DedhedDedhed", None), (" ", None), ("Dedhed", "Dedhed")]
+    assert names(registry.split_emote_text(text, channel="bob")) == [
+        ("DedhedDedhed", None), (" ", None), ("Dedhed", None)]
+    # Channel-less splits use the active (last-loaded) channel.
+    assert names(registry.split_emote_text("Dedhed")) == [("Dedhed", "Dedhed")]
+
+
+def test_registry_space_twitch_emotes():
+    """Outbound Twitch sends insert spaces between adjacent emote names so
+    twitch.tv's whole-word parser renders them."""
+    registry = EmoteRegistry(Settings())
+    registry.set_twitch_global_emotes({"1": "Kappa"})
+    registry.set_twitch_emotes("alice", {"25": "Dedhed"})
+
+    assert registry.space_twitch_emotes("KappaKappa") == "Kappa Kappa"
+    assert registry.space_twitch_emotes("Kappa") == "Kappa"
+    # Mixed words stay untouched — respacing them would split a word Twitch
+    # will show as text either way.
+    assert registry.space_twitch_emotes("KappaX") == "KappaX"
+    # Punctuation is preserved around respaced runs.
+    assert registry.space_twitch_emotes("Kappa, KappaKappa") == "Kappa, Kappa Kappa"
+    assert registry.space_twitch_emotes("KappaKappa,") == "Kappa Kappa,"
+    # Channel-scoped names respace only in their own channel.
+    assert registry.space_twitch_emotes("DedhedDedhed", channel="alice") == "Dedhed Dedhed"
+    assert registry.space_twitch_emotes("DedhedDedhed", channel="bob") == "DedhedDedhed"
+    # Third-party names never respace — twitch.tv does not render them.
+    registry._channels["alice"] = {"7tv": {"KEKW": Emote("a", "KEKW", "7tv")}}
+    assert registry.space_twitch_emotes("KEKWKEKW", channel="alice") == "KEKWKEKW"
+    # Disabled Twitch provider: leave the text alone.
+    off = EmoteRegistry(Settings({"emote_providers": {"twitch": False}}))
+    off.set_twitch_global_emotes({"1": "Kappa"})
+    assert off.space_twitch_emotes("KappaKappa") == "KappaKappa"
+
+
+def test_registry_forget_channel_keeps_others():
+    registry = EmoteRegistry(Settings())
+    registry.set_twitch_global_emotes({"g": "LUL"})
+    registry.set_twitch_emotes("alice", {"1": "Kappa"})
+    registry.set_twitch_emotes("bob", {"2": "Dedhed"})
+    registry.forget_channel("alice")
+    assert registry.lookup_by_name("Kappa", "alice") is None
+    assert registry.lookup_by_name("Dedhed", "bob").id == "2"
+    assert registry.lookup_by_name("LUL", "bob").id == "g"  # globals untouched
+    # Forgetting the active channel clears the picker views.
+    registry.forget_channel("bob")
+    assert registry.sub_emotes() == []
 
 
 @respx.mock

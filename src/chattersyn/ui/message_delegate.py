@@ -1,12 +1,12 @@
 """MessageDelegate: paints chat rows with cached QTextDocument layouts.
 
-Each message gets one QTextDocument (cached per (message id, width)) with a
-custom QTextObjectInterface for emote/badge images — images are resolved
-lazily from the global ImageCache and rows repaint when images arrive.
+Each message gets one QTextDocument (cached per (message id, width)) with
+emote/badge images as native QTextImageFormat objects — the document's
+loadResource serves them lazily from the global ImageCache and rows repaint
+when images arrive (PySide6 6.12's registerHandler silently drops Python
+text-object handlers, so custom QTextObjectInterface objects never draw).
 Custom QTextFormat properties carry hit-test metadata (links, mentions,
 username span) so clicks are routed without inline HTML or a widget per row.
-The object replacement character (U+FFFC) is inserted as plain text since
-PySide6 6.12 no longer exposes QChar.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -27,7 +27,7 @@ from PySide6.QtGui import (
     QTextCursor,
     QTextDocument,
     QTextFormat,
-    QTextObjectInterface,
+    QTextImageFormat,
 )
 from PySide6.QtWidgets import QApplication, QStyle, QStyledItemDelegate
 
@@ -38,11 +38,8 @@ from . import theme
 
 # -- custom format property ids ------------------------------------------------
 
-EMOTE_TYPE = QTextFormat.ObjectTypes.UserObject + 1
-EMOTE_URL = QTextFormat.Property.UserProperty + 1
 EMOTE_ALT = QTextFormat.Property.UserProperty + 2
 EMOTE_ANIMATED = QTextFormat.Property.UserProperty + 3
-EMOTE_HEIGHT = QTextFormat.Property.UserProperty + 4
 MENTION = QTextFormat.Property.UserProperty + 5
 
 CHIP_STYLE = {
@@ -86,52 +83,52 @@ def _variant_value(fmt: QTextFormat, prop: int):
     return value
 
 
-class _EmoteInterface(QObject, QTextObjectInterface):
-    """Draws emote/badge images (or a placeholder) inside a QTextDocument.
+def _placeholder_pixmap(alt: str) -> QPixmap:
+    """Rounded box with the emote/badge name (like Chatterino's loading state;
+    also used for emotes without URLs). Rendered at 2x for crisp scaling."""
+    pm = QPixmap(56, 56)
+    pm.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pm)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setPen(QColor("#4a4a4a"))
+    painter.setBrush(QColor("#383838"))
+    painter.drawRoundedRect(1, 1, 54, 54, 6, 6)
+    font = QFont()
+    font.setPixelSize(13)
+    painter.setFont(font)
+    painter.setPen(QColor("#9a9a9a"))
+    painter.setClipRect(2, 0, 52, 56)
+    painter.drawText(4, 2, 48, 52, Qt.AlignmentFlag.AlignCenter, alt)
+    painter.end()
+    return pm
 
-    PySide6 6.12's registerHandler requires a QObject, so the interface is
-    implemented as a QObject subclass (Qt5-style combination class).
+
+class _EmoteDocument(QTextDocument):
+    """QTextDocument that resolves emote/badge images from the ImageCache.
+
+    Emote images are inserted as QTextImageFormat objects named
+    ``emote://e/N`` where N indexes ``self.emotes``. PySide6 6.12's
+    registerHandler silently drops Python text-object handlers
+    (handlerForObject returns null and the layout never calls the
+    interface), so native image objects + loadResource are used instead.
     """
 
-    def intrinsicSize(self, doc, posInDocument, fmt):
-        height = max(16.0, float(fmt.intProperty(EMOTE_HEIGHT) or 28))
-        return QSize(height, height)
+    def __init__(self):
+        super().__init__()
+        self.emotes: list[tuple[str, bool, str]] = []  # (url, animated, alt)
 
-    def draw(self, painter, rect, doc, posInDocument, fmt):
-        url = fmt.stringProperty(EMOTE_URL) or ""
-        alt = fmt.stringProperty(EMOTE_ALT) or ""
-        animated = fmt.boolProperty(EMOTE_ANIMATED)
-        pix: QPixmap | None = None
-        if url:
-            obj = image_cache.request(url, animated)
-            if isinstance(obj, QMovie):
-                pix = obj.currentPixmap()
-            elif isinstance(obj, QPixmap):
-                pix = obj
-        if pix is not None and not pix.isNull():
-            target = rect.toRect().size()
-            scaled = pix.scaled(target, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            x = rect.x() + (rect.width() - scaled.width()) / 2
-            y = rect.y() + (rect.height() - scaled.height()) / 2
-            painter.drawPixmap(int(x), int(y), scaled)
-        else:
-            # Placeholder: rounded box with the emote/badge name (like Chatterino's
-            # loading state; also used for fake-feed emotes without URLs).
-            painter.save()
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            painter.setPen(QColor("#4a4a4a"))
-            painter.setBrush(QColor("#383838"))
-            painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 3.0, 3.0)
-            font = QFont()
-            font.setPointSizeF(7.0)
-            painter.setFont(font)
-            painter.setPen(QColor("#9a9a9a"))
-            painter.setClipRect(rect)
-            painter.drawText(rect.adjusted(2, 0, -2, 0), Qt.AlignmentFlag.AlignCenter, alt)
-            painter.restore()
-
-
-_EMOTE_INTERFACE = _EmoteInterface()
+    def loadResource(self, kind, name):
+        if int(kind) == int(QTextDocument.ResourceType.ImageResource):
+            text = name.toString()
+            if text.startswith("emote://e/"):
+                url, animated, alt = self.emotes[int(text.rsplit("/", 1)[1])]
+                obj = image_cache.request(url, animated) if url else None
+                if isinstance(obj, QMovie):
+                    return obj.currentPixmap()
+                if isinstance(obj, QPixmap) and not obj.isNull():
+                    return obj
+                return _placeholder_pixmap(alt)
+        return super().loadResource(kind, name)
 
 
 @dataclass
@@ -144,6 +141,7 @@ class _RowLayout:
     chip: tuple[str, str] | None = None
     urls: list[str] = field(default_factory=list)
     x_offset: int = 0  # where the document starts (after chip + margins)
+    text_center: float = 0.0  # first-line text band center, document coords
     gutter: int = 0  # right-side reserve for moderation buttons
     # (x, y, w, h, label) relative to the row rect origin
     buttons: list[tuple[float, float, float, float, str]] = field(default_factory=list)
@@ -300,9 +298,8 @@ class MessageDelegate(QStyledItemDelegate):
                 button_rects.append((float(bx), float(by), float(bw), float(MOD_BUTTON_H), label))
                 by += MOD_BUTTON_H + MOD_BUTTON_GAP
 
-        doc = QTextDocument()
+        doc = _EmoteDocument()
         doc.setDocumentMargin(0)
-        doc.documentLayout().registerHandler(EMOTE_TYPE, _EMOTE_INTERFACE)
 
         base = QTextCharFormat()
         base.setFont(body_font)
@@ -332,14 +329,15 @@ class MessageDelegate(QStyledItemDelegate):
         else:
             author = msg.author
             for badge in author.badges:
-                fmt = QTextCharFormat(base)
-                fmt.setObjectType(EMOTE_TYPE)
-                fmt.setProperty(EMOTE_HEIGHT, 16)
-                fmt.setProperty(EMOTE_URL, badge.url_for(dpr) or "")
+                fmt = QTextImageFormat()
+                fmt.setName(f"emote://e/{len(doc.emotes)}")
+                fmt.setWidth(16)
+                fmt.setHeight(16)
                 fmt.setProperty(EMOTE_ALT, badge.title or badge.set_id)
                 fmt.setProperty(EMOTE_ANIMATED, False)
                 fmt.setToolTip(badge.tooltip or badge.title or badge.set_id)
-                cursor.insertText("\ufffc", fmt)
+                doc.emotes.append((badge.url_for(dpr) or "", False, badge.title or badge.set_id))
+                cursor.insertImage(fmt)
 
             name_fmt = QTextCharFormat(base)
             name_fmt.setFontWeight(QFont.Weight.Bold)
@@ -383,16 +381,20 @@ class MessageDelegate(QStyledItemDelegate):
                 else:  # ImageRun
                     emote = run.emote
                     scale = "2x" if dpr >= 2.0 else "1x"
-                    fmt = QTextCharFormat(base)
-                    fmt.setObjectType(EMOTE_TYPE)
-                    fmt.setProperty(EMOTE_HEIGHT, max(20, emote.height_px))
-                    fmt.setProperty(EMOTE_URL, emote.url_for_scale(scale) or "")
-                    fmt.setProperty(EMOTE_ALT, run.alt or emote.name)
+                    url = emote.url_for_scale(scale) or ""
+                    alt = run.alt or emote.name
+                    fmt = QTextImageFormat()
+                    fmt.setName(f"emote://e/{len(doc.emotes)}")
+                    size = max(20, emote.height_px)
+                    fmt.setWidth(size)
+                    fmt.setHeight(size)
+                    fmt.setProperty(EMOTE_ALT, alt)
                     fmt.setProperty(EMOTE_ANIMATED, emote.animated)
-                    fmt.setToolTip(run.alt or emote.name)
-                    cursor.insertText("\ufffc", fmt)
-                    if emote.url_for_scale(scale):
-                        urls.append(emote.url_for_scale(scale))
+                    fmt.setToolTip(alt)
+                    doc.emotes.append((url, bool(emote.animated), alt))
+                    cursor.insertImage(fmt)
+                    if url:
+                        urls.append(url)
 
         reserved = ROW_MARGIN_X * 2 + chip_w + (ts_width + 8 if ts_width else 0) + gutter
         text_width = max(10, width - reserved)
@@ -401,6 +403,15 @@ class MessageDelegate(QStyledItemDelegate):
                      if buttons else 0)
         height = max(int(doc.size().height()) + ROW_MARGIN_Y * 2 + 4,
                      buttons_h + ROW_MARGIN_Y * 2 + 8)
+        # Center of the first line's text band (document coords): the body
+        # font's em box centered on the baseline. The chip and timestamp ride
+        # on this so they stay on the text line even when a tall emote
+        # stretches the line height. (doc.size() above forces the layout.)
+        line = doc.begin().layout().lineAt(0)
+        fm = QFontMetricsF(body_font)
+        text_center = 0.0
+        if line.isValid():
+            text_center = line.y() + line.ascent() - (fm.ascent() - fm.descent()) / 2
 
         return _RowLayout(
             doc=doc,
@@ -411,6 +422,7 @@ class MessageDelegate(QStyledItemDelegate):
             chip=chip,
             urls=urls,
             x_offset=ROW_MARGIN_X + chip_w,
+            text_center=text_center,
             gutter=gutter,
             buttons=button_rects,
         )
@@ -468,10 +480,11 @@ class MessageDelegate(QStyledItemDelegate):
             painter.fillRect(rect, tint)
             painter.fillRect(rect.x(), rect.y(), BAR_W, rect.height(), bar)
 
-        # Platform chip
+        # Platform chip — rides on the first line's text band
         if layout.chip:
             chip_text, chip_color = layout.chip
-            chip_rect = QRectF(rect.x() + ROW_MARGIN_X, rect.y() + ROW_MARGIN_Y + 1, CHIP_W, CHIP_H)
+            chip_y = rect.y() + ROW_MARGIN_Y + 2 + layout.text_center - CHIP_H / 2
+            chip_rect = QRectF(rect.x() + ROW_MARGIN_X, chip_y, CHIP_W, CHIP_H)
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(chip_color))
             painter.drawRoundedRect(chip_rect, 3.5, 3.5)
@@ -494,9 +507,9 @@ class MessageDelegate(QStyledItemDelegate):
             painter.setFont(ts_font)
             painter.setPen(QColor("#8a8a8a"))
             ts_rect = QRectF(rect.right() - layout.gutter - layout.ts_width - ROW_MARGIN_X - 2,
-                             rect.y() + ROW_MARGIN_Y + 3,
+                             rect.y() + ROW_MARGIN_Y + 2 + layout.text_center - 8,
                              layout.ts_width, 16)
-            painter.drawText(ts_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop, layout.ts_text)
+            painter.drawText(ts_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, layout.ts_text)
 
         # Moderation action buttons in the right gutter
         if layout.buttons:
@@ -566,7 +579,7 @@ class MessageDelegate(QStyledItemDelegate):
         mention = _variant_value(fmt, MENTION)
         if isinstance(mention, str) and mention:
             return ("user", mention)
-        if fmt.objectType() == EMOTE_TYPE:
+        if fmt.objectType() == QTextFormat.ObjectTypes.ImageObject:
             alt = fmt.stringProperty(EMOTE_ALT)
             if alt:
                 return ("emote", alt)

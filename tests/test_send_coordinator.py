@@ -7,7 +7,8 @@ import pytest
 
 from chattersyn.config.settings import Settings
 from chattersyn.core.bus import bridge
-from chattersyn.models.message import MessageFlags, Platform
+from chattersyn.models.message import ImageRun, MessageFlags, Platform
+from chattersyn.services.emotes.emote_registry import EmoteRegistry
 from chattersyn.services.send import (
     MODE_BLOCK,
     MODE_HIGHLIGHT,
@@ -67,9 +68,10 @@ def results():
 async def coordinator(results):
     coordinators = []
 
-    async def make(twitch=None, youtube=None, settings=None):
+    async def make(twitch=None, youtube=None, settings=None, emote_registry=None):
         coordinator = SendCoordinator(
             twitch or FakeTwitch(), youtube or FakeYouTube(), settings or _settings(),
+            emote_registry=emote_registry,
         )
         coordinator.start()
         coordinators.append(coordinator)
@@ -125,6 +127,35 @@ async def test_dual_send_calls_both_exactly_once(coordinator, results):
     assert tw_msg.plain == "hello world"
     assert tw_msg.channel_id == "forsen"
     assert tw_msg.extra["self"] is True
+
+
+async def test_optimistic_twitch_message_renders_emotes(coordinator):
+    # Twitch never echoes our own PRIVMSG, so the optimistic row is the only
+    # render of a self-sent message — it must parse emote codes by name.
+    registry = EmoteRegistry(Settings())
+    registry.set_twitch_global_emotes({"1": "Kappa"})
+    send = await coordinator(emote_registry=registry)
+
+    optimistic = send.send("tab-1", "hi Kappa KappaKappa", DUAL)
+    tw_msg = optimistic[Platform.TWITCH]
+    # The Twitch copy is respaced so twitch.tv renders every emote; the
+    # optimistic row splits that same text.
+    assert tw_msg.plain == "hi Kappa Kappa Kappa"
+    image_names = [run.emote.name for run in tw_msg.runs if isinstance(run, ImageRun)]
+    assert image_names == ["Kappa", "Kappa", "Kappa"]
+    # YouTube has no emote syntax — its copy stays exactly as typed.
+    yt_msg = optimistic[Platform.YOUTUBE]
+    assert len(yt_msg.runs) == 1
+    assert yt_msg.runs[0].text == "hi Kappa KappaKappa"
+
+
+async def test_optimistic_twitch_message_without_registry_is_plain(coordinator):
+    send = await coordinator()
+    optimistic = send.send(
+        "tab-1", "hi Kappa", SendTargets(twitch_channel="forsen", youtube_enabled=False),
+    )
+    tw_msg = optimistic[Platform.TWITCH]
+    assert [type(run).__name__ for run in tw_msg.runs] == ["TextRun"]
 
 
 async def test_twitch_failure_emits_failed_result(coordinator, results):

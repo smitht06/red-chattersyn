@@ -143,6 +143,7 @@ class MainWindow(QMainWindow):
                 self._twitch.send, self._youtube.send, settings,
                 twitch_author=self._twitch.self_author,
                 youtube_author=self._youtube.self_author,
+                emote_registry=self._twitch.registry,
             )
             self._send.start()
             self._logger = ChatLogger(settings)

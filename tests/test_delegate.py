@@ -68,8 +68,8 @@ def test_hit_test_username(qapp):
 
     index = view.message_model.index(0)
     rect = view.visualRect(index)
-    # Username starts after the [Tw] chip + margins (~36px).
-    hit = view._delegate.hit_test(index, QPointF(rect.x() + 40, rect.y() + 8), rect)
+    # Username starts after the [Tw] chip + margins + the 16px badge (~52px).
+    hit = view._delegate.hit_test(index, QPointF(rect.x() + 60, rect.y() + 8), rect)
     assert hit is not None and hit[0] == "user"
 
 

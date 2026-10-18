@@ -64,12 +64,31 @@ def test_prvmsg_third_party_emote_and_url():
         ":KEKW check https://example.com/x KEKW!"
     )
     seven_tv = {"KEKW": Emote("k1", "KEKW", "7tv", urls={"1x": "https://cdn.7tv.app/emote/k1/1x.webp"})}
-    msg = _map(line, third_party_lookup=seven_tv.get)
+    msg = _map(line, third_party_lookup=lambda token, channel=None: seven_tv.get(token))
     assert msg is not None
     assert any(isinstance(r, ImageRun) and r.emote.provider == "7tv" for r in msg.runs)
     assert any(isinstance(r, TextRun) and r.link == "https://example.com/x" for r in msg.runs)
     # trailing "KEKW!" still matches the stripped token
     assert sum(1 for r in msg.runs if isinstance(r, ImageRun)) == 2
+
+
+def test_prvmsg_lookups_receive_the_channel():
+    line = (
+        "@badges=;color=;display-name=Viewer;emotes=25:0-4;flags=;id=m3;mod=0;"
+        "room-id=1;subscriber=0;tmi-sent-ts=1620000000000;turbo=0;user-id=2;user-type= "
+        ":viewer!viewer@viewer.tmi.twitch.tv PRIVMSG #Alice :Kappa KEKW"
+    )
+    seen: dict[str, list[str | None]] = {"name": [], "party": []}
+    msg = _map(
+        line,
+        channel="#Alice",
+        emote_name_lookup=lambda eid, channel=None: seen["name"].append(channel) or "Kappa",
+        third_party_lookup=lambda token, channel=None: seen["party"].append(channel) or None,
+    )
+    assert msg is not None
+    # Both lookups see the normalized channel (lowercased, no #).
+    assert seen["name"] == ["alice"]
+    assert seen["party"] and all(c == "alice" for c in seen["party"])
 
 
 def test_prvmsg_action_strips_wrapper_and_shifts_ranges():

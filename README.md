@@ -72,6 +72,17 @@ drag `chattersyn.app` to Applications. It is ad-hoc signed (not notarized), so
 the first launch needs right-click → Open → Open in Finder to get past
 Gatekeeper.
 
+macOS asks for your login password whenever the app reads its credentials
+from the Keychain (the Twitch/YouTube tokens live there). CI builds are
+ad-hoc signed, and an ad-hoc identity is the binary's content hash — every
+new build looks like a new app, so the prompts repeat for each credential
+item. Local builds via `scripts/build.py` prefer a self-signed code-signing
+cert named `ChatterSyn*` (Keychain Access → Certificate Assistant → Code
+Signing): a stable identity lets "Always Allow" stick permanently. Keep the
+built app outside iCloud-synced folders — copy it to /Applications: the
+iCloud file provider can strip a bundle's signature after the build, which
+puts the app back on per-rebuild prompts.
+
 **Windows** — `chattersyn-<version>-windows-x86_64.zip`: unzip anywhere and run
 `chattersyn.exe` (portable, nothing installed). First launch may show a
 SmartScreen prompt — More info → Run anyway.

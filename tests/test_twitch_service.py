@@ -1,5 +1,7 @@
 """TwitchService: client-id resolution, Helix token provider, token sync."""
 
+import asyncio
+
 import httpx
 import respx
 
@@ -161,6 +163,87 @@ async def test_make_irc_anonymous_keeps_justinfan_nick():
     assert irc._nick.startswith("justinfan")
     assert irc._token is None
     assert irc.is_anonymous
+
+
+# -- deferred join metadata -----------------------------------------------------------------
+
+
+class _RecordingIrc:
+    def __init__(self):
+        self.joined = []
+
+    def start(self):
+        pass
+
+    def join(self, name):
+        self.joined.append(name)
+
+    async def stop(self):
+        pass
+
+
+class _FakeHelix:
+    async def close(self):
+        pass
+
+
+async def test_join_desired_kicks_metadata_for_channels_deferred_pre_start(monkeypatch):
+    """Regression: channels requested before the service started are only in
+    `_desired`; the fresh connection must still load their Twitch emotes, or
+    self-sent emotes resolve as raw text for the whole session."""
+    service = make_service()
+    service._desired.add("alice")
+    irc = _RecordingIrc()
+    service.irc = irc
+    service.helix = _FakeHelix()  # presence is all _kick_metadata checks
+    kicked = []
+    async def _fake_load(name):
+        kicked.append(name)
+    monkeypatch.setattr(service, "_load_channel_metadata", _fake_load)
+    try:
+        service._join_desired()
+        await asyncio.sleep(0)  # let the scheduled metadata task run
+        assert irc.joined == ["alice"]
+        assert kicked == ["alice"]
+        service._join_desired()  # idempotent: already loaded
+        await asyncio.sleep(0)
+        assert kicked == ["alice"]
+    finally:
+        await service.stop()
+
+
+async def test_join_channel_on_existing_desired_channel_kicks_metadata(monkeypatch):
+    """A channel already in `_desired` (deferred pre-start join) must still
+    get its metadata load when join_channel is called again later."""
+    service = make_service()
+    service._desired.add("alice")
+    service.irc = _RecordingIrc()
+    service.helix = _FakeHelix()
+    kicked = []
+    async def _fake_load(name):
+        kicked.append(name)
+    monkeypatch.setattr(service, "_load_channel_metadata", _fake_load)
+    try:
+        assert await service.join_channel("alice") is True
+        await asyncio.sleep(0)  # let the scheduled metadata task run
+        assert kicked == ["alice"]
+    finally:
+        await service.stop()
+
+
+async def test_join_desired_skips_metadata_without_helix():
+    """Anonymous runs (no Helix) must not attempt a Helix metadata load."""
+    service = make_service()
+    service._desired.add("alice")
+    irc = _RecordingIrc()
+    service.irc = irc
+    service.helix = None
+    try:
+        service._join_desired()
+        assert irc.joined == ["alice"]
+        assert "alice" not in service._metadata_loaded
+    finally:
+        await service.stop()
 
 
 async def test_disconnect_drops_helix(monkeypatch):

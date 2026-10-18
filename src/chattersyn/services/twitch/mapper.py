@@ -20,8 +20,8 @@ from ...models.message import Author, Badge, ImageRun, Message, MessageFlags, Pl
 # -- lookups (injected) --------------------------------------------------------
 
 BadgeLookup = Callable[[str, str], Badge | None]
-EmoteNameLookup = Callable[[str], str | None]  # twitch emote id -> name
-ThirdPartyLookup = Callable[[str], Emote | None]  # token -> 7TV/BTTV/FFZ emote
+EmoteNameLookup = Callable[[str, str | None], str | None]  # (twitch emote id, channel) -> name
+ThirdPartyLookup = Callable[[str, str | None], Emote | None]  # (token, channel) -> 7TV/BTTV/FFZ emote
 
 CHEER_RE = re.compile(r"\bCheer(\d+)\b")
 ACTION_PREFIX = "\x01ACTION "
@@ -228,28 +228,33 @@ def build_runs(
     third_party_lookup: ThirdPartyLookup | None = None,
     emote_urls: Callable[[str], dict[str, str]] | None = None,
     theme: str = "dark",
+    channel: str | None = None,
 ) -> list:
     """Build render runs from text + parsed Twitch emote ranges.
 
     Twitch ranges are authoritative; the gaps between them are tokenized on
-    whitespace and checked for URLs and third-party emotes.
+    whitespace and checked for URLs and third-party emotes. `channel` (the
+    message's channel) is passed to the lookups so scoped emotes resolve
+    against that channel's sets.
     """
     runs: list = []
     pos = 0
     for emote_id, start, end in twitch_ranges:
         if start > pos:
-            runs.extend(_gap_runs(text[pos:start], third_party_lookup))
+            runs.extend(_gap_runs(text[pos:start], third_party_lookup, channel))
         if start < pos or end > start:  # skip zero-length/broken ranges
-            name = (emote_name_lookup(emote_id) if emote_name_lookup else None) or text[start:end]
+            name = (emote_name_lookup(emote_id, channel) if emote_name_lookup else None) or text[start:end]
             urls = emote_urls(emote_id) if emote_urls else {}
             runs.append(ImageRun(Emote(emote_id, name, "twitch", urls=urls, height_px=28), name))
         pos = max(pos, end)
     if pos < len(text):
-        runs.extend(_gap_runs(text[pos:], third_party_lookup))
+        runs.extend(_gap_runs(text[pos:], third_party_lookup, channel))
     return runs
 
 
-def _gap_runs(gap: str, third_party_lookup: ThirdPartyLookup | None) -> list:
+def _gap_runs(
+    gap: str, third_party_lookup: ThirdPartyLookup | None, channel: str | None = None
+) -> list:
     runs: list = []
     for token in re.split(r"(\s+)", gap):
         if not token:
@@ -263,7 +268,7 @@ def _gap_runs(gap: str, third_party_lookup: ThirdPartyLookup | None) -> list:
             continue
         if third_party_lookup is not None:
             for candidate in emote_tokens(token):
-                emote = third_party_lookup(candidate)
+                emote = third_party_lookup(candidate, channel)
                 if emote is not None:
                     runs.append(ImageRun(emote, emote.name))
                     break
@@ -345,6 +350,7 @@ class TwitchMapper:
             third_party_lookup=self.third_party_lookup,
             emote_urls=self.emote_urls,
             theme=self.theme,
+            channel=channel.lstrip("#").lower(),
         )
         flags = MessageFlags.NONE
         extra: dict[str, Any] = {}

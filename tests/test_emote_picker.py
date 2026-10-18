@@ -30,7 +30,7 @@ def _dataset():
 def registry(tmp_path):
     settings = Settings(path=tmp_path / "settings.json")
     reg = EmoteRegistry(settings)
-    reg.set_twitch_emotes({"1": "PogChamp"})
+    reg.set_twitch_emotes("forsen", {"1": "PogChamp"})
     reg.set_twitch_global_emotes({"2": "LULW"})
     reg._channel["7tv"] = {"KEKW": Emote(id="k1", name="KEKW", provider="7tv")}
     reg._global["7tv"] = {"widepepoHappy": Emote(id="k2", name="widepepoHappy", provider="7tv")}

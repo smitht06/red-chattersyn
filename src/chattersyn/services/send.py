@@ -41,7 +41,8 @@ from ..core.text import (
     prepare_twitch_send,
     truncate_codepoints,
 )
-from ..models.message import Author, Message, MessageFlags, Platform, TextRun
+from ..models.message import Author, ImageRun, Message, MessageFlags, Platform, TextRun
+from .emotes.emote_registry import EmoteRegistry
 from .twitch.irc import NotAuthenticated, NotConnected
 from .youtube.sender import YoutubeSendError
 
@@ -121,12 +122,14 @@ class SendCoordinator:
         *,
         twitch_author: Callable[[], Author | None] | None = None,
         youtube_author: Callable[[], Author | None] | None = None,
+        emote_registry: EmoteRegistry | None = None,
     ) -> None:
         self._twitch_send = twitch_send
         self._youtube_send = youtube_send
         self._settings = settings
         self._twitch_author = twitch_author
         self._youtube_author = youtube_author
+        self._emote_registry = emote_registry
         self.mode = settings.get("send.truncate_mode", MODE_HIGHLIGHT)
 
         self._queues: dict[Platform, asyncio.Queue] = {
@@ -193,7 +196,8 @@ class SendCoordinator:
         prepared: dict[Platform, tuple[str, bool, bool]] = {}  # text, truncated, action
         failures: dict[Platform, str] = {}
         for platform in self._enabled_platforms(targets):
-            error, out, truncated, action = self._validate(platform, text, targets.is_dual)
+            error, out, truncated, action = self._validate(
+                platform, text, targets.is_dual, twitch_channel=targets.twitch_channel)
             if error:
                 failures[platform] = error
             else:
@@ -254,7 +258,8 @@ class SendCoordinator:
         if request is None:
             return None
         targets = request.targets
-        error, out, truncated, action = self._validate(platform, request.text, dual=False)
+        error, out, truncated, action = self._validate(
+            platform, request.text, dual=False, twitch_channel=request.targets.twitch_channel)
         if error:
             self._requests.pop(request_key, None)  # the offer is spent
             self._emit(SendResult(
@@ -441,11 +446,17 @@ class SendCoordinator:
     # -- validation --------------------------------------------------------------------------
 
     def _validate(
-        self, platform: Platform, text: str, dual: bool
+        self, platform: Platform, text: str, dual: bool,
+        twitch_channel: str | None = None,
     ) -> tuple[str | None, str, bool, bool]:
         """-> (error | None, prepared_text, truncated, action)."""
         if platform is Platform.TWITCH:
             body, action = prepare_twitch_send(text)
+            # Space out adjacent Twitch emote names so twitch.tv renders them
+            # (its parser only matches whole words) — before the limit, since
+            # the inserted spaces count against it.
+            if self._emote_registry is not None:
+                body = self._emote_registry.space_twitch_emotes(body, channel=twitch_channel)
             limit = YOUTUBE_MESSAGE_LIMIT if dual else TWITCH_MESSAGE_LIMIT
             return self._apply_limit(platform, body, limit, action)
         # YouTube: never gets the /me prefix (Twitch-only markup); the same
@@ -495,13 +506,27 @@ class SendCoordinator:
         flags = MessageFlags.ACTION if action else MessageFlags.NONE
         if reply_parent_id:
             flags |= MessageFlags.REPLY
+        # Twitch never echoes our own PRIVMSG, so the optimistic row is the
+        # only render of a self-sent message — parse its emotes by name from
+        # the registry (no IRC tags exist for it), scoped to the channel the
+        # message was sent to. YouTube has no emote syntax; its optimistic
+        # rows stay plain text.
+        if platform is Platform.TWITCH and self._emote_registry is not None:
+            runs = [
+                ImageRun(emote, emote.name) if emote is not None else TextRun(piece)
+                for piece, emote in self._emote_registry.split_emote_text(
+                    text, channel=targets.twitch_channel
+                )
+            ]
+        else:
+            runs = [TextRun(text)]
         return Message(
             id=f"optimistic-{uuid.uuid4().hex}",
             platform=platform,
             channel_id=channel_id,
             ts=dt.datetime.now(),
             author=author or Author(name="You"),
-            runs=[TextRun(text)],
+            runs=runs,
             plain=text,
             flags=flags,
             reply_parent=reply_parent_id or None,
