@@ -11,7 +11,7 @@ from ...config.settings import Settings
 from ...core.bus import bridge
 from ...models.message import Author, Message
 from ...services.emotes.emote_registry import EmoteRegistry
-from .auth import TwitchAuth
+from .auth import DEFAULT_TWITCH_CLIENT_ID, TwitchAuth
 from .helix import Helix
 from .irc import MAX_CHANNELS, NotConnected, TwitchIrc
 from .mapper import AuthFailed, TwitchMapper, twitch_emote_urls
@@ -32,8 +32,7 @@ class TwitchService:
 
         self.registry = EmoteRegistry(settings, self._theme)
         self.auth = TwitchAuth(
-            settings.get("twitch.client_id", ""),
-            self._secrets.get("twitch_client_secret") or "",
+            settings.get("twitch.client_id") or DEFAULT_TWITCH_CLIENT_ID,
             secrets,
             ports=tuple(settings.get("twitch.redirect_ports", [17821, 17822, 17823])),
         )
@@ -45,14 +44,12 @@ class TwitchService:
 
     async def start(self) -> None:
         if self.auth.configured():
-            self.helix = Helix(self.auth.client_id, self.auth.client_secret)
-        if self.auth.configured():
             self.tokens = await self.auth.ensure_valid()
             if self.tokens is None:
                 log.warning("stored Twitch tokens invalid — running read-only until re-auth")
                 bridge.auth_state.emit("twitch", False, "stored tokens invalid — reconnect account")
-        if self.helix is not None:
-            await self._load_global_badges()
+            else:
+                await self.ensure_helix()
 
         self.irc = self._make_irc()
         self.irc.start()
@@ -76,6 +73,10 @@ class TwitchService:
                 "sign-in succeeded but the token refresh failed — try connecting again")
             return False
         self.tokens = tokens
+        if self.helix is None:
+            await self.ensure_helix()
+        else:
+            self.helix.invalidate_token()
         if self.irc is not None:
             await self.irc.stop()
             self.irc = None
@@ -90,6 +91,9 @@ class TwitchService:
         anonymous read-only (justinfan), re-joining every desired channel."""
         self.auth.clear()
         self.tokens = None
+        if self.helix is not None:
+            await self.helix.close()
+            self.helix = None
         if self.irc is not None:
             await self.irc.stop()
             self.irc = None
@@ -98,13 +102,30 @@ class TwitchService:
         for name in list(self._desired):
             self.irc.join(name)
 
+    async def _user_token(self) -> str | None:
+        """Validated/refreshed access token for Helix's TokenProvider; None
+        when re-authorization is needed. Syncs self.tokens so the IRC
+        mapper's self_user_id follows a Helix-triggered refresh."""
+        self.tokens = await self.auth.ensure_valid()
+        if self.tokens is None:
+            return None
+        return self.tokens.access_token
+
     async def ensure_helix(self) -> None:
-        """Create the Helix client after credentials arrive mid-session (the
-        settings dialog): start() skips it when auth was unconfigured, and a
-        restart should not be required for badges/metadata."""
-        if self.helix is None and self.auth.configured():
-            self.helix = Helix(self.auth.client_id, self.auth.client_secret)
+        """Create the Helix client when a user token exists (start() or a
+        mid-session connect): start() skips it without tokens, and a restart
+        should not be required for badges/metadata."""
+        if self.helix is None and self.tokens is not None:
+            self.helix = Helix(self.auth.client_id, self._user_token)
             await self._load_global_badges()
+
+    async def rebuild_helix(self) -> None:
+        """Recreate the Helix client after the settings client_id override
+        changes; falls through to ensure_helix when none exists yet."""
+        if self.helix is not None:
+            await self.helix.close()
+            self.helix = None
+        await self.ensure_helix()
 
     def _make_irc(self) -> TwitchIrc:
         mapper = TwitchMapper(
@@ -117,6 +138,10 @@ class TwitchService:
         )
         return TwitchIrc(
             mapper,
+            # Twitch requires the NICK to be the authenticated login, and
+            # self_author() reports it — a justinfan nick on a token'd
+            # connection would surface as "you".
+            nick=(self.tokens.login if self.tokens else None),
             token=self.tokens.access_token if self.tokens else None,
             on_message=self._on_message,
             on_event=self._on_event,
@@ -226,8 +251,8 @@ class TwitchService:
 
     def _on_message(self, msg: Message) -> None:
         if self.helix is None and msg.channel_id not in self._metadata_loaded:
-            # No app credentials: the room-id IRC tag is the only way to get
-            # the numeric id the third-party emote APIs need.
+            # No user token / Helix client: the room-id IRC tag is the only
+            # way to get the numeric id the third-party emote APIs need.
             room_id = msg.extra.get("room_id")
             if room_id:
                 self._metadata_loaded.add(msg.channel_id)

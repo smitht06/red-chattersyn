@@ -213,8 +213,6 @@ class SettingsDialog(QDialog):
         *,
         twitch_status: str = "",
         youtube_status: str = "",
-        twitch_client_secret: str = "",
-        on_twitch_secret: Callable[[str], None] | None = None,
         youtube_api_key: str = "",
         on_youtube_api_key: Callable[[str], None] | None = None,
         connect_twitch: Callable[[], None] | None = None,
@@ -232,10 +230,10 @@ class SettingsDialog(QDialog):
         self._disconnect_twitch = disconnect_twitch
         self._connect_youtube = connect_youtube
         self._disconnect_youtube = disconnect_youtube
-        # The Twitch client secret and the YouTube API key live in the
-        # keyring (SecretsStore), not settings.json — MainWindow hands them
-        # in and receives them back.
-        self._on_twitch_secret = on_twitch_secret
+        # The YouTube API key lives in the keyring (SecretsStore), not
+        # settings.json — MainWindow hands it in and receives it back.
+        # Twitch needs no credentials: sign-in is the PKCE browser flow with
+        # ChatterSyn's registered client ID.
         self._on_youtube_api_key = on_youtube_api_key
         # In-memory edit snapshots (written on accept). User commands live in
         # commands.json (Chatterino format), everything else in settings.
@@ -264,7 +262,7 @@ class SettingsDialog(QDialog):
 
         self._add_page("General", self._build_general())
         self._add_page("Accounts", self._build_accounts(
-            twitch_status, youtube_status, twitch_client_secret, youtube_api_key))
+            twitch_status, youtube_status, youtube_api_key))
         self._add_page("Commands", self._build_commands())
         self._add_page("Highlights", self._build_highlights())
         self._add_page("Moderation", self._build_moderation())
@@ -327,17 +325,11 @@ class SettingsDialog(QDialog):
         return page
 
     def _build_accounts(self, twitch_status: str, youtube_status: str,
-                        twitch_client_secret: str, youtube_api_key: str = "") -> QWidget:
+                        youtube_api_key: str = "") -> QWidget:
         page = QWidget(self)
         layout = QVBoxLayout(page)
         layout.addWidget(QLabel("<b>Twitch</b>", page))
         twitch_form = QFormLayout()
-        self._client_id = QLineEdit(
-            self._settings.get("twitch.client_id", ""), page)
-        self._client_secret = QLineEdit(twitch_client_secret, page)
-        self._client_secret.setEchoMode(QLineEdit.EchoMode.Password)
-        twitch_form.addRow("Client ID:", self._client_id)
-        twitch_form.addRow("Client secret:", self._client_secret)
         self._twitch_status_label = QLabel(twitch_status or "Not connected", page)
         twitch_form.addRow("Status:", self._twitch_status_label)
         row = QHBoxLayout()
@@ -696,7 +688,6 @@ class SettingsDialog(QDialog):
             "timestamps.enabled": self._timestamps.isChecked(),
             "timestamps.format": self._timestamp_format.text().strip() or "HH:mm:ss",
             "general.restore_tabs": self._restore_tabs.isChecked(),
-            "twitch.client_id": self._client_id.text().strip(),
             "highlights": self._highlights,
             "moderation_actions": self._moderation_actions,
             "notifications.mentions": self._notify_mentions.isChecked(),
@@ -704,8 +695,6 @@ class SettingsDialog(QDialog):
             "notifications.live": self._notify_live.isChecked(),
             "hotkeys": self._hotkeys,
         })
-        if self._on_twitch_secret is not None:
-            self._on_twitch_secret(self._client_secret.text().strip())
         if self._on_youtube_api_key is not None:
             self._on_youtube_api_key(self._api_key.text().strip())
         save_user_commands(self._config_dir, self._commands_snapshot())

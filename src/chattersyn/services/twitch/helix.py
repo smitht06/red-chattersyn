@@ -1,9 +1,9 @@
-"""Twitch Helix API client: app access token, badges, channel emotes, users."""
+"""Twitch Helix API client: user OAuth token, badges, channel emotes, users."""
 
 from __future__ import annotations
 
 import logging
-import time
+from collections.abc import Awaitable, Callable
 
 import httpx
 
@@ -12,7 +12,8 @@ from ...models.message import Badge
 log = logging.getLogger(__name__)
 
 BASE = "https://api.twitch.tv/helix"
-TOKEN_URL = "https://id.twitch.tv/oauth2/token"
+
+TokenProvider = Callable[[], Awaitable[str | None]]
 
 
 class HelixError(Exception):
@@ -22,17 +23,18 @@ class HelixError(Exception):
 class Helix:
     """Minimal Helix client for the metadata the chat needs.
 
-    Uses an app access token (client credentials) — no user OAuth required for
-    badges/emotes/user lookups.
+    Uses the signed-in user's OAuth token, pulled lazily through `get_token`
+    (the service validates/refreshes transparently). A rejected token forces
+    one re-pull and retry; no token means no request is attempted.
     """
 
-    def __init__(self, client_id: str, client_secret: str, client: httpx.AsyncClient | None = None):
+    def __init__(self, client_id: str, get_token: TokenProvider,
+                 client: httpx.AsyncClient | None = None):
         self.client_id = client_id
-        self.client_secret = client_secret
+        self._get_token = get_token
         self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(connect=10.0, read=20.0, write=20.0, pool=10.0))
         self._owns_client = client is None
         self._token: str | None = None
-        self._token_expiry: float = 0.0
 
     async def close(self) -> None:
         if self._owns_client:
@@ -40,43 +42,36 @@ class Helix:
 
     # -- auth ---------------------------------------------------------------------
 
-    async def _ensure_token(self) -> str:
-        if self._token and time.monotonic() < self._token_expiry - 60:
-            return self._token
-        response = await self._client.post(
-            TOKEN_URL,
-            params={
-                "client_id": self.client_id,
-                "client_secret": self.client_secret,
-                "grant_type": "client_credentials",
-            },
-        )
-        response.raise_for_status()
-        data = response.json()
-        self._token = data.get("access_token", "")
-        self._token_expiry = time.monotonic() + int(data.get("expires_in", 0))
-        if not self._token:
-            raise HelixError("no access token in response")
-        return self._token
+    def invalidate_token(self) -> None:
+        """Drop the cached token so the next call re-pulls the provider
+        (used when the service swaps tokens on reconnect/disconnect)."""
+        self._token = None
+
+    async def _pull_token(self) -> str:
+        token = await self._get_token()
+        if not token:
+            raise HelixError("no Twitch user token — connect an account")
+        self._token = token
+        return token
 
     async def _get(self, path: str, params: dict) -> dict:
-        token = await self._ensure_token()
-        response = await self._client.get(
+        token = self._token or await self._pull_token()
+        response = await self._request(path, params, token)
+        if response.status_code == 401:
+            # Token rejected (e.g. revoked): force one re-pull (the provider
+            # may refresh) and retry.
+            self._token = None
+            token = await self._pull_token()
+            response = await self._request(path, params, token)
+        response.raise_for_status()
+        return response.json()
+
+    async def _request(self, path: str, params: dict, token: str) -> httpx.Response:
+        return await self._client.get(
             f"{BASE}{path}",
             params=params,
             headers={"Client-Id": self.client_id, "Authorization": f"Bearer {token}"},
         )
-        if response.status_code == 401:
-            # Token rejected (e.g. app credentials rotated): force a refresh once.
-            self._token = None
-            token = await self._ensure_token()
-            response = await self._client.get(
-                f"{BASE}{path}",
-                params=params,
-                headers={"Client-Id": self.client_id, "Authorization": f"Bearer {token}"},
-            )
-        response.raise_for_status()
-        return response.json()
 
     # -- badges ---------------------------------------------------------------------
 
@@ -159,7 +154,7 @@ class Helix:
 
     async def streams(self, user_login: str) -> dict | None:
         """Live stream for a login: {title, viewer_count, started_at} or
-        None when the channel is offline (app token — no user OAuth)."""
+        None when the channel is offline (user token)."""
         data = await self._get("/streams", {"user_login": user_login})
         rows = data.get("data", [])
         if not rows:

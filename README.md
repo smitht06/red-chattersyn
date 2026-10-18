@@ -17,6 +17,10 @@ in Python with PySide6. One window, one input box — every message posts to
 
 - **Merged feed** — one interleaved chat view per tab (Twitch channel + YouTube
   stream pair), platform badge on every message, batch-rendered for 50+ msg/s.
+- **Stream tab** — a tab that follows *you*: your own Twitch channel chat
+  (joinable while you're offline) plus the live chat of your current YouTube
+  stream, with a "waiting for your live stream…" placeholder that auto-connects
+  within ~2 minutes of going live.
 - **One input, dual send** — Enter posts to both chats (per-platform send
   toggles, dual character counters, rate-limit queues, exactly-once echo).
 - **Full emotes** — Twitch + 7TV + BTTV + FFZ (animated WebP), per-provider
@@ -86,17 +90,30 @@ credentials for everything else. Everything is configured from
 
 ### Twitch (sending, badge metadata, live status)
 
-1. Go to [dev.twitch.tv/console](https://dev.twitch.tv/console) → register a
-   new application. Category "Chat Bot" is fine.
-2. Note the **Client ID** and **Client Secret**.
-3. In *OAuth Redirect URLs*, add exactly: `http://localhost:17821`
-   (ChatterSyn tries ports 17821–17823; Twitch requires an exact URI match).
-4. In ChatterSyn, **Settings → Accounts**: paste Client ID and Client Secret,
-   then click **Connect** and complete the flow in your browser.
+Sign-in is one click, Chatterino-style: **Settings → Accounts → Connect
+Account…** opens the Twitch website in your browser, you authorize there, and
+ChatterSyn picks up the result on localhost. No credentials to paste.
 
-The client secret is stored in your OS keychain (macOS Keychain), never in
-`settings.json`. Without credentials, chat reading + emotes still work
-anonymously; sending and live polling are disabled.
+ChatterSyn uses its registered "ChatterSyn" Twitch application (an OAuth
+**public client** — PKCE auth-code flow, no client secret). The app's Client
+ID is built in; the redirect URIs `http://localhost:17821`,
+`http://localhost:17822`, `http://localhost:17823` are pre-registered
+(ChatterSyn binds the first free port). Your tokens live in the OS keychain
+(macOS Keychain), never in `settings.json`.
+
+**Advanced:** to use your own Twitch application instead, register one at
+[dev.twitch.tv/console](https://dev.twitch.tv/console) (category "Chat Bot",
+OAuth Redirect URLs exactly `http://localhost:17821` +
+`http://localhost:17822` + `http://localhost:17823`) and put its Client ID in
+`settings.json`:
+
+```json
+{"twitch": {"client_id": "your-client-id"}}
+```
+
+There is no UI field for this — it's a settings.json override only. Without
+sign-in, chat reading + emotes still work anonymously (Twitch, 7TV, BTTV,
+FFZ); sending, badge metadata, and live status need the account.
 
 ### YouTube (reading, sending, moderation)
 
@@ -113,6 +130,10 @@ Google **OAuth client** with `youtube.force-ssl` consent.
    **Download JSON** (this is `client_secrets.json`).
 5. In ChatterSyn, **Settings → Accounts → Authorize** → pick
    `client_secrets.json` → complete consent in your browser.
+
+The **Stream tab**'s YouTube side always needs OAuth — "my live stream"
+(`liveBroadcasts.list mine=true`) rejects API keys, so an API-key-only setup
+shows the "YouTube auth required" placeholder until you authorize.
 
 > **Note on "Testing" publishing status:** test-project refresh tokens expire
 > after **7 days**. ChatterSyn detects this, tells you in chat, and

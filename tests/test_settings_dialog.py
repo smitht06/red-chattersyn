@@ -138,19 +138,14 @@ def test_commands_snapshot_skips_blank_rows(qapp, tmp_path, settings_path):
 
 
 def test_accept_writes_general_and_accounts(qapp, tmp_path, settings_path):
-    captured: list[str] = []
     api_keys: list[str] = []
     dialog = SettingsDialog(Settings({}, settings_path), tmp_path,
-                            twitch_client_secret="old",
-                            on_twitch_secret=captured.append,
                             youtube_api_key="stored-key",
                             on_youtube_api_key=api_keys.append)
     dialog._theme.setCurrentText("light")
     dialog._scale.setValue(1.25)
     dialog._scrollback.setValue(500)
     dialog._restore_tabs.setChecked(False)
-    dialog._client_id.setText("abc123")
-    dialog._client_secret.setText("s3cret")
     dialog._api_key.setText("new-key")
     dialog.accept()
     data = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -158,13 +153,22 @@ def test_accept_writes_general_and_accounts(qapp, tmp_path, settings_path):
     assert data["ui_scale"] == 1.25
     assert data["scrollback"] == 500
     assert data["general"]["restore_tabs"] is False
-    assert data["twitch"]["client_id"] == "abc123"
-    # The client secret and the API key never land in settings.json — both
-    # go to the keyring via callbacks (SecretsStore in MainWindow).
-    assert "client_secret" not in data["twitch"]
-    assert captured == ["s3cret"]
+    # Twitch has no credential fields anymore: sign-in is the browser flow
+    # with the baked-in client ID, so the dialog writes nothing for Twitch
+    # (the file only carries the default, an advanced manual override slot).
+    assert data["twitch"]["client_id"] == ""
+    # The API key never lands in settings.json — it goes to the keyring via
+    # the callback (SecretsStore in MainWindow).
     assert "api_key" not in data.get("youtube", {})
     assert api_keys == ["new-key"]
+
+
+def test_accounts_twitch_section_has_no_credential_fields(qapp, tmp_path, settings_path):
+    dialog = SettingsDialog(Settings({}, settings_path), tmp_path,
+                            twitch_status="Connected as testuser")
+    assert not hasattr(dialog, "_client_id")
+    assert not hasattr(dialog, "_client_secret")
+    assert dialog._twitch_status_label.text() == "Connected as testuser"
 
 
 def test_api_key_field_is_masked_and_prefilled(qapp, tmp_path, settings_path):
@@ -180,16 +184,6 @@ def test_accept_cleared_api_key_reaches_callback_as_empty(qapp, tmp_path, settin
                             youtube_api_key="stored-key",
                             on_youtube_api_key=captured.append)
     dialog._api_key.setText("")
-    dialog.accept()
-    assert captured == [""]  # MainWindow deletes the keyring entry
-
-
-def test_accept_cleared_secret_reaches_callback_as_empty(qapp, tmp_path, settings_path):
-    captured: list[str] = []
-    dialog = SettingsDialog(Settings({}, settings_path), tmp_path,
-                            twitch_client_secret="stale",
-                            on_twitch_secret=captured.append)
-    dialog._client_secret.setText("")
     dialog.accept()
     assert captured == [""]  # MainWindow deletes the keyring entry
 

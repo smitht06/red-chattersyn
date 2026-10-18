@@ -11,14 +11,14 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 _LINKS = (
-    '<a href="combo">new combo tab</a> · '
+    '<a href="stream">new stream tab</a> · '
     '<a href="twitch">new twitch tab</a> · '
     '<a href="youtube">new youtube tab</a>'
 )
 
 
 class EmptyTabPage(QWidget):
-    new_combo = Signal()
+    new_stream = Signal()
     new_twitch = Signal()
     new_youtube = Signal()
 
@@ -46,8 +46,8 @@ class EmptyTabPage(QWidget):
         layout.addStretch(3)
 
     def _on_link(self, href: str) -> None:
-        if href == "combo":
-            self.new_combo.emit()
+        if href == "stream":
+            self.new_stream.emit()
         elif href == "twitch":
             self.new_twitch.emit()
         elif href == "youtube":

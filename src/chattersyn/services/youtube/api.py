@@ -4,6 +4,7 @@ Endpoints used (verified against the discovery document, 2026-10-15):
   videos.list              1 unit      liveStreamingDetails.activeLiveChatId
   channels.list            1 unit      contentDetails.relatedPlaylists.uploads
   playlistItems.list       1 unit      uploads playlist scan (newest video)
+  liveBroadcasts.list      1 unit      mine=true — the user's own broadcast
   search.list              1 unit      100 calls/day separate bucket
   liveChatMessages.list    5 units     REST fallback reader
   liveChatMessages.insert  20 units    send
@@ -60,6 +61,11 @@ class YoutubeApiError(Exception):
     @property
     def is_rate_limited(self) -> bool:
         return self.reason == "rateLimitExceeded"
+
+    @property
+    def is_unauthenticated(self) -> bool:
+        # "authError" = an API key used where OAuth is required (e.g. mine=true).
+        return self.http_status == 401 or self.reason in ("unauthenticated", "authError")
 
 
 class QuotaTracker:
@@ -240,6 +246,20 @@ class YouTubeApi:
     async def channels_mine(self) -> dict:
         """channels.list mine=true: the authorized account's own channel."""
         return await self._get("/channels", {"part": "snippet", "mine": "true"}, QUOTA["meta"])
+
+    async def live_broadcasts_mine(self) -> list[dict]:
+        """liveBroadcasts.list mine=true: the authorized account's own
+        broadcasts. OAuth-only (mine=true rejects API keys). 1 unit/call.
+
+        No `broadcastStatus` filter: the live API rejects the mine +
+        broadcastStatus combination (400 incompatibleParameters) even though
+        the discovery document allows it — the resolver filters by
+        lifeCycleStatus client-side instead."""
+        return (await self._get(
+            "/liveBroadcasts",
+            {"part": "snippet,contentDetails,status,statistics", "mine": "true"},
+            QUOTA["meta"],
+        )).get("items", [])
 
     # -- live chat ----------------------------------------------------------------------
 

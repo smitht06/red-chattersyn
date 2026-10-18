@@ -123,6 +123,7 @@ class Store:
 def fast(monkeypatch):
     monkeypatch.setattr(service_mod, "RE_RESOLVE_INTERVAL", 0.01)
     monkeypatch.setattr(service_mod, "UPCOMING_RE_RESOLVE", 0.01)
+    monkeypatch.setattr(service_mod, "MINE_RE_RESOLVE_INTERVAL", 0.01)
     monkeypatch.setattr(service_mod, "BACKOFF_BASE", 0.01)
     monkeypatch.setattr(service_mod, "BACKOFF_CAP", 0.02)
 
@@ -298,6 +299,89 @@ async def test_not_found_channel_keeps_rechecking(service, signals, fake_readers
 
     assert await wait_until(lambda: sum(e.state is WatchState.NOT_FOUND for e in events) >= 2)
     svc.unwatch("k1")  # would otherwise re-check forever
+
+
+# -- mine target (Stream tab) -----------------------------------------------------------
+
+
+async def test_mine_offline_reresolves_until_live(service, signals, fake_readers, fast):
+    svc = service(api_key="test-key")
+    events, _ = signals
+    svc.resolver = FakeResolver([OFFLINE, LIVE])
+    FakeGrpcReader.script = [StreamEnded("chat ended or disabled (indistinguishable)")]
+    svc.watch("mine:", "k1")
+
+    assert await wait_until(lambda: len(svc.resolver.calls) >= 3)
+    states = [e.state for e in events]
+    # Same shape as a channel target: offline wait, live read, then a fresh
+    # resolve for the next stream.
+    assert states[:4] == [WatchState.OFFLINE, WatchState.LIVE, WatchState.LIVE,
+                          WatchState.UNAVAILABLE]
+    assert states[4] is WatchState.LIVE  # it kept re-resolving for a new stream
+    assert not svc._watches["k1"].task.done()  # still watching
+    svc.unwatch("k1")
+
+
+async def test_mine_chat_ended_keeps_watching(service, signals, fake_readers, fast):
+    svc = service(api_key="test-key")
+    events, _ = signals
+    svc.resolver = FakeResolver([LIVE])
+    FakeGrpcReader.script = [
+        ([_rest_item("ce1", "chat has ended", kind="chatEndedEvent")], "page-9"),
+    ]
+    svc.watch("mine:", "k1")
+
+    assert await wait_until(lambda: len(svc.resolver.calls) >= 2)
+    states = [e.state for e in events]
+    assert states[:4] == [WatchState.LIVE, WatchState.LIVE,
+                          WatchState.ENDED, WatchState.LIVE]
+    assert not svc._watches["k1"].task.done()  # still watching for the next stream
+    svc.unwatch("k1")
+
+
+async def test_mine_unauthenticated_resolve_emits_auth_required(
+        service, signals, fake_readers, fast):
+    svc = service(api_key="test-key")  # read creds exist, but mine=true needs OAuth
+    events, _ = signals
+    svc.resolver = FakeResolver([YoutubeApiError(401, "authError", "API key not valid here")])
+    svc.watch("mine:", "k1")
+
+    auth_required = await wait_until(
+        lambda: sum(e.state is WatchState.AUTH_REQUIRED for e in events) >= 2)
+    assert auth_required
+    assert events[-1].detail == "connect a Google account to watch your stream"
+    svc.unwatch("k1")
+
+
+async def test_unauthenticated_resolve_emits_auth_required_for_video_target(
+        service, signals, fake_readers, fast):
+    # Side-effect fix: a 401 during resolve no longer loops "resolving…"
+    # forever — it surfaces the visible auth-required state.
+    svc = service(api_key="test-key")
+    events, _ = signals
+    svc.resolver = FakeResolver([YoutubeApiError(401, "unauthenticated", "bad token")])
+    svc.watch(VIDEO_URL, "k1")
+
+    assert await wait_until(lambda: any(e.state is WatchState.AUTH_REQUIRED for e in events))
+    svc.unwatch("k1")
+
+
+async def test_mine_offline_uses_mine_interval(monkeypatch, service):
+    monkeypatch.setattr(service_mod, "MINE_RE_RESOLVE_INTERVAL", 77.0)
+    svc = service()
+    svc.resolver = FakeResolver([OFFLINE])
+    sleeps = []
+
+    async def fake_sleep(watch, seconds):
+        sleeps.append(seconds)
+        watch.stopped = True  # end the loop after the first sleep
+
+    svc._sleep = fake_sleep  # instance attribute shadows the bound method
+    svc.watch("mine:", "k1")
+    task = svc._watches["k1"].task
+
+    assert await wait_until(lambda: task.done())
+    assert sleeps == [77.0]
 
 
 # -- error paths ------------------------------------------------------------------------

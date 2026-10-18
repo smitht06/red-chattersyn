@@ -1,74 +1,133 @@
-"""Helix client: app token caching/refresh, badges, emotes, users."""
+"""Helix client: user-token provider, 401 repull, badges, emotes, users."""
 
 import httpx
 import respx
 
 from chattersyn.models.message import Badge
-from chattersyn.services.twitch.helix import BASE, TOKEN_URL, Helix, HelixError
+from chattersyn.services.twitch.helix import BASE, Helix, HelixError
 
-TOKEN_RESPONSE = {"access_token": "tok-1", "expires_in": 3600}
+
+class FakeTokenProvider:
+    """Returns the queued tokens one by one, then None; counts pulls."""
+
+    def __init__(self, tokens):
+        self.tokens = list(tokens)
+        self.calls = 0
+
+    async def __call__(self):
+        self.calls += 1
+        return self.tokens.pop(0) if self.tokens else None
+
+
+def make_helix(tokens):
+    provider = FakeTokenProvider(tokens)
+    return provider, Helix("cid", provider)
 
 
 @respx.mock
-async def test_token_fetched_once_and_reused():
-    token_route = respx.post(TOKEN_URL).mock(
-        return_value=httpx.Response(200, json=TOKEN_RESPONSE)
-    )
+async def test_token_pulled_once_and_reused():
+    provider, helix = make_helix(["tok-1"])
     api_route = respx.get(f"{BASE}/chat/badges/global").mock(
         return_value=httpx.Response(200, json={"data": []})
     )
-    helix = Helix("cid", "secret")
     try:
         await helix.global_badges()
         await helix.global_badges()
     finally:
         await helix.close()
-    assert token_route.call_count == 1
+    assert provider.calls == 1
     assert api_route.call_count == 2
     assert api_route.calls[0].request.headers["Authorization"] == "Bearer tok-1"
 
 
 @respx.mock
-async def test_token_refreshed_after_expiry():
-    token_route = respx.post(TOKEN_URL).mock(
-        side_effect=[
-            httpx.Response(200, json={"access_token": "tok-1", "expires_in": 0}),
-            httpx.Response(200, json={"access_token": "tok-2", "expires_in": 3600}),
-        ]
-    )
-    respx.get(f"{BASE}/chat/badges/global").mock(return_value=httpx.Response(200, json={"data": []}))
-    helix = Helix("cid", "secret")
-    try:
-        await helix.global_badges()
-        await helix.global_badges()
-    finally:
-        await helix.close()
-    assert token_route.call_count == 2
-
-
-@respx.mock
-async def test_401_forces_single_refresh_then_retry():
-    token_route = respx.post(TOKEN_URL).mock(
-        return_value=httpx.Response(200, json=TOKEN_RESPONSE)
-    )
+async def test_401_forces_repull_then_retry():
+    provider, helix = make_helix(["tok-stale", "tok-new"])
     api_route = respx.get(f"{BASE}/chat/badges/global").mock(
         side_effect=[
             httpx.Response(401, json={"error": "Unauthorized"}),
             httpx.Response(200, json={"data": []}),
         ]
     )
-    helix = Helix("cid", "secret")
     try:
         await helix.global_badges()
     finally:
         await helix.close()
-    assert token_route.call_count == 2  # first token + forced refresh
+    assert provider.calls == 2
     assert api_route.call_count == 2
+    assert api_route.calls[1].request.headers["Authorization"] == "Bearer tok-new"
+
+
+@respx.mock
+async def test_401_with_no_replacement_token_raises():
+    provider, helix = make_helix(["tok-stale"])
+    api_route = respx.get(f"{BASE}/chat/badges/global").mock(
+        return_value=httpx.Response(401, json={"error": "Unauthorized"})
+    )
+    try:
+        try:
+            await helix.global_badges()
+            raise AssertionError("expected HelixError")
+        except HelixError:
+            pass
+    finally:
+        await helix.close()
+    assert provider.calls == 2
+    assert api_route.call_count == 1  # no second attempt without a token
+
+
+@respx.mock
+async def test_no_token_raises_without_api_call():
+    provider, helix = make_helix([])
+    api_route = respx.get(f"{BASE}/chat/badges/global").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    try:
+        try:
+            await helix.global_badges()
+            raise AssertionError("expected HelixError")
+        except HelixError:
+            pass
+    finally:
+        await helix.close()
+    assert provider.calls == 1
+    assert api_route.call_count == 0
+
+
+@respx.mock
+async def test_second_401_propagates_http_error():
+    provider, helix = make_helix(["tok-stale", "tok-new"])
+    respx.get(f"{BASE}/chat/badges/global").mock(
+        return_value=httpx.Response(401, json={"error": "Unauthorized"})
+    )
+    try:
+        try:
+            await helix.global_badges()
+            raise AssertionError("expected HTTPStatusError")
+        except httpx.HTTPStatusError:
+            pass
+    finally:
+        await helix.close()
+    assert provider.calls == 2
+
+
+@respx.mock
+async def test_invalidate_token_forces_repull():
+    provider, helix = make_helix(["tok-1", "tok-2"])
+    respx.get(f"{BASE}/chat/badges/global").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    try:
+        await helix.global_badges()
+        helix.invalidate_token()
+        await helix.global_badges()
+    finally:
+        await helix.close()
+    assert provider.calls == 2
 
 
 @respx.mock
 async def test_badges_parsed_into_lookup():
-    respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json=TOKEN_RESPONSE))
     respx.get(f"{BASE}/chat/badges/global").mock(
         return_value=httpx.Response(
             200,
@@ -92,7 +151,7 @@ async def test_badges_parsed_into_lookup():
             },
         )
     )
-    helix = Helix("cid", "secret")
+    _, helix = make_helix(["tok-1"])
     try:
         badges = await helix.global_badges()
     finally:
@@ -104,7 +163,6 @@ async def test_badges_parsed_into_lookup():
 
 @respx.mock
 async def test_channel_emotes_and_user():
-    respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json=TOKEN_RESPONSE))
     respx.get(f"{BASE}/chat/emotes", params={"broadcaster_id": "1"}).mock(
         return_value=httpx.Response(
             200, json={"data": [{"id": "25", "name": "Kappa"}, {"id": "1902", "name": "Keepo"}]}
@@ -129,7 +187,7 @@ async def test_channel_emotes_and_user():
     respx.get(f"{BASE}/users", params={"login": "nobody_zzz"}).mock(
         return_value=httpx.Response(200, json={"data": []})
     )
-    helix = Helix("cid", "secret")
+    _, helix = make_helix(["tok-1"])
     try:
         assert await helix.channel_emotes("1") == {"25": "Kappa", "1902": "Keepo"}
         user = await helix.user_by_login("forsen")
@@ -142,13 +200,12 @@ async def test_channel_emotes_and_user():
 
 @respx.mock
 async def test_global_emotes():
-    respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json=TOKEN_RESPONSE))
     respx.get(f"{BASE}/chat/emotes/global").mock(
         return_value=httpx.Response(
             200, json={"data": [{"id": "1", "name": "BibleThump"}, {"id": "25", "name": "Kappa"}]}
         )
     )
-    helix = Helix("cid", "secret")
+    _, helix = make_helix(["tok-1"])
     try:
         assert await helix.global_emotes() == {"1": "BibleThump", "25": "Kappa"}
     finally:
@@ -157,7 +214,6 @@ async def test_global_emotes():
 
 @respx.mock
 async def test_user_follows_and_channel_followers():
-    respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json=TOKEN_RESPONSE))
     respx.get(f"{BASE}/users/follows", params={"from_id": "1", "to_id": "2"}).mock(
         return_value=httpx.Response(
             200,
@@ -174,25 +230,11 @@ async def test_user_follows_and_channel_followers():
     respx.get(f"{BASE}/channels/followers", params={"broadcaster_id": "9"}).mock(
         return_value=httpx.Response(200, json={"total": "not-a-number"})
     )
-    helix = Helix("cid", "secret")
+    _, helix = make_helix(["tok-1"])
     try:
         assert await helix.user_follows("1", "2") == "2020-05-01T00:00:00Z"
         assert await helix.user_follows("1", "9") is None
         assert await helix.channel_followers("2") == 12345
         assert await helix.channel_followers("9") is None
-    finally:
-        await helix.close()
-
-
-@respx.mock
-async def test_missing_access_token_raises():
-    respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json={"expires_in": 3600}))
-    helix = Helix("cid", "secret")
-    try:
-        try:
-            await helix.global_badges()
-            raise AssertionError("expected HelixError")
-        except HelixError:
-            pass
     finally:
         await helix.close()

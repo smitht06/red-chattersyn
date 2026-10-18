@@ -9,12 +9,14 @@ import respx
 from PySide6.QtCore import QSettings
 
 from chattersyn.config.settings import Settings
-from chattersyn.services.twitch.helix import BASE, TOKEN_URL, Helix
+from chattersyn.services.twitch.helix import BASE, Helix
 from chattersyn.services.youtube.service import WatchState, YoutubeState
 from chattersyn.ui.main_window import MainWindow
 from chattersyn.ui.tab_header import GRAY_DOT, TWITCH_DOT
 
-TOKEN_RESPONSE = {"access_token": "tok-1", "expires_in": 3600}
+
+async def _static_token() -> str | None:
+    return "tok-1"
 
 
 @pytest.fixture
@@ -37,12 +39,11 @@ async def win(qapp, qsettings):
 
 @respx.mock
 async def test_helix_streams_live():
-    respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json=TOKEN_RESPONSE))
     route = respx.get(f"{BASE}/streams").mock(return_value=httpx.Response(200, json={
         "data": [{"title": "Big Stream", "viewer_count": 1234,
                   "started_at": "2026-10-16T10:00:00Z"}],
     }))
-    helix = Helix("cid", "secret")
+    helix = Helix("cid", _static_token)
     try:
         result = await helix.streams("forsen")
     finally:
@@ -54,9 +55,8 @@ async def test_helix_streams_live():
 
 @respx.mock
 async def test_helix_streams_offline_is_none():
-    respx.post(TOKEN_URL).mock(return_value=httpx.Response(200, json=TOKEN_RESPONSE))
     respx.get(f"{BASE}/streams").mock(return_value=httpx.Response(200, json={"data": []}))
-    helix = Helix("cid", "secret")
+    helix = Helix("cid", _static_token)
     try:
         assert await helix.streams("forsen") is None
     finally:
@@ -223,3 +223,35 @@ async def test_youtube_auth_state_blocks_and_unblocks(win):
     win._on_auth_state("youtube", True, "connected")
     assert tab.header.youtube_enabled()
     assert tab.header._youtube_chip.isEnabled()
+
+
+# -- streamer tab (Stream tab) -----------------------------------------------------------
+
+
+async def test_streamer_tab_offline_then_live_placeholder_and_header(win):
+    tab = win._new_streamer_tab()
+    for feed in win._feeds:
+        feed.stop()
+    # The waiting placeholder is set at creation, before any watch events.
+    assert tab.youtube_title == "Your Stream"
+    win._on_youtube_state(YoutubeState(
+        watch_key=tab.tab_key, state=WatchState.OFFLINE))
+    assert tab.header._status_label.text().startswith("offline — connecting")
+    win._on_youtube_state(YoutubeState(
+        watch_key=tab.tab_key, state=WatchState.LIVE, video_id="v1",
+        live_chat_id="lc1", title="My Stream", channel_title="Me", channel_id="UC1",
+        viewers=7))
+    assert tab.youtube_title == "My Stream"
+    assert tab.header._status_label.text().startswith("Me · 7 viewers")
+    assert tab.header.youtube_enabled()
+
+
+async def test_streamer_tab_auth_required_blocks_youtube_send(win):
+    tab = win._new_streamer_tab()
+    for feed in win._feeds:
+        feed.stop()
+    win._on_youtube_state(YoutubeState(
+        watch_key=tab.tab_key, state=WatchState.AUTH_REQUIRED))
+    assert not tab.header.youtube_enabled()
+    assert not tab.header._youtube_chip.isEnabled()
+    assert tab.header._status_label.text() == "YouTube auth required"

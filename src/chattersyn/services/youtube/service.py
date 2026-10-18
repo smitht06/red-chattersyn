@@ -5,6 +5,10 @@ State machine per watch:
     resolving -> live (read loop) -> ended/unavailable
               -> upcoming/offline (poll re-resolve) -> live | stays offline
               -> not_found (channel targets keep re-checking)
+              -> auth_required (no OAuth token; keeps re-checking)
+
+"mine:" targets poll their own broadcast while offline (120 s — the 2-minute
+go-live latency budget) instead of the 60 s channel re-check.
 
 The gRPC streamList reader is primary when an API key or OAuth token exists
 (API key = read-only public chats, OAuth = everything); the REST reader is
@@ -40,6 +44,15 @@ BACKOFF_CAP = 30.0
 RE_RESOLVE_INTERVAL = 60.0  # offline/upcoming re-check
 UPCOMING_RE_RESOLVE = 30.0
 STREAM_STATS_INTERVAL = 120.0  # videos.list refresh while live (1 quota unit)
+MINE_RE_RESOLVE_INTERVAL = 120.0  # own-broadcast poll while offline (720 units/day)
+
+
+def _is_mine_target(target: str) -> bool:
+    """True for MINE_TARGET — the signed-in user's own broadcast."""
+    from .resolver import parse_target
+
+    parsed = parse_target(target)
+    return parsed is not None and parsed[0] == "mine"
 
 
 class WatchState(enum.Enum):
@@ -262,6 +275,14 @@ class YouTubeService:
                            detail="YouTube quota exhausted (resets midnight PT)")
                 self._system_row(watch, "YouTube quota exhausted — reading paused (resets midnight PT)")
                 return False
+            if exc.is_unauthenticated:
+                # OAuth-only paths (mine=true, REST chat) with no/bad token:
+                # surface a visible state instead of looping "resolving…".
+                log.warning("resolve %s unauthenticated: %s", watch.target, exc)
+                self._emit(watch_key, WatchState.AUTH_REQUIRED,
+                           detail="connect a Google account to watch your stream")
+                await self._sleep(watch, RE_RESOLVE_INTERVAL)
+                return True
             log.warning("resolve %s failed: %s", watch.target, exc)
             self._emit(watch_key, WatchState.RESOLVING, detail=str(exc))
             await self._sleep(watch, RE_RESOLVE_INTERVAL)
@@ -305,7 +326,10 @@ class YouTubeService:
         if resolution.state is ResolveState.UPCOMING:
             await self._sleep(watch, UPCOMING_RE_RESOLVE)
         elif resolution.state is ResolveState.OFFLINE:
-            await self._sleep(watch, RE_RESOLVE_INTERVAL)
+            if _is_mine_target(watch.target):
+                await self._sleep(watch, MINE_RE_RESOLVE_INTERVAL)
+            else:
+                await self._sleep(watch, RE_RESOLVE_INTERVAL)
         else:  # ENDED / NOT_FOUND
             if not self._is_channel_target(watch.target):
                 return False  # a specific video that ended: stop watching
@@ -479,7 +503,7 @@ class YouTubeService:
         from .resolver import parse_target
 
         parsed = parse_target(target)
-        return parsed is not None and parsed[0] in ("handle", "channel")
+        return parsed is not None and parsed[0] in ("handle", "channel", "mine")
 
     def _emit_resolution(self, watch_key: str, resolution: Resolution) -> None:
         state = {

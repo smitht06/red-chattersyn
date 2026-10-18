@@ -30,6 +30,10 @@ HANDLE_RE = re.compile(r"^@?[A-Za-z0-9_.\-]{3,30}$")
 BATCH = 50
 MAX_PLAYLIST_PAGES = 10  # newest uploads first in practice; cap the scan
 
+# Sentinel target for "the signed-in user's own live stream". The colon makes
+# it untypable as a real handle/id, so parse_target can never mis-hit it.
+MINE_TARGET = "mine:"
+
 
 class ResolveState(enum.Enum):
     LIVE = "live"
@@ -70,9 +74,11 @@ class Resolution:
 
 
 def parse_target(target: str) -> tuple[str, str] | None:
-    """Normalize a pasted target -> (kind, id). kind: video|handle|channel.
+    """Normalize a pasted target -> (kind, id). kind: video|handle|channel|mine.
     None = unrecognized."""
     text = target.strip()
+    if text.lower() == MINE_TARGET:
+        return "mine", ""
     for pattern in VIDEO_URL_RES:
         match = pattern.search(text)
         if match:
@@ -91,14 +97,49 @@ class LiveChatResolver:
         self._api = api
 
     async def resolve(self, target: str) -> Resolution:
-        """Resolve a video URL/id or a channel handle/id to a live chat."""
+        """Resolve a video URL/id, a channel handle/id, or MINE_TARGET (the
+        authorized account's own live broadcast) to a live chat."""
         parsed = parse_target(target)
         if parsed is None:
             return Resolution(ResolveState.NOT_FOUND)
         kind, value = parsed
         if kind == "video":
             return await self._from_video(value)
+        if kind == "mine":
+            return await self._from_mine()
         return await self._from_channel(value, kind)
+
+    async def _from_mine(self) -> Resolution:
+        """liveBroadcasts.list mine=true: the authorized account's own active
+        broadcast (1 unit). Empty = not live — the waiting state."""
+        items = await self._api.live_broadcasts_mine()
+        if not items:
+            return Resolution(ResolveState.OFFLINE)
+        items = sorted(items, key=lambda i: self._MINE_PRIORITY.get(
+            (i.get("status") or {}).get("lifeCycleStatus", ""), 99))
+        item = items[0]
+        snippet = item.get("snippet") or {}
+        status = (item.get("status") or {}).get("lifeCycleStatus", "")
+        if status == "live":
+            state = ResolveState.LIVE
+        elif status in ("liveStarting", "testStarting", "testing", "ready", "created"):
+            state = ResolveState.UPCOMING  # chat not joinable before the stream starts
+        else:  # complete / revoked / unknown — nothing watchable right now
+            return Resolution(ResolveState.OFFLINE)
+        return Resolution(
+            state=state,
+            video_id=item.get("id"),
+            live_chat_id=snippet.get("liveChatId"),
+            title=snippet.get("title", ""),
+            channel_title=snippet.get("channelTitle", ""),
+            channel_id=snippet.get("channelId"),
+            scheduled_start=_parse_dt(snippet.get("scheduledStartTime")),
+            viewers=int(((item.get("statistics") or {}).get("concurrentViewers")) or 0),
+            started_at=_parse_dt(snippet.get("actualStartTime")),
+        )
+
+    _MINE_PRIORITY = {"live": 0, "liveStarting": 1, "testStarting": 2,
+                      "testing": 3, "ready": 4, "created": 5}
 
     async def _from_video(self, video_id: str) -> Resolution:
         data = await self._api.videos(video_id)

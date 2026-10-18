@@ -47,10 +47,11 @@ from ..services.highlights import HighlightController
 from ..services.logger import ChatLogger
 from ..services.moderation import STACK_MAX_MESSAGES, STACK_WINDOW, ModerationState
 from ..services.send import SendCoordinator, SendResult, SendTargets
-from ..services.twitch.auth import TwitchAuthError
+from ..services.twitch.auth import DEFAULT_TWITCH_CLIENT_ID, TwitchAuthError
 from ..services.twitch.mapper import ClearChat, ClearMsg, RoomState, UserState
 from ..services.twitch.service import TwitchService
 from ..services.youtube.auth import YouTubeAuthError
+from ..services.youtube.resolver import MINE_TARGET
 from ..services.youtube.service import WatchState, YouTubeService, YoutubeState
 from . import theme
 from .emote_picker import EmotePickerPopup
@@ -88,6 +89,9 @@ def _chat_mode_text(state: dict) -> str:
 
 def _tab_title(twitch_channel: str, youtube_target: str) -> str:
     """Notebook label: only the chats the tab actually has, never a bare '?'."""
+    if youtube_target == MINE_TARGET:
+        # Stream tab: the Twitch side binds to the login when connected.
+        return twitch_channel or "Your Stream"
     parts = []
     if twitch_channel:
         parts.append(twitch_channel)
@@ -105,6 +109,7 @@ class MainWindow(QMainWindow):
         self._settings = settings
         self._demo = demo
         self._tabs: list[Tab] = []
+        self._streamer_tabs: list[Tab] = []  # Stream tabs: own Twitch + own live YouTube
         self._feeds: list[FakeFeed] = []
         self._twitch: TwitchService | None = None
         self._youtube: YouTubeService | None = None
@@ -153,11 +158,11 @@ class MainWindow(QMainWindow):
             self._chat_index.start()
 
         self._notebook = Notebook(self)
-        self._notebook.new_tab_requested.connect(self._new_tab_dialog)
+        self._notebook.new_tab_requested.connect(self._new_streamer_tab)
         self._notebook.tabCloseRequested.connect(self._close_tab)
         # Stack: notebook while tabs exist, link page when the last one closes.
         self._empty_tab_page = EmptyTabPage(self)
-        self._empty_tab_page.new_combo.connect(self._new_tab_dialog)
+        self._empty_tab_page.new_stream.connect(self._new_streamer_tab)
         self._empty_tab_page.new_twitch.connect(self._new_twitch_tab)
         self._empty_tab_page.new_youtube.connect(self._new_youtube_tab)
         self._stack = QStackedWidget(self)
@@ -186,6 +191,11 @@ class MainWindow(QMainWindow):
         saved_tabs = self._settings.get("tabs") or []
         if saved_tabs and self._settings.get("general.restore_tabs", True):
             for tab_conf in saved_tabs:
+                if tab_conf.get("type") == "streamer":
+                    # A saved Stream tab: the stored twitch_channel is stale
+                    # (or empty) — binding re-derives it from live tokens.
+                    self._new_streamer_tab()
+                    continue
                 youtube_conf = tab_conf.get("youtube") or {}
                 self.add_tab(
                     tab_conf.get("twitch_channel", ""),
@@ -202,9 +212,9 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         # Shortcuts for New Tab / Close Tab live in the hotkey registry
         # (settings hotkeys.*) — the menu actions carry no key of their own.
-        combo_tab_action = QAction("New Combo Tab", self)
-        combo_tab_action.triggered.connect(self._new_tab_dialog)
-        file_menu.addAction(combo_tab_action)
+        stream_tab_action = QAction("New Stream Tab", self)
+        stream_tab_action.triggered.connect(self._new_streamer_tab)
+        file_menu.addAction(stream_tab_action)
 
         twitch_tab_action = QAction("New Twitch Tab", self)
         twitch_tab_action.triggered.connect(self._new_twitch_tab)
@@ -294,7 +304,7 @@ class MainWindow(QMainWindow):
     def _hotkey_handlers(self) -> dict[str, Callable[[], None]]:
         return {
             "open_settings": self._open_settings,
-            "new_tab": self._new_tab_dialog,
+            "new_tab": self._new_streamer_tab,
             "close_tab": lambda: self._close_tab(self._notebook.currentIndex()),
             "next_tab": self._notebook_next,
             "prev_tab": self._notebook_prev,
@@ -330,8 +340,6 @@ class MainWindow(QMainWindow):
             if self._twitch is not None and self._twitch.tokens is not None:
                 login = self._twitch.tokens.login or ""
                 twitch_status = f"Connected as {login}" if login else "Connected"
-            elif self._twitch is not None and self._twitch.auth.configured():
-                twitch_status = "Credentials configured — not connected"
             if self._youtube is not None and self._youtube.tokens is not None:
                 youtube_status = "Connected"
             elif self._youtube is not None and self._youtube.auth.configured():
@@ -340,8 +348,6 @@ class MainWindow(QMainWindow):
             self._settings, config_dir(),
             twitch_status=twitch_status,
             youtube_status=youtube_status,
-            twitch_client_secret="" if self._demo else (self._secrets.get("twitch_client_secret") or ""),
-            on_twitch_secret=None if self._demo else self._save_twitch_secret,
             youtube_api_key="" if self._demo else (self._secrets.get("youtube_api_key") or ""),
             on_youtube_api_key=None if self._demo else self._save_youtube_api_key,
             connect_twitch=None if self._demo else self._connect_twitch,
@@ -353,17 +359,9 @@ class MainWindow(QMainWindow):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._apply_settings()
 
-    def _save_twitch_secret(self, value: str) -> None:
-        """The Twitch client secret lives in the keyring (TwitchService reads
-        it from the SecretsStore, never from settings.json)."""
-        if value:
-            self._secrets.set("twitch_client_secret", value)
-        else:
-            self._secrets.delete("twitch_client_secret")
-
     def _save_youtube_api_key(self, value: str) -> None:
-        """The Data API key lives in the keyring too — an API key in
-        settings.json is as leakable as the Twitch secret."""
+        """The Data API key lives in the keyring — an API key in settings.json
+        is too leakable."""
         if value:
             self._secrets.set("youtube_api_key", value)
         else:
@@ -383,13 +381,13 @@ class MainWindow(QMainWindow):
         if self._demo:
             return
         if self._twitch is not None:
-            # client_id/secret were snapshotted when the service was built —
-            # refresh them so Connect works without a restart, and create the
-            # Helix client if credentials just arrived.
-            self._twitch.auth.client_id = self._settings.get("twitch.client_id", "") or ""
-            self._twitch.auth.client_secret = self._secrets.get("twitch_client_secret") or ""
-            if self._twitch.helix is None and self._twitch.auth.configured():
-                asyncio.ensure_future(self._twitch.ensure_helix())
+            # The client_id was snapshotted when the service was built —
+            # refresh it so Connect works without a restart, and rebuild the
+            # Helix client if the settings override changed.
+            self._twitch.auth.client_id = (
+                self._settings.get("twitch.client_id") or DEFAULT_TWITCH_CLIENT_ID
+            )
+            asyncio.ensure_future(self._twitch.rebuild_helix())
         if self._youtube is not None:
             # The API key was snapshotted at service construction — refresh it
             # from the keyring so a changed key applies without a restart.
@@ -443,6 +441,9 @@ class MainWindow(QMainWindow):
                 tab.add_message(
                     Message.system(Platform.TWITCH, tab.twitch_channel,
                                    f"Twitch unavailable: {exc}"))
+        # Stream tabs restored before the services started: bind their Twitch
+        # side now that validated tokens (if any) are in place.
+        self._bind_streamer_tabs()
         if self._youtube is not None:
             try:
                 await self._youtube.start()
@@ -953,9 +954,14 @@ class MainWindow(QMainWindow):
     def _on_auth_state(self, platform: str, ok: bool, detail: str) -> None:
         if ok:
             self.statusBar().showMessage(f"{platform} authenticated", 5000)
-            if platform == "youtube":
+            if platform == "twitch":
+                self._bind_streamer_tabs()
+            elif platform == "youtube":
                 for tab in self._tabs:
                     tab.header.set_youtube_send_enabled(True)
+                # Fresh tokens apply immediately instead of after the
+                # 60-120 s poll sleep of the existing watch loop.
+                self._rewatch_streamer_tabs()
             return
         self.statusBar().showMessage(f"{platform}: {detail}")
         if platform == "youtube":
@@ -1314,15 +1320,8 @@ class MainWindow(QMainWindow):
     # -- Twitch account ---------------------------------------------------------------------
 
     def _connect_twitch(self) -> None:
-        if self._twitch is None or not self._twitch.auth.configured():
-            QMessageBox.information(
-                self, "Twitch",
-                "Twitch app credentials are not configured.\n\n"
-                "Set twitch.client_id / twitch.client_secret in settings.json "
-                "(redirect URI http://localhost:17821), then use "
-                "File > Connect Twitch Account…")
-            return
-        asyncio.ensure_future(self._run_twitch_auth())
+        if self._twitch is not None:
+            asyncio.ensure_future(self._run_twitch_auth())
 
     async def _run_twitch_auth(self) -> None:
         assert self._twitch is not None
@@ -1338,6 +1337,12 @@ class MainWindow(QMainWindow):
         except TwitchAuthError as exc:
             QMessageBox.warning(self, "Twitch", f"Twitch sign-in failed: {exc}")
             return
+        except Exception as exc:  # network hiccup in validate/exchange plumbing
+            log.exception("Twitch sign-in failed after the browser callback")
+            QMessageBox.warning(
+                self, "Twitch",
+                f"Twitch sign-in failed after the browser callback: {exc}")
+            return
         if tokens is None:
             bridge.auth_state.emit("twitch", False, "sign-in failed or timed out")
             return
@@ -1348,7 +1353,14 @@ class MainWindow(QMainWindow):
         # emit fires only AFTER the swap: the token check inside reconnect
         # takes several network round trips, and announcing "authenticated"
         # before it completes lies while a refresh is failing.
-        if await self._twitch.reconnect():
+        try:
+            connected = await self._twitch.reconnect()
+        except Exception as exc:
+            log.exception("Twitch reconnect failed after sign-in")
+            QMessageBox.warning(
+                self, "Twitch", f"Twitch connection failed after sign-in: {exc}")
+            return
+        if connected:
             bridge.auth_state.emit("twitch", True, "connected")
             self.statusBar().showMessage("Twitch account connected", 5000)
 
@@ -1422,16 +1434,49 @@ class MainWindow(QMainWindow):
         dual = tab.header.twitch_enabled() and tab.header.youtube_enabled()
         tab.input.set_twitch_limit(YOUTUBE_MESSAGE_LIMIT if dual else TWITCH_MESSAGE_LIMIT)
 
-    def _new_tab_dialog(self) -> None:
-        twitch, ok = QInputDialog.getText(self, "New Tab", "Twitch channel:")
-        if not ok:
+    def _new_streamer_tab(self) -> Tab:
+        """Stream tab: the signed-in user's own Twitch channel chat (joinable
+        while offline) + the live chat of their current YouTube stream, which
+        auto-attaches when they go live (waiting placeholder before that)."""
+        tab = self.add_tab("", MINE_TARGET)
+        self._streamer_tabs.append(tab)
+        tab.set_youtube("Your Stream")  # don't leak the "mine:" sentinel into the header
+        tab.set_youtube_status("waiting for your live stream…")
+        self._bind_streamer_tabs()  # binds immediately if Twitch is already connected
+        return tab
+
+    def _bind_streamer_tabs(self) -> None:
+        """Point every unbound Stream tab's Twitch side at the signed-in
+        login. Idempotent (already-bound tabs are skipped) and sticky: a
+        later Twitch disconnect keeps the channel (anonymous IRC re-joins it
+        read-only) and the title keeps the login."""
+        login = ""
+        if self._twitch is not None and self._twitch.tokens is not None:
+            login = self._twitch.tokens.login
+        if not login:
             return
-        twitch = twitch.strip().lstrip("#@").lower()
-        youtube, ok = QInputDialog.getText(
-            self, "New Tab",
-            "YouTube live video URL / video ID / @handle (optional):")
-        youtube = youtube.strip() if ok else ""
-        self.add_tab(twitch or "forsen", youtube or None)
+        for tab in self._streamer_tabs:
+            if tab.twitch_channel:
+                continue
+            tab.set_twitch(login)
+            self._retitle_tab(tab)
+            asyncio.ensure_future(self._join_twitch(tab))
+
+    def _retitle_tab(self, tab: Tab) -> None:
+        index = self._notebook.indexOf(tab)
+        if index >= 0:
+            self._notebook.setTabText(
+                index, _tab_title(tab.twitch_channel, tab.youtube_target))
+
+    def _rewatch_streamer_tabs(self) -> None:
+        """Restart every Stream tab's mine-watch after YouTube (re)auth: the
+        running watch loop would otherwise keep polling with its old token
+        for up to the full sleep interval."""
+        if self._youtube is None:
+            return
+        for tab in self._streamer_tabs:
+            self._youtube.unwatch(tab.tab_key)
+            self._youtube.watch(tab.youtube_target, tab.tab_key)
 
     def _new_twitch_tab(self) -> None:
         twitch, ok = QInputDialog.getText(self, "New Twitch Tab", "Twitch channel:")
@@ -1463,6 +1508,8 @@ class MainWindow(QMainWindow):
         self._notebook.removeTab(index)
         if isinstance(widget, Tab) and widget in self._tabs:
             self._tabs.remove(widget)
+            if widget in self._streamer_tabs:
+                self._streamer_tabs.remove(widget)
             self._offers.pop(widget.tab_key, None)
             still_joined = widget.twitch_channel and any(
                 tab.twitch_channel == widget.twitch_channel for tab in self._tabs)

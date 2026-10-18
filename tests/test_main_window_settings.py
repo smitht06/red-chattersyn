@@ -166,7 +166,8 @@ async def test_open_settings_builds_dialog_and_applies(win, monkeypatch):
     kwargs = _FakeSettingsDialog.captured[0]
     assert kwargs["twitch_status"] == "Not connected"
     assert kwargs["youtube_status"] == "Not connected"
-    assert kwargs["on_twitch_secret"] is None  # demo mode: no secrets store wiring
+    assert "on_twitch_secret" not in kwargs  # Twitch has no secret anymore
+    assert "twitch_client_secret" not in kwargs
     assert kwargs["on_youtube_api_key"] is None
     assert kwargs["connect_twitch"] is None
 
@@ -183,14 +184,6 @@ class _FakeSecrets:
 
     def delete(self, key):
         self.data.pop(key, None)
-
-
-async def test_save_twitch_secret_routes_to_secrets_store(win):
-    win._secrets = _FakeSecrets()
-    win._save_twitch_secret("s3cret")
-    assert win._secrets.data == {"twitch_client_secret": "s3cret"}
-    win._save_twitch_secret("")
-    assert win._secrets.data == {}
 
 
 async def test_save_youtube_api_key_routes_to_secrets_store(win):

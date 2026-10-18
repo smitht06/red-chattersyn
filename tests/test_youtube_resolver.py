@@ -250,6 +250,100 @@ async def test_channel_not_found():
     assert resolution.state is ResolveState.NOT_FOUND
 
 
+# -- mine target (Stream tab) ---------------------------------------------------------
+
+
+def test_parse_target_mine_sentinel():
+    assert parse_target("mine:") == ("mine", "")
+    assert parse_target("MINE:") == ("mine", "")
+    assert parse_target(" mine: ") == ("mine", "")
+
+
+def test_parse_target_bare_mine_is_still_a_handle():
+    # The colon is what makes it the sentinel; "mine" alone is a real handle.
+    assert parse_target("mine") == ("handle", "mine")
+
+
+def _broadcast(bid, status="live", chat_id="Cg0KC2Zvbw", title="My Stream",
+               channel="Me", channel_id="UCme", viewers=42):
+    broadcast = {
+        "id": bid,
+        "snippet": {"title": title, "channelTitle": channel, "channelId": channel_id},
+        "status": {"lifeCycleStatus": status},
+        "statistics": {"concurrentViewers": str(viewers)},
+    }
+    if chat_id:
+        broadcast["snippet"]["liveChatId"] = chat_id
+    return broadcast
+
+
+async def test_mine_offline_when_no_broadcasts():
+    def handler(request):
+        assert request.url.path.endswith("/liveBroadcasts")
+        return httpx.Response(200, json={"items": []}, request=request)
+
+    resolution = await LiveChatResolver(_api(handler)).resolve("mine:")
+    assert resolution.state is ResolveState.OFFLINE
+
+
+async def test_mine_live_resolves_with_statistics_viewers():
+    def handler(request):
+        return httpx.Response(200, json={"items": [
+            _broadcast("b1", viewers=777)]}, request=request)
+
+    resolution = await LiveChatResolver(_api(handler)).resolve("mine:")
+    assert resolution.resolved
+    assert resolution.state is ResolveState.LIVE
+    assert resolution.video_id == "b1"
+    assert resolution.live_chat_id == "Cg0KC2Zvbw"
+    assert resolution.title == "My Stream"
+    assert resolution.channel_id == "UCme"
+    assert resolution.viewers == 777
+
+
+async def test_mine_live_without_chat_id_unresolved():
+    def handler(request):
+        return httpx.Response(200, json={"items": [
+            _broadcast("b1", chat_id=None)]}, request=request)
+
+    resolution = await LiveChatResolver(_api(handler)).resolve("mine:")
+    assert resolution.state is ResolveState.LIVE
+    assert not resolution.resolved
+
+
+async def test_mine_ready_maps_to_upcoming_with_schedule():
+    def handler(request):
+        broadcast = _broadcast("b1", status="ready", chat_id=None)
+        broadcast["snippet"]["scheduledStartTime"] = "2026-10-17T18:00:00Z"
+        return httpx.Response(200, json={"items": [broadcast]}, request=request)
+
+    resolution = await LiveChatResolver(_api(handler)).resolve("mine:")
+    assert resolution.state is ResolveState.UPCOMING
+    assert resolution.live_chat_id is None
+    assert resolution.scheduled_start == dt.datetime(2026, 10, 17, 18, 0, tzinfo=dt.UTC)
+
+
+async def test_mine_prefers_live_over_created():
+    def handler(request):
+        return httpx.Response(200, json={"items": [
+            _broadcast("b-created", status="created", chat_id=None),
+            _broadcast("b-live", status="live", chat_id="Cg0KC2Zvbw"),
+        ]}, request=request)
+
+    resolution = await LiveChatResolver(_api(handler)).resolve("mine:")
+    assert resolution.resolved
+    assert resolution.video_id == "b-live"
+
+
+async def test_mine_complete_maps_to_offline():
+    def handler(request):
+        return httpx.Response(200, json={"items": [
+            _broadcast("b1", status="complete", chat_id=None)]}, request=request)
+
+    resolution = await LiveChatResolver(_api(handler)).resolve("mine:")
+    assert resolution.state is ResolveState.OFFLINE
+
+
 async def test_live_video_carries_viewers_and_started_at():
     def handler(request):
         video = _video("dQw4w9WgXcQ", live="live", chat_id="Cg0KC2Zvbw")

@@ -1,11 +1,15 @@
-"""Tab titles, per-type new-tab creation (combo/twitch/youtube), the empty
-notebook link page, and restore of youtube-only tabs."""
+"""Tab titles, per-type new-tab creation (stream/twitch/youtube), the empty
+notebook link page, streamer binding, and tab restore."""
+
+import asyncio
+from types import SimpleNamespace
 
 import pytest
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QInputDialog
 
 from chattersyn.config.settings import Settings
+from chattersyn.services.youtube.resolver import MINE_TARGET
 from chattersyn.ui.main_window import MainWindow, _tab_title
 
 
@@ -38,6 +42,11 @@ def test_tab_title_youtube_only():
 
 def test_tab_title_combo_joins_both():
     assert _tab_title("forsen", "watch?v=abc123def") == "forsen + watch?v=abc…"
+
+
+def test_tab_title_mine_unbound_and_bound():
+    assert _tab_title("", MINE_TARGET) == "Your Stream"
+    assert _tab_title("mylogin", MINE_TARGET) == "mylogin"
 
 
 def test_tab_title_nothing_configured_is_empty():
@@ -90,14 +99,77 @@ async def test_new_youtube_tab_dialog_empty_creates_nothing(win, monkeypatch):
     assert len(win._tabs) == before
 
 
-async def test_new_combo_dialog_creates_combo(win, monkeypatch):
-    replies = iter([("xqc", True), ("dQw4w9WgXcQ", True)])
-    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: next(replies))
-    win._new_tab_dialog()
+# -- streamer tabs -----------------------------------------------------------------------
+
+
+async def test_new_streamer_tab_creates_streamer_tab(win):
+    tab = win._new_streamer_tab()
+    assert tab in win._streamer_tabs
+    assert tab.twitch_channel == ""  # unbound until Twitch connects
+    assert tab.youtube_title == "Your Stream"  # the "mine:" sentinel never leaks
+    assert win._notebook.tabText(win._notebook.indexOf(tab)) == "Your Stream"
+
+
+async def test_new_streamer_tab_demo_target_unset(win):
+    # Demo mode never starts a watch, so the target attribute stays empty
+    # (non-demo add_tab sets it in the watch branch).
+    tab = win._new_streamer_tab()
+    assert tab.youtube_target == ""
+
+
+async def test_notebook_plus_button_creates_streamer_tab(win):
+    win._notebook.new_tab_requested.emit()
+    assert win._tabs[-1] in win._streamer_tabs
+
+
+async def test_hotkey_new_tab_routes_to_streamer(win):
+    win._hotkey_handlers()["new_tab"]()
+    assert win._tabs[-1] in win._streamer_tabs
+
+
+async def test_streamer_tab_binds_on_twitch_login(win):
+    win._twitch = SimpleNamespace(tokens=SimpleNamespace(login="mylogin"))
+    joined: list = []
+
+    async def recorder(tab):
+        joined.append(tab)
+
+    win._join_twitch = recorder
+    win._new_streamer_tab()
     tab = win._tabs[-1]
-    assert tab.twitch_channel == "xqc"
-    assert tab.youtube_title == "dQw4w9WgXcQ"
-    assert win._notebook.tabText(win._notebook.indexOf(tab)) == "xqc + dQw4w9WgXcQ"
+    assert tab.twitch_channel == "mylogin"
+    assert win._notebook.tabText(win._notebook.indexOf(tab)) == "mylogin"
+    await asyncio.sleep(0)  # let the scheduled join run
+    assert joined == [tab]
+
+
+async def test_streamer_tab_binding_is_idempotent_and_sticky(win):
+    win._twitch = SimpleNamespace(tokens=SimpleNamespace(login="mylogin"))
+    joined: list = []
+
+    async def recorder(tab):
+        joined.append(tab)
+
+    win._join_twitch = recorder
+    tab = win._new_streamer_tab()
+    win._bind_streamer_tabs()  # re-bind pass: already bound, must be a no-op
+    await asyncio.sleep(0)  # let any scheduled join run (there must be none)
+    assert tab.twitch_channel == "mylogin"
+    assert joined == [tab]
+
+
+async def test_streamer_tab_binding_requires_tokens(win):
+    win._twitch = SimpleNamespace(tokens=None)  # signed out
+    tab = win._new_streamer_tab()
+    assert tab.twitch_channel == ""
+    win._twitch = None  # no service at all (demo)
+    win._bind_streamer_tabs()  # must not crash
+
+
+async def test_close_streamer_tab_removes_from_registry(win):
+    tab = win._new_streamer_tab()
+    win._close_tab(win._notebook.indexOf(tab))
+    assert tab not in win._streamer_tabs
 
 
 # -- menu --------------------------------------------------------------------------------
@@ -107,7 +179,7 @@ async def test_file_menu_offers_all_three_new_tab_types(win):
     file_menu = win.menuBar().actions()[0].menu()
     texts = [a.text() for a in file_menu.actions() if not a.isSeparator()]
     assert texts[:4] == [
-        "New Combo Tab", "New Twitch Tab", "New YouTube Tab", "Close Tab"]
+        "New Stream Tab", "New Twitch Tab", "New YouTube Tab", "Close Tab"]
 
 
 # -- empty state -------------------------------------------------------------------------
@@ -138,14 +210,12 @@ async def test_empty_page_links_create_tabs(win, monkeypatch):
     assert tab.youtube_title == "dQw4w9WgXcQ"
 
 
-async def test_empty_page_combo_link_runs_combo_dialog(win, monkeypatch):
+async def test_empty_page_stream_link_creates_streamer_tab(win):
     win._close_tab(0)
-    replies = iter([("xqc", True), ("dQw4w9WgXcQ", True)])
-    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: next(replies))
-    win._empty_tab_page.new_combo.emit()
-    tab = win._tabs[-1]
-    assert tab.twitch_channel == "xqc"
-    assert tab.youtube_title == "dQw4w9WgXcQ"
+    assert win._stack.currentWidget() is win._empty_tab_page
+    win._empty_tab_page.new_stream.emit()
+    assert win._tabs[-1] in win._streamer_tabs
+    assert win._stack.currentWidget() is win._notebook
 
 
 # -- restore -----------------------------------------------------------------------------
@@ -159,5 +229,31 @@ async def test_restore_youtube_only_tab(qapp, qsettings):
         assert [tab.twitch_channel for tab in w._tabs] == [""]
         assert [tab.youtube_title for tab in w._tabs] == ["abc123"]
         assert w._notebook.tabText(0) == "abc123"
+    finally:
+        w.close()
+
+
+async def test_restore_streamer_type_creates_streamer_tab(qapp, qsettings):
+    w = MainWindow(Settings({"tabs": [{"type": "streamer",
+                                       "twitch_channel": "stale_channel"}]}),
+                   demo=True, qsettings=qsettings)
+    try:
+        assert len(w._tabs) == 1
+        assert w._tabs[0] in w._streamer_tabs
+        # The saved channel is stale: binding re-derives it from live tokens.
+        assert w._tabs[0].twitch_channel == ""
+        assert w._notebook.tabText(0) == "Your Stream"
+    finally:
+        w.close()
+
+
+async def test_restore_legacy_combo_is_plain_tab(qapp, qsettings):
+    w = MainWindow(Settings({"tabs": [{"twitch_channel": "xqc",
+                                       "youtube": {"video_id": "abc123"}}]}),
+                   demo=True, qsettings=qsettings)
+    try:
+        assert w._tabs[0] not in w._streamer_tabs
+        assert w._tabs[0].twitch_channel == "xqc"
+        assert w._notebook.tabText(0) == "xqc + abc123"
     finally:
         w.close()

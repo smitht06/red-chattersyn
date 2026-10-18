@@ -32,9 +32,10 @@ DEFAULTS: dict[str, Any] = {
         "toggle_theme": "",
         "emote_picker": "Ctrl+E",
     },
-    # The Data API key lives in the OS keyring (SecretsStore), not here —
-    # like twitch.client_secret. A legacy plain-text key in settings.json is
-    # migrated into the keyring on first service construction.
+    # The Data API key lives in the OS keyring (SecretsStore), not here. A
+    # legacy plain-text key in settings.json is migrated into the keyring on
+    # first service construction. Twitch has no secret at all (PKCE public
+    # client); twitch.client_id above is only an override for the baked-in ID.
     "youtube": {},
     "emote_providers": {
         "twitch": True,

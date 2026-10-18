@@ -2,7 +2,10 @@
 purple on the app's dark palette. Writes packaging/icon.png and the derived
 packaging/icon.icns + packaging/icon.ico (build inputs for PyInstaller).
 
-Run headless with QT_QPA_PLATFORM=offscreen. Deterministic — no timestamps.
+Draws straight onto a QImage, so no QGuiApplication (and therefore no Qt
+platform plugin) is needed — deliberately, because the sandboxed dev shell
+hides plugin dylibs and breaks QApplication startup. Deterministic — no
+timestamps.
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QGuiApplication, QImage, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter, QPainterPath, QPen
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "packaging"
@@ -75,8 +78,6 @@ def draw() -> QImage:
 
 def main() -> int:
     OUT.mkdir(exist_ok=True)
-    # QGuiApplication for gradient infrastructure; never shows a window.
-    QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
 
     png = OUT / "icon.png"
     draw().save(str(png))

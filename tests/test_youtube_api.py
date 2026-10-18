@@ -229,6 +229,46 @@ async def test_live_chat_unban_delete_shape():
     assert seen["params"] == {"id": "ban-123"}
 
 
+# -- liveBroadcasts.list (Stream tab) --------------------------------------------------
+
+
+async def test_live_broadcasts_mine_shape_and_quota():
+    seen = {}
+
+    def handler(request):
+        seen["path"] = request.url.path
+        seen["params"] = dict(request.url.params)
+        return _json_response(request, {"items": []})
+
+    api = _api(handler)
+    assert await api.live_broadcasts_mine() == []
+    assert seen["path"].endswith("/liveBroadcasts")
+    assert seen["params"]["part"] == "snippet,contentDetails,status,statistics"
+    assert seen["params"]["mine"] == "true"
+    assert api.quota.used == QUOTA["meta"]
+
+
+async def test_live_broadcasts_mine_omits_broadcast_status():
+    # The live API rejects mine=true + broadcastStatus with a 400
+    # (incompatibleParameters) despite the discovery doc allowing it —
+    # the request must never carry the parameter.
+    seen = {}
+
+    def handler(request):
+        seen["params"] = dict(request.url.params)
+        return _json_response(request, {"items": []})
+
+    api = _api(handler)
+    await api.live_broadcasts_mine()
+    assert "broadcastStatus" not in seen["params"]
+
+
+async def test_unauthenticated_error_property():
+    for status, reason in ((401, "unauthenticated"), (401, "authError")):
+        assert YoutubeApiError(status, reason, "nope").is_unauthenticated
+    assert not YoutubeApiError(403, "quotaExceeded", "quota").is_unauthenticated
+
+
 async def test_quota_tracker_daily_rollover():
     tracker = QuotaTracker()
     tracker.charge(5)
