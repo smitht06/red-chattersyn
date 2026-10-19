@@ -122,18 +122,18 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # Checkout FIRST, download LAST: a checkout run after the download
+      # deleted artifacts/ despite clean: false (sparse-checkout worktree
+      # update), so nothing git-flavored may run between the download and
+      # the steps that read it.
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
-          pattern: chattersyn-*-linux-x86_64
+          # No `pattern`: download all artifacts merged flat, exactly like the
+          # release job. The `pattern` input was silently matching nothing.
           path: artifacts
           merge-multiple: true
-
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: apt
-          # clean: false — the default `git clean -ffdx` would delete the
-          # artifacts/ dir downloaded by the previous step.
-          clean: false
 
       - name: Locate deb
         id: deb
