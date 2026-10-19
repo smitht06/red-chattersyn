@@ -97,6 +97,41 @@ with `sudo apt remove chattersyn`. A portable
 (gnome-keyring / KWallet) when available; otherwise keyring falls back to a
 local file (`~/.local/share/python_keyring/`).
 
+## Releasing
+
+Every push builds all three platforms; a pushed `v*` tag additionally runs a
+`release` job that publishes a GitHub Release with the binaries attached
+(macOS zip, Windows zip, Linux tar.gz + .deb). To cut a release:
+
+1. Bump `version` in `pyproject.toml`, then run `uv lock`. CI installs with
+   `uv sync --locked`, and a stale lockfile fails every build leg — the
+   release then contains only the auto-generated source archives, no binaries
+   (this bit v0.2.0).
+2. Commit and push, then tag the same commit and push the tag:
+
+   ```sh
+   git add pyproject.toml uv.lock && git commit -m "bump version to X.Y.Z"
+   git push
+   git tag vX.Y.Z && git push origin vX.Y.Z
+   ```
+
+   Artifact names are stamped from the `pyproject.toml` version at the tagged
+   commit, so tag only after the bump lands on main.
+3. Watch the Actions tab: `build` (all three OSes, up to ~45 min) then
+   `release`, which attaches the artifacts to the release. Edit the release
+   notes on the release page afterwards.
+
+If a release comes out missing binaries: check the tag's workflow run
+(`gh run list`). Every OS failing at `uv sync --locked` means the lockfile
+wasn't regenerated before tagging. Fix by either moving the tag to a fixed
+commit and re-pushing (`git tag -f vX.Y.Z && git push -f origin vX.Y.Z`) or
+uploading the artifacts from a passing run:
+
+```sh
+gh run download <passing-run-id> --dir /tmp/rel
+gh release upload vX.Y.Z /tmp/rel/*/*
+```
+
 ## Credentials setup
 
 Out of the box the app runs **read-only on Twitch** (anonymous chat) and needs
