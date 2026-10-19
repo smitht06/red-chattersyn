@@ -1,6 +1,6 @@
 [project]
 name = "chattersyn"
-version = "0.1.0"
+version = "0.2.0"
 description = "Chatterino-style dual chat client: Twitch + YouTube live chat, one input posts to both"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -30,10 +30,7 @@ dev = [
     "respx>=0.21",
     "ruff>=0.6",
 ]
-build = [
-    "pyinstaller>=6.12,<7",
-    "pillow>=10.2",
-]
+build = ["pyinstaller>=6.12,<7", "pillow>=10.2"]
 
 [build-system]
 requires = ["hatchling"]
@@ -62,5 +59,18 @@ ignore = ["E501", "B008"]
 "scripts/*.py" = ["E402"]
 # protoc-generated code: long lines, wildcard imports, object inheritance,
 # delayed imports (version check), and split f-strings are all by design.
-"src/chattersyn/services/youtube/stream_list_pb2.py" = ["E501", "E402", "F401", "F403", "I001", "UP004"]
-"src/chattersyn/services/youtube/stream_list_pb2_grpc.py" = ["E501", "F401", "F541", "I001", "UP004"]
+"src/chattersyn/services/youtube/stream_list_pb2.py" = [
+    "E501",
+    "E402",
+    "F401",
+    "F403",
+    "I001",
+    "UP004",
+]
+"src/chattersyn/services/youtube/stream_list_pb2_grpc.py" = [
+    "E501",
+    "F401",
+    "F541",
+    "I001",
+    "UP004",
+]
