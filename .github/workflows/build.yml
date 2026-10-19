@@ -140,11 +140,23 @@ jobs:
           # glob: download-artifact may nest files under an artifact dir.
           deb="$(find artifacts -name 'chattersyn-*-linux-x86_64.deb' | head -1)"
           ver="$(basename "$deb" | sed 's/^chattersyn-//; s/-linux-x86_64\.deb$//')"
+          # The .deb (~136 MB) exceeds GitHub's 100 MB per-file git limit, so
+          # it is NOT committed here: it lives as a GitHub release asset and
+          # the Packages index points apt at it via an absolute Filename URL.
+          rel_tag="$GITHUB_REF_NAME"
+          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && rel_tag="v${ver}"
+          deb_url="https://github.com/smitht06/red-chattersyn/releases/download/${rel_tag}/chattersyn-${ver}-linux-x86_64.deb"
+          # The release job runs in parallel and may still be uploading the
+          # asset: wait for the URL before publishing a reference to it.
+          for _ in $(seq 1 24); do
+            curl -fsSIL -o /dev/null "$deb_url" && break
+            sleep 10
+          done
+          curl -fsSIL -o /dev/null "$deb_url"
           root="$RUNNER_TEMP/aptrepo"
-          mkdir -p "$root/pool/main/c/chattersyn" "$root/dists/stable/main/binary-amd64"
-          cp "$deb" "$root/pool/main/c/chattersyn/chattersyn_${ver}_amd64.deb"
+          mkdir -p "$root/dists/stable/main/binary-amd64"
+          python3 -c 'import hashlib, os, subprocess, sys; deb, url = sys.argv[1:3]; size = os.path.getsize(deb); sha = hashlib.sha256(open(deb, "rb").read()).hexdigest(); control = subprocess.check_output(["dpkg-deb", "-f", deb]).decode(); print(f"Filename: {url}\nSize: {size}\nSHA256: {sha}\n{control}")' "$deb" "$deb_url" > "$root/dists/stable/main/binary-amd64/Packages"
           cd "$root"
-          apt-ftparchive --arch amd64 packages pool > dists/stable/main/binary-amd64/Packages
           gzip -9k dists/stable/main/binary-amd64/Packages
           apt-ftparchive release dists/stable > dists/stable/Release
           export GNUPGHOME="$RUNNER_TEMP/gnupg"
@@ -159,7 +171,7 @@ jobs:
           gpg --batch --yes --armor --export \
               "ChatterSyn APT Repository" > "$root/chattersyn.gpg"
           # Install instructions at the repo root (Pages/GitHub readme).
-          cp apt/README.md "$root/README.md"
+          cp "$GITHUB_WORKSPACE/apt/README.md" "$root/README.md"
           echo "aptrepo=$root" >> "$GITHUB_ENV"
 
       - uses: peaceiris/actions-gh-pages@v4
