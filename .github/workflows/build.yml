@@ -126,6 +126,7 @@ jobs:
         with:
           pattern: chattersyn-*-linux-x86_64
           path: artifacts
+          merge-multiple: true
 
       - uses: actions/checkout@v4
         with:
@@ -137,7 +138,13 @@ jobs:
       - name: Locate deb
         id: deb
         run: |
+          echo "--- artifacts/ tree ---"
+          find artifacts -type f | sort || true
           deb="$(find artifacts -name 'chattersyn-*-linux-x86_64.deb' | head -1)"
+          if [ -z "$deb" ]; then
+            echo "FATAL: no chattersyn-*-linux-x86_64.deb under artifacts/" >&2
+            exit 1
+          fi
           ver="$(basename "$deb" | sed 's/^chattersyn-//; s/-linux-x86_64\.deb$//')"
           echo "deb=$deb" >> "$GITHUB_OUTPUT"
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
