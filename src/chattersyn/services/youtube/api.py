@@ -2,7 +2,7 @@
 
 Endpoints used (verified against the discovery document, 2026-10-15):
   videos.list              1 unit      liveStreamingDetails.activeLiveChatId
-  channels.list            1 unit      contentDetails.relatedPlaylists.uploads
+  channels.list            1 unit      uploads / mine / chat display names
   playlistItems.list       1 unit      uploads playlist scan (newest video)
   liveBroadcasts.list      1 unit      mine=true — the user's own broadcast
   search.list              1 unit      100 calls/day separate bucket
@@ -112,9 +112,11 @@ class YouTubeApi:
         get_token: Callable[[], Awaitable[str | None]],
         quota: QuotaTracker | None = None,
         *,
+        get_key: Callable[[], Awaitable[str | None]] | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._get_token = get_token
+        self._get_key = get_key
         self.quota = quota or QuotaTracker()
         self._owned = client is None
         self._client = client or httpx.AsyncClient(base_url=BASE_URL, timeout=TIMEOUT)
@@ -125,28 +127,35 @@ class YouTubeApi:
 
     # -- plumbing ----------------------------------------------------------------
 
-    async def _headers(self) -> dict[str, str]:
+    async def _auth(self) -> tuple[dict[str, str], dict[str, str]]:
+        """(headers, query params): OAuth Bearer when a token exists, else the
+        API key as ?key=. Live chat endpoints reject API keys server-side (a
+        403 authError surfaces through the normal error path)."""
         token = await self._get_token()
-        if token is None:
-            raise YoutubeApiError(401, "unauthenticated", "no YouTube token available")
-        return {"Authorization": f"Bearer {token}"}
+        if token is not None:
+            return {"Authorization": f"Bearer {token}"}, {}
+        key = await self._get_key() if self._get_key is not None else None
+        if not key:
+            raise YoutubeApiError(401, "unauthenticated", "no YouTube token or API key available")
+        return {}, {"key": key}
 
     async def _get(self, path: str, params: dict, units: int) -> dict:
         self.quota.charge(units)
-        headers = await self._headers()
-        response = await self._client.get(path, params=params, headers=headers)
+        headers, auth = await self._auth()
+        response = await self._client.get(path, params={**params, **auth}, headers=headers)
         return self._parse(response, path)
 
     async def _post(self, path: str, params: dict, body: dict, units: int) -> dict:
         self.quota.charge(units)
-        headers = await self._headers()
-        response = await self._client.post(path, params=params, json=body, headers=headers)
+        headers, auth = await self._auth()
+        response = await self._client.post(
+            path, params={**params, **auth}, json=body, headers=headers)
         return self._parse(response, path)
 
     async def _delete(self, path: str, params: dict, units: int) -> dict:
         self.quota.charge(units)
-        headers = await self._headers()
-        response = await self._client.delete(path, params=params, headers=headers)
+        headers, auth = await self._auth()
+        response = await self._client.delete(path, params={**params, **auth}, headers=headers)
         if response.status_code < 300:
             return {}  # 204 No Content — nothing to parse
         return self._parse(response, path)
@@ -209,6 +218,23 @@ class YouTubeApi:
             if exc.http_status in (400, 404):
                 return None
             raise
+
+    async def channels_names(self, channel_ids: list[str]) -> dict[str, str]:
+        """channels.list part=snippet for display names (gRPC chat items carry
+        only the channel id). Up to 50 ids per call (caller chunks; 51+
+        returns 400). Returns {channel_id: title}; missing ids are omitted."""
+        if not channel_ids:
+            return {}
+        data = await self._get(
+            "/channels",
+            {"part": "snippet", "id": ",".join(channel_ids)},
+            QUOTA["meta"],
+        )
+        return {
+            item["id"]: (item.get("snippet") or {}).get("title", "")
+            for item in data.get("items", [])
+            if item.get("id")
+        }
 
     async def channel_by_id(self, channel_id: str) -> dict | None:
         try:

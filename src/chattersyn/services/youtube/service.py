@@ -13,6 +13,10 @@ go-live latency budget) instead of the 60 s channel re-check.
 The gRPC streamList reader is primary when an API key or OAuth token exists
 (API key = read-only public chats, OAuth = everything); the REST reader is
 the fallback (OAuth only). Quota exhaustion is a terminal state for the day.
+
+gRPC items carry only the author's channel id; YouTubeNames resolves ids to
+display names via batched channels.list calls (1 unit per 50 ids, cached for
+the session) before the first message from each chatter is emitted.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ from ...models.message import Author, Message, Platform
 from .api import QUOTA, QuotaTracker, YouTubeApi, YoutubeApiError
 from .auth import YouTubeAuth
 from .mapper import map_item
+from .names import YouTubeNames
 from .reader import GrpcReader, RestReader, StreamEnded
 from .resolver import LiveChatResolver, Resolution, ResolveState, _parse_dt
 from .sender import YoutubeSender, YoutubeSendError
@@ -119,8 +124,10 @@ class YouTubeService:
                 self._api_key = legacy
         self.auth = YouTubeAuth(settings, secrets)
         self.quota = QuotaTracker()
-        self.api = YouTubeApi(self.auth.access_token, self.quota)
+        self.api = YouTubeApi(self.auth.access_token, self.quota,
+                              get_key=lambda: self._api_key or None)
         self.resolver = LiveChatResolver(self.api)
+        self.names = YouTubeNames(self.api)
         self.sender = YoutubeSender(
             self.api,
             block_urls=bool(settings.get("send.block_urls_for_youtube", True)),
@@ -212,6 +219,7 @@ class YouTubeService:
                 with contextlib.suppress(asyncio.CancelledError):
                     await watch.task
         self._watches.clear()
+        await self.names.close()
         await self.api.close()
         await self.auth.close()
         await self._grpc_channel.close()
@@ -489,6 +497,17 @@ class YouTubeService:
             if watch.video_id:
                 # stable identity for logging/search — live_chat_id is per-stream
                 msg.extra.setdefault("video_id", watch.video_id)
+            author = msg.author
+            if author is not None and author.user_id and author.name == author.user_id:
+                # gRPC items have no authorDetails: the mapper named this author
+                # after the channel id. Swap in the display name when known;
+                # otherwise hold the message briefly for the names resolver.
+                name = self.names.cached(author.user_id)
+                if name:
+                    author.name = name
+                else:
+                    self.names.hold(msg)
+                    return
             if msg.extra.get("youtube_type") == "chatEndedEvent":
                 watch.chat_ended = True
                 stop_event.set()

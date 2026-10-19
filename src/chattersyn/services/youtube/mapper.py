@@ -7,6 +7,8 @@ model. Type strings are the REST snakeCase names (textMessageEvent, ...).
 
 Author badges: the API has no badge image set, so owner/moderator/verified/
 member render as url-less Badge objects the delegate draws as text chips.
+gRPC streamList omits authorDetails (only snippet.authorChannelId is sent),
+so map_item synthesizes an author from the channel id in that case.
 """
 
 from __future__ import annotations
@@ -137,6 +139,21 @@ def _author(author_details: dict | None, fallback_name: str = "") -> Author | No
     )
 
 
+def _channel_author(channel_id: str) -> Author | None:
+    """Synthesize an author from a bare channel id.
+
+    The gRPC streamList API omits authorDetails entirely (it carries only
+    snippet.authorChannelId — the REST liveChatMessages.list is the one that
+    fills authorDetails in). Without a fallback every live message would
+    render as a centered grey system row, and moderation would have no
+    user id to act on.
+    """
+    channel_id = (channel_id or "").strip()
+    if not channel_id:
+        return None
+    return Author(name=channel_id, login=channel_id.lower(), user_id=channel_id)
+
+
 def map_item(item: dict) -> Message:
     """Map a REST-shaped live chat item to a render Message."""
     snippet = item.get("snippet", {}) or {}
@@ -144,7 +161,7 @@ def map_item(item: dict) -> Message:
     channel_id = snippet.get("liveChatId", "")
     ts = _parse_dt(snippet.get("publishedAt")) or dt.datetime.now()
     display = snippet.get("displayMessage", "")
-    author = _author(item.get("authorDetails"))
+    author = _author(item.get("authorDetails")) or _channel_author(snippet.get("authorChannelId", ""))
     msg_id = item.get("id", "")
     extra = {"youtube_type": event_type}
 

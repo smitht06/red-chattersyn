@@ -9,8 +9,10 @@ import pytest
 
 from chattersyn.config.settings import Settings
 from chattersyn.core.bus import bridge
+from chattersyn.services.youtube import names as names_mod
 from chattersyn.services.youtube import service as service_mod
 from chattersyn.services.youtube.api import YoutubeApiError
+from chattersyn.services.youtube.names import YouTubeNames
 from chattersyn.services.youtube.reader import StreamEnded
 from chattersyn.services.youtube.resolver import Resolution, ResolveState
 from chattersyn.services.youtube.service import WatchState, YouTubeService
@@ -196,6 +198,74 @@ async def test_live_reads_and_reconnects_with_page_token(service, signals, fake_
     states = [e.state for e in events]
     assert WatchState.LIVE in states
     assert states[-1] is WatchState.UNAVAILABLE
+
+
+class _NamesApi:
+    """Stub channels.list for YouTubeNames in service tests."""
+
+    def __init__(self, names):
+        self.names = names
+        self.calls: list[list[str]] = []
+        self.quota = SimpleNamespace(exhausted=lambda: False)
+
+    async def channels_names(self, ids):
+        self.calls.append(list(ids))
+        return {cid: self.names[cid] for cid in ids if cid in self.names}
+
+
+async def test_grpc_item_without_author_details_gets_display_name(
+        service, signals, fake_readers, fast, monkeypatch):
+    # gRPC streamList sends no authorDetails — the mapper names the author
+    # after the channel id, and the service resolves the display name before
+    # the message hits the bus.
+    monkeypatch.setattr(names_mod, "FLUSH_DELAY", 0.0)
+    svc = service(api_key="k")
+    names_api = _NamesApi({"UCzzz": "Alice"})
+    svc.names = YouTubeNames(names_api)
+    svc.resolver = FakeResolver([LIVE])
+    FakeGrpcReader.script = [([{
+        "id": "m1",
+        "snippet": {
+            "type": "textMessageEvent",
+            "liveChatId": "Cg0KC2Zvbw",
+            "authorChannelId": "UCzzz",
+            "displayMessage": "hi",
+            "textMessageDetails": {"messageText": "hi"},
+        },
+    }], None)]
+    svc.watch(VIDEO_URL, "k")
+    _, messages = signals
+    await wait_until(lambda: len(messages) == 1)
+    assert messages[0].author.name == "Alice"
+    assert names_api.calls == [["UCzzz"]]
+
+
+async def test_grpc_item_second_message_uses_cached_name(
+        service, signals, fake_readers, fast, monkeypatch):
+    # A resolved name is cached: the next message from the same chatter goes
+    # straight through with no hold and no extra API call.
+    monkeypatch.setattr(names_mod, "FLUSH_DELAY", 0.0)
+    svc = service(api_key="k")
+    names_api = _NamesApi({"UCzzz": "Alice"})
+    svc.names = YouTubeNames(names_api)
+    svc.names._cache["UCzzz"] = "Alice"
+    svc.resolver = FakeResolver([LIVE])
+    item = {
+        "id": "m1",
+        "snippet": {
+            "type": "textMessageEvent",
+            "liveChatId": "Cg0KC2Zvbw",
+            "authorChannelId": "UCzzz",
+            "displayMessage": "hi",
+            "textMessageDetails": {"messageText": "hi"},
+        },
+    }
+    FakeGrpcReader.script = [([item], None)]
+    svc.watch(VIDEO_URL, "k")
+    _, messages = signals
+    await wait_until(lambda: len(messages) == 1)
+    assert messages[0].author.name == "Alice"
+    assert names_api.calls == []
 
 
 async def test_chat_ended_event_stops_watch(service, signals, fake_readers, fast):

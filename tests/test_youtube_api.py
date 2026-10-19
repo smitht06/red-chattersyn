@@ -95,6 +95,26 @@ async def test_missing_token_is_unauthenticated():
     assert exc_info.value.reason == "unauthenticated"
 
 
+async def test_api_key_fallback_when_no_token():
+    seen = {}
+
+    def handler(request):
+        seen["key"] = request.url.params.get("key")
+        seen["auth"] = request.headers.get("Authorization")
+        return _json_response(request, {"items": []})
+
+    async def no_token():
+        return None
+
+    async def key():
+        return "APIKEY"
+
+    api = YouTubeApi(no_token, QuotaTracker(), get_key=key, client=_client(handler))
+    await api.videos("dQw4w9WgXcQ")
+    assert seen["key"] == "APIKEY"
+    assert seen["auth"] is None
+
+
 async def test_5xx_is_retryable():
     def handler(request):
         return httpx.Response(503, request=request)
@@ -126,6 +146,25 @@ async def test_videos_batch_joins_ids():
     api = _api(handler)
     await api.videos_batch(["a" * 11, "b" * 11])
     assert seen["ids"] == f"{'a' * 11},{'b' * 11}"
+
+
+async def test_channels_names_batch_and_quota():
+    seen = {}
+
+    def handler(request):
+        seen["id"] = request.url.params["id"]
+        seen["part"] = request.url.params["part"]
+        return _json_response(request, {"items": [
+            {"id": "UC1", "snippet": {"title": "Alice"}},
+            {"id": "UC2", "snippet": {"title": "Bob"}},
+        ]})
+
+    api = _api(handler)
+    names = await api.channels_names(["UC1", "UC2"])
+    assert names == {"UC1": "Alice", "UC2": "Bob"}
+    assert seen["id"] == "UC1,UC2"
+    assert seen["part"] == "snippet"
+    assert api.quota.used == QUOTA["meta"]
 
 
 async def test_channel_by_handle_strips_at():

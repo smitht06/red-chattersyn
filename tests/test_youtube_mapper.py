@@ -162,6 +162,34 @@ def test_missing_author_yields_none():
     assert map_item(item).author is None
 
 
+def test_missing_author_details_falls_back_to_channel_id():
+    # gRPC streamList sends no authorDetails — only snippet.authorChannelId.
+    item = _item()
+    del item["authorDetails"]
+    item["snippet"]["authorChannelId"] = "UCaaa"
+    msg = map_item(item)
+    assert msg.author is not None
+    assert msg.author.name == "UCaaa"
+    assert msg.author.user_id == "UCaaa"
+    assert not msg.is_system
+
+
+def test_pb2_text_without_author_details_uses_channel_id():
+    snippet = pb.LiveChatMessageSnippet(
+        type=pb.LiveChatMessageSnippet.TypeWrapper.TEXT_MESSAGE_EVENT,
+        live_chat_id="Cg0KC2Zvbw",
+        author_channel_id="UCzzz",
+        has_display_content=True,
+        display_message="hi",
+        text_message_details=pb.LiveChatTextMessageDetails(message_text="hi"),
+    )
+    msg = map_item(pb2_to_item(pb.LiveChatMessage(id="pb-x", snippet=snippet)))
+    assert msg.author is not None
+    assert msg.author.user_id == "UCzzz"
+    assert msg.flags == MessageFlags.NONE
+    assert not msg.is_system
+
+
 # -- pb2_to_item ----------------------------------------------------------------------
 
 
