@@ -46,12 +46,46 @@ else:
     hiddenimports.append("keyring.backends.SecretService")
     icon = str(ROOT / "packaging" / "icon.png")
 
+# Modules to exclude from the frozen bundle. tkinter is unused; the rest are
+# pulled in transitively but never used at runtime, and dropping them keeps the
+# Linux .deb under GitHub's 100 MB per-file git limit so it can be committed to
+# the Pages apt repo:
+#   - grpc_tools: stub *generation* only; grpc/__init__.py imports it inside a
+#     try/except, and grpc/_runtime_protos.py guards on ImportError, so runtime
+#     gRPC works without it.
+#   - PIL: not imported anywhere in src/ (emotes render through Qt image
+#     plugins, not Pillow).
+#   - the Qt* modules below are link-time / hook pulls from QtMultimedia or
+#     QtWidgets, none of which the app imports (it uses only QtCore, QtGui,
+#     QtWidgets, QtNetwork, QtMultimedia). Excluding the Python bindings stops
+#     their hooks (plugins/translations) from running; the corresponding Qt
+#     shared libraries are dropped wherever they are only reachable via the
+#     module rather than a hard link-time dependency.
+excludes = [
+    "tkinter",
+    "grpc_tools",
+    "PIL",
+    "PySide6.QtPdf",
+    "PySide6.QtPdfWidgets",
+    "PySide6.QtPdfQuick",
+    "PySide6.QtQuick",
+    "PySide6.QtQuickWidgets",
+    "PySide6.QtQml",
+    "PySide6.QtQmlModels",
+    "PySide6.QtQmlMeta",
+    "PySide6.QtQmlWorkerScript",
+    "PySide6.QtVirtualKeyboard",
+    "PySide6.QtVirtualKeyboardQml",
+    "PySide6.QtMultimediaWidgets",
+    "PySide6.QtConcurrent",
+]
+
 a = Analysis(
     [str(ROOT / "packaging" / "launcher.py")],
     pathex=[str(SRC)],
     datas=datas,
     hiddenimports=hiddenimports,
-    excludes=["tkinter"],
+    excludes=excludes,
 )
 pyz = PYZ(a.pure)
 

@@ -145,6 +145,7 @@ jobs:
             echo "FATAL: no chattersyn-*-linux-x86_64.deb under artifacts/" >&2
             exit 1
           fi
+          deb="$(realpath "$deb")"   # absolute, so it survives a later `cd`
           ver="$(basename "$deb" | sed 's/^chattersyn-//; s/-linux-x86_64\.deb$//')"
           echo "deb=$deb" >> "$GITHUB_OUTPUT"
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
@@ -155,39 +156,22 @@ jobs:
         run: |
           set -euo pipefail
           ver="${{ steps.deb.outputs.ver }}"
-          # The .deb (~136 MB) exceeds GitHub's 100 MB per-file git limit, so
-          # it is NOT committed here: it lives as a GitHub release asset on
-          # the (public) main repo, and the Packages index points apt at it
-          # via an absolute Filename URL.
-          rel_tag="$GITHUB_REF_NAME"
-          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && rel_tag="v${ver}"
-          deb_url="https://github.com/smitht06/red-chattersyn/releases/download/${rel_tag}/chattersyn-${ver}-linux-x86_64.deb"
-          # The release job runs in parallel and may still be uploading the
-          # asset: wait for the URL before publishing a reference to it.
-          # Probe the first hop only (no -L): github.com answers 302 for an
-          # existing asset and 404 for a missing one. Following the redirect
-          # hits the CDN blob host, which can serve stale 404s (e.g. after a
-          # private->public flip) and rejects HEAD outright.
-          for _ in $(seq 1 24); do
-            code="$(curl -s -o /dev/null -w '%{http_code}' "$deb_url")"
-            [ "$code" = 302 ] && break
-            sleep 10
-          done
-          [ "$code" = 302 ]
+          deb="${{ steps.deb.outputs.deb }}"
           root="$RUNNER_TEMP/aptrepo"
-          mkdir -p "$root"
-          # Index the REMOTE deb, not the freshly built one: rebuilds are not
-          # byte-identical (embedded timestamps), and hashing the local copy
-          # while Filename points at the release asset publishes Size/SHA256
-          # that don't match what apt downloads -> "Hash Sum mismatch". The
-          # asset is the source of truth on tag pushes and smoke-test
-          # dispatches alike.
-          curl -fsSL "$deb_url" -o "$root/remote.deb"
+          # Debian pool layout: commit the .deb under pool/ so apt fetches it
+          # via a relative Filename. apt treats Filename as relative to the
+          # repo base, so an absolute URL would be prepended with the base and
+          # 404. Committing the same bytes apt downloads also means the
+          # index's Size/SHA256 always match — no "Hash Sum mismatch".
+          pool="$root/pool/main/c/chattersyn"
+          mkdir -p "$pool"
+          deb_name="chattersyn-${ver}-linux-x86_64.deb"
+          cp "$deb" "$pool/$deb_name"
           # Writes Packages, Packages.gz and Release. Not apt-ftparchive:
           # on ubuntu-24.04 it silently indexed nothing and published an
           # empty (but validly signed!) Release file.
-          python3 scripts/gen_apt_index.py "$root/remote.deb" "$deb_url" "$root"
-          rm -f "$root/remote.deb"
+          python3 scripts/gen_apt_index.py \
+              "$pool/$deb_name" "pool/main/c/chattersyn/$deb_name" "$root"
           cd "$root"
           export GNUPGHOME="$RUNNER_TEMP/gnupg"
           mkdir -m 700 "$GNUPGHOME"
@@ -210,7 +194,10 @@ jobs:
           external_repository: smitht06/red-chattersyn-apt
           publish_branch: gh-pages
           publish_dir: ${{ env.aptrepo }}
-          force_orphan: false
+          # Squash history each publish: the .deb (~80-100 MB) is committed,
+          # and keeping every version would bloat the Pages repo unboundedly.
+          # `apt upgrade` only ever needs the latest version.
+          force_orphan: true
           user_name: github-actions[bot]
           user_email: github-actions[bot]@users.noreply.github.com
           commit_message: "apt repo: ${{ github.ref_name }}"

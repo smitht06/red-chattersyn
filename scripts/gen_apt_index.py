@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """Assemble a flat APT repo index for one .deb.
 
-Usage: gen_apt_index.py <deb> <filename-url> <out-dir> [control-file]
+Usage: gen_apt_index.py <deb> <filename> <out-dir> [control-file]
 
 Writes, under <out-dir>:
   dists/stable/main/binary-amd64/Packages       (stanza + control)
   dists/stable/main/binary-amd64/Packages.gz
   dists/stable/Release                          (MD5Sum/SHA1/SHA256/SHA512)
 
-The Packages stanza's Filename is the absolute <filename-url>: the .deb
-is a GitHub release asset (over the 100 MB per-file git limit) and apt
-supports absolute URLs there. Control fields come from `dpkg-deb -f`;
-pass <control-file> to use a pre-substituted control template instead
-(dpkg-deb is not available everywhere, e.g. macOS manual publishes).
+<filename> is the pool-relative path of the .deb, e.g.
+``pool/main/c/chattersyn/chattersyn-0.3.0-linux-x86_64.deb``. apt treats
+Filename as relative to the repository base URI, so this must be a path
+*inside* the published tree — an absolute URL would be prepended with the
+base and 404. Control fields come from `dpkg-deb -f`; pass <control-file>
+to use a pre-substituted control template instead (dpkg-deb is not
+available everywhere, e.g. macOS manual publishes).
 
 Signing (Release.gpg / InRelease) is done by the caller with gpg —
 this script only writes the unsigned index.
@@ -29,7 +31,7 @@ def main() -> int:
     if not 4 <= len(sys.argv) <= 5:
         print(__doc__, file=sys.stderr)
         return 2
-    deb, url, out_dir = sys.argv[1:4]
+    deb, filename, out_dir = sys.argv[1:4]
     control_file = sys.argv[4] if len(sys.argv) == 5 else None
 
     arch_dir = os.path.join(out_dir, "dists", "stable", "main", "binary-amd64")
@@ -46,7 +48,7 @@ def main() -> int:
 
     packages_path = os.path.join(arch_dir, "Packages")
     with open(packages_path, "w", encoding="utf-8") as fh:
-        fh.write(f"Filename: {url}\nSize: {size}\nSHA256: {sha}\n{control}")
+        fh.write(f"Filename: {filename}\nSize: {size}\nSHA256: {sha}\n{control}")
     with open(packages_path, "rb") as src, gzip.GzipFile(
         filename=packages_path + ".gz", mode="wb", mtime=0
     ) as dst:
@@ -79,7 +81,7 @@ def main() -> int:
             lines.append(f" {digest} {os.path.getsize(os.path.join(tree, rel)):>16} {rel}")
     with open(os.path.join(tree, "Release"), "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
-    print(f"indexed {url} ({size} bytes) into {out_dir}")
+    print(f"indexed {filename} ({size} bytes) into {out_dir}")
     return 0
 
 

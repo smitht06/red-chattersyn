@@ -79,8 +79,12 @@ def main() -> int:
     out = deb_path(dist, version)
     out.unlink(missing_ok=True)
     print("== dpkg-deb")
+    # xz compresses the frozen bundle ~15-20% smaller than the default gzip,
+    # which (with the spec's excludes) keeps the .deb under GitHub's 100 MB
+    # per-file git limit so it can be committed to the Pages apt repo.
     ret = subprocess.run(
-        ["dpkg-deb", "--build", "--root-owner-group", str(staging), str(out)], cwd=ROOT
+        ["dpkg-deb", "--build", "--root-owner-group", "-Zxz", "-Sextreme", str(staging), str(out)],
+        cwd=ROOT,
     ).returncode
     if ret == 0:
         print(f"built {out}")
