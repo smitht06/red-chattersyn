@@ -7,7 +7,9 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: build-${{ github.ref }}
+  # Per-ref AND per-event: a workflow_dispatch smoke test must not cancel
+  # (or be cancelled by) a regular push run on the same ref.
+  group: build-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
