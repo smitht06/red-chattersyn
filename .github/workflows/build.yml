@@ -132,26 +132,43 @@ jobs:
           # artifacts/ dir downloaded by the previous step.
           clean: false
 
+      - name: Locate deb
+        id: deb
+        run: |
+          deb="$(find artifacts -name 'chattersyn-*-linux-x86_64.deb' | head -1)"
+          ver="$(basename "$deb" | sed 's/^chattersyn-//; s/-linux-x86_64\.deb$//')"
+          echo "deb=$deb" >> "$GITHUB_OUTPUT"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+
+      # The main repo is PRIVATE: its release assets 404 for anonymous
+      # downloads, so apt could never fetch them. The deb is therefore
+      # published as a release asset on the PUBLIC apt repo, and the
+      # Packages index references that URL.
+      - name: Publish deb on the public apt repo
+        env:
+          GH_TOKEN: ${{ secrets.APT_RELEASE_TOKEN }}
+        run: |
+          gh release create "v${{ steps.deb.outputs.ver }}" "${{ steps.deb.outputs.deb }}" \
+            --repo smitht06/red-chattersyn-apt \
+            --title "ChatterSyn ${{ steps.deb.outputs.ver }} (deb)" \
+            --notes "Debian package for the APT repository." 2>/dev/null \
+          || gh release upload "v${{ steps.deb.outputs.ver }}" "${{ steps.deb.outputs.deb }}" \
+            --repo smitht06/red-chattersyn-apt --clobber
+
       - name: Assemble APT repo
         env:
           APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
         run: |
           set -euo pipefail
           sudo apt-get update -qq && sudo apt-get install -y -qq apt-utils
-          # Version from the artifact name (works for tags and dispatch runs;
-          # GITHUB_REF_NAME would be "main" on a dispatch). find instead of a
-          # glob: download-artifact may nest files under an artifact dir.
-          deb="$(find artifacts -name 'chattersyn-*-linux-x86_64.deb' | head -1)"
-          ver="$(basename "$deb" | sed 's/^chattersyn-//; s/-linux-x86_64\.deb$//')"
+          deb="${{ steps.deb.outputs.deb }}"
+          ver="${{ steps.deb.outputs.ver }}"
           # The .deb (~136 MB) exceeds GitHub's 100 MB per-file git limit, so
-          # it is NOT committed here: it lives as a GitHub release asset and
-          # the Packages index points apt at it via an absolute Filename URL.
-          rel_tag="$GITHUB_REF_NAME"
-          [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && rel_tag="v${ver}"
-          deb_url="https://github.com/smitht06/red-chattersyn/releases/download/${rel_tag}/chattersyn-${ver}-linux-x86_64.deb"
-          # The release job runs in parallel and may still be uploading the
-          # asset: wait for the URL before publishing a reference to it.
-          for _ in $(seq 1 24); do
+          # it is NOT committed here: it lives as a release asset on the
+          # PUBLIC apt repo (see the Publish step) and the Packages index
+          # points apt at it via an absolute Filename URL.
+          deb_url="https://github.com/smitht06/red-chattersyn-apt/releases/download/v${ver}/chattersyn-${ver}-linux-x86_64.deb"
+          for _ in $(seq 1 12); do
             curl -fsSIL -o /dev/null "$deb_url" && break
             sleep 10
           done
