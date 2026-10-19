@@ -1,0 +1,12 @@
+Package: chattersyn
+Version: __VERSION__
+Architecture: __ARCH__
+Section: net
+Priority: optional
+Maintainer: RedCyberDragon <51099384+smitht06@users.noreply.github.com>
+Homepage: https://github.com/smitht06/red-chattersyn
+Depends: libc6 (>= 2.35), libegl1, libgl1, libfontconfig1, libxkbcommon-x11-0
+Description: Chatterino-style dual chat client for Twitch and YouTube
+ ChatterSyn shows Twitch and YouTube live chat side by side and posts to
+ both from a single input. Built on Ubuntu 22.04 (glibc 2.35); installs
+ the frozen bundle to /opt/chattersyn with a /usr/bin/chattersyn launcher.

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=ChatterSyn
+Comment=Dual chat client for Twitch and YouTube
+Exec=/opt/chattersyn/chattersyn
+Icon=chattersyn
+Terminal=false
+Categories=Network;Chat;
+StartupWMClass=chattersyn

@@ -82,6 +82,10 @@ jobs:
         if: runner.os == 'Linux'
         run: tar -czf "dist/chattersyn-${{ env.APP_VERSION }}-${{ matrix.artifact }}.tar.gz" -C dist chattersyn
 
+      - name: Package (Linux .deb)
+        if: runner.os == 'Linux'
+        run: uv run python scripts/build_deb.py
+
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh

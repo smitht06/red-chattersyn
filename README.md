@@ -87,7 +87,11 @@ puts the app back on per-rebuild prompts.
 `chattersyn.exe` (portable, nothing installed). First launch may show a
 SmartScreen prompt — More info → Run anyway.
 
-**Linux** — `chattersyn-<version>-linux-x86_64.tar.gz`: extract and run
+**Linux** — `chattersyn-<version>-linux-x86_64.deb` (Ubuntu/Debian/Mint
+x86_64): `sudo apt install ./chattersyn-<version>-linux-x86_64.deb`. Installs
+to `/opt/chattersyn` with a `chattersyn` launcher and a menu entry; remove
+with `sudo apt remove chattersyn`. A portable
+`chattersyn-<version>-linux-x86_64.tar.gz` is also published: extract and run
 `./chattersyn`. Built on Ubuntu 22.04 (glibc 2.35), so it runs on Linux Mint
 21+ and similar. Credentials are stored via the Secret Service
 (gnome-keyring / KWallet) when available; otherwise keyring falls back to a

@@ -5,8 +5,9 @@ Usage::
     uv sync --group build   # once, to install pyinstaller + pillow
     uv run python scripts/build.py
 
-Outputs dist/chattersyn.app (macOS) or dist/chattersyn/ (Windows/Linux).
-Mirrors .github/workflows/build.yml so local builds match CI output.
+Outputs dist/chattersyn.app (macOS) or dist/chattersyn/ (Windows/Linux),
+plus a .deb on Linux. Mirrors .github/workflows/build.yml so local builds
+match CI output.
 
 Robust against the sandboxed dev shell's UF_HIDDEN quirk: the venv self-heal
 runs first (best effort), and the icon step needs no Qt platform plugin.
@@ -24,6 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 sys.path.insert(0, str(ROOT / "scripts"))
 from _venv_fix import unhide_venv_files  # noqa: E402
+from build_deb import main as build_deb_main  # noqa: E402
 
 unhide_venv_files()
 
@@ -97,6 +99,8 @@ def main() -> int:
         print(_APP_INSTALL_TIP)
     else:
         print(f"built {ROOT / 'dist' / 'chattersyn'}")
+        if sys.platform.startswith("linux"):
+            return build_deb_main()
     return 0
 
 
