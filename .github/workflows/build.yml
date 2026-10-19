@@ -175,6 +175,7 @@ jobs:
           done
           [ "$code" = 302 ]
           root="$RUNNER_TEMP/aptrepo"
+          mkdir -p "$root"
           # Index the REMOTE deb, not the freshly built one: rebuilds are not
           # byte-identical (embedded timestamps), and hashing the local copy
           # while Filename points at the release asset publishes Size/SHA256
