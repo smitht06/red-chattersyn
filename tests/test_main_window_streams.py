@@ -26,7 +26,7 @@ def qsettings(tmp_path):
 
 @pytest.fixture
 async def win(qapp, qsettings):
-    w = MainWindow(Settings({}), demo=True, qsettings=qsettings)
+    w = MainWindow(Settings({"tabs": [{"twitch_channel": "redcyberdragon29"}]}), demo=True, qsettings=qsettings)
     for feed in list(w._feeds):
         feed.stop()
     w._feeds.clear()
@@ -45,10 +45,10 @@ async def test_helix_streams_live():
     }))
     helix = Helix("cid", _static_token)
     try:
-        result = await helix.streams("forsen")
+        result = await helix.streams("redcyberdragon29")
     finally:
         await helix.close()
-    assert route.calls[0].request.url.params["user_login"] == "forsen"
+    assert route.calls[0].request.url.params["user_login"] == "redcyberdragon29"
     assert result == {"title": "Big Stream", "viewer_count": 1234,
                       "started_at": "2026-10-16T10:00:00Z"}
 
@@ -58,7 +58,7 @@ async def test_helix_streams_offline_is_none():
     respx.get(f"{BASE}/streams").mock(return_value=httpx.Response(200, json={"data": []}))
     helix = Helix("cid", _static_token)
     try:
-        assert await helix.streams("forsen") is None
+        assert await helix.streams("redcyberdragon29") is None
     finally:
         await helix.close()
 
@@ -88,7 +88,7 @@ def test_format_stream_status_malformed_started_at():
 
 async def test_apply_twitch_stream_live_sets_dot_and_status(win):
     tab = win._tabs[0]
-    win._apply_twitch_stream("forsen", {
+    win._apply_twitch_stream("redcyberdragon29", {
         "title": "Big Stream", "viewer_count": 1234, "started_at": "2026-10-16T10:00:00Z"})
     assert TWITCH_DOT in tab.header._twitch_label.text()
     assert tab.header._status_label.text().startswith("Big Stream · 1,234 viewers · up ")
@@ -96,28 +96,28 @@ async def test_apply_twitch_stream_live_sets_dot_and_status(win):
 
 async def test_apply_twitch_stream_offline_without_prior_live(win):
     tab = win._tabs[0]
-    win._apply_twitch_stream("forsen", None)
+    win._apply_twitch_stream("redcyberdragon29", None)
     assert GRAY_DOT in tab.header._twitch_label.text()
     assert tab.header._status_label.text() == ""
 
 
 async def test_apply_twitch_stream_offline_after_live_records_offline_at(win):
     tab = win._tabs[0]
-    win._apply_twitch_stream("forsen", {"title": "T", "viewer_count": 1, "started_at": ""})
-    win._apply_twitch_stream("forsen", None)
+    win._apply_twitch_stream("redcyberdragon29", {"title": "T", "viewer_count": 1, "started_at": ""})
+    win._apply_twitch_stream("redcyberdragon29", None)
     assert GRAY_DOT in tab.header._twitch_label.text()
     assert tab.header._status_label.text().startswith("offline since ")
     first = tab.header._status_label.text()
-    win._apply_twitch_stream("forsen", None)  # stays frozen at the first time
+    win._apply_twitch_stream("redcyberdragon29", None)  # stays frozen at the first time
     assert tab.header._status_label.text() == first
 
 
 async def test_apply_twitch_stream_back_live_clears_offline(win):
     tab = win._tabs[0]
-    win._apply_twitch_stream("forsen", {"title": "T", "viewer_count": 1, "started_at": ""})
-    win._apply_twitch_stream("forsen", None)
+    win._apply_twitch_stream("redcyberdragon29", {"title": "T", "viewer_count": 1, "started_at": ""})
+    win._apply_twitch_stream("redcyberdragon29", None)
     assert "offline since" in tab.header._status_label.text()
-    win._apply_twitch_stream("forsen", {"title": "T", "viewer_count": 2, "started_at": ""})
+    win._apply_twitch_stream("redcyberdragon29", {"title": "T", "viewer_count": 2, "started_at": ""})
     assert "offline since" not in tab.header._status_label.text()
     assert "2 viewers" in tab.header._status_label.text()
 
@@ -126,7 +126,7 @@ async def test_apply_twitch_stream_updates_only_matching_tabs(win):
     win.add_tab("other", None)
     for feed in win._feeds:
         feed.stop()
-    win._apply_twitch_stream("forsen", {"title": "T", "viewer_count": 9, "started_at": ""})
+    win._apply_twitch_stream("redcyberdragon29", {"title": "T", "viewer_count": 9, "started_at": ""})
     assert "9 viewers" in win._tabs[0].header._status_label.text()
     assert win._tabs[1].header._status_label.text() == ""
     assert TWITCH_DOT in win._tabs[0].header._twitch_label.text()
@@ -149,7 +149,7 @@ async def test_youtube_ended_status_carries_offline_at(win):
 
 async def test_status_composition_joins_both_platforms(win):
     tab = win._tabs[0]
-    win._apply_twitch_stream("forsen", {"title": "T", "viewer_count": 5, "started_at": ""})
+    win._apply_twitch_stream("redcyberdragon29", {"title": "T", "viewer_count": 5, "started_at": ""})
     win._on_youtube_state(YoutubeState(
         watch_key=tab.tab_key, state=WatchState.LIVE, video_id="v1",
         live_chat_id="lc1", title="Stream", channel_title="Chan", channel_id="UC1"))

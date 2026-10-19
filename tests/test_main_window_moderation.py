@@ -23,7 +23,7 @@ from chattersyn.ui.usercard import UsercardTarget
 async def win(qapp, tmp_path):
     # Temp-file QSettings: geometry save/restore must not touch the real
     # user prefs when tests close the window.
-    w = MainWindow(Settings({}), demo=True,
+    w = MainWindow(Settings({"tabs": [{"twitch_channel": "redcyberdragon29"}]}), demo=True,
                    qsettings=QSettings(str(tmp_path / "qt.ini"), QSettings.Format.IniFormat))
     for feed in list(w._feeds):  # silence the demo feed generator
         feed.stop()
@@ -32,7 +32,7 @@ async def win(qapp, tmp_path):
     w.close()
 
 
-def _tw_msg(channel="forsen", login="bob", name="Bob"):
+def _tw_msg(channel="redcyberdragon29", login="bob", name="Bob"):
     return Message.text(Platform.TWITCH, channel, Author(name=name, login=login), "hello")
 
 
@@ -47,8 +47,8 @@ async def test_clearchat_grays_rows_and_stacks(win):
     tab = win._tabs[0]
     tab.add_message(_tw_msg())
     tab.add_message(_tw_msg())
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     tab.view._flush()
 
     rows = tab.view.message_model.all_messages()
@@ -60,10 +60,10 @@ async def test_clearchat_grays_rows_and_stacks(win):
 
 async def test_clearchat_stack_restarts_when_user_posts_again(win):
     tab = win._tabs[0]
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     tab.view._flush()
     win._on_bridge_message(_tw_msg())  # the user posts again: fresh stack
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     tab.view._flush()
 
     assert [m.plain for m in _system_rows(win)] == [
@@ -71,18 +71,18 @@ async def test_clearchat_stack_restarts_when_user_posts_again(win):
 
 
 async def test_clearchat_stack_expires_after_window(win, monkeypatch):
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     monkeypatch.setattr("chattersyn.ui.main_window.time.monotonic", lambda: 1e9)
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     win._tabs[0].view._flush()
     assert len(_system_rows(win)) == 2  # outside 5s window: a fresh row
 
 
 async def test_clearchat_stack_breaks_after_20_messages(win):
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     for i in range(21):
         win._on_bridge_message(_tw_msg(login=f"user{i}", name=f"User{i}"))
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     win._tabs[0].view._flush()
     assert len(_system_rows(win)) == 2
 
@@ -94,7 +94,7 @@ async def test_clearchat_full_clear_grays_all_rows(win):
     tab.add_message(_tw_msg())
     tab.add_message(_tw_msg())
     tab.view._flush()
-    win._on_bridge_event(ClearChat(channel="forsen", user=None))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user=None))
     tab.view._flush()
     rows = tab.view.message_model.all_messages()
     assert len(rows) == 3
@@ -108,13 +108,13 @@ async def test_clearchat_full_clear_grays_all_rows(win):
 async def test_userstate_mod_enables_shield(win):
     tab = win._tabs[0]
     assert not tab.header._shield.isEnabled()
-    win._on_user_state(UserState(channel="#forsen", mod=True, badges=[]))
+    win._on_user_state(UserState(channel="#redcyberdragon29", mod=True, badges=[]))
     assert tab.header._shield.isEnabled()
 
 
 async def test_self_badges_enable_shield(win):
     tab = win._tabs[0]
-    win._on_user_state(UserState(channel="#forsen", mod=False,
+    win._on_user_state(UserState(channel="#redcyberdragon29", mod=False,
                                  badges=[Badge("moderator", "1")]))
     assert tab.header._shield.isEnabled()
 
@@ -132,7 +132,7 @@ async def test_youtube_owner_enables_shield(win):
 
 async def test_shield_toggle_switches_delegate(win):
     tab = win._tabs[0]
-    win._on_user_state(UserState(channel="#forsen", mod=True, badges=[]))
+    win._on_user_state(UserState(channel="#redcyberdragon29", mod=True, badges=[]))
     tab.header._shield.setChecked(True)  # toggled -> moderation_toggled fires
     assert tab.view._delegate._moderation_enabled
 
@@ -266,12 +266,12 @@ async def test_usercard_youtube_delete_hides_locally(win):
 
 async def test_clearchat_two_tabs_same_channel_stack_identically(win):
     tab1 = win._tabs[0]
-    tab2 = win.add_tab("forsen", None)
+    tab2 = win.add_tab("redcyberdragon29", None)
     win._feeds[-1].stop()  # demo feed would inject rows into tab2
     for tab in (tab1, tab2):
         tab.add_message(_tw_msg())
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     for tab in (tab1, tab2):
         tab.view._flush()
         system = [m for m in tab.view.message_model.all_messages() if m.is_system]
@@ -288,8 +288,8 @@ async def test_clearchat_untimeout_ungrays_without_stacking(win):
     tab = win._tabs[0]
     tab.add_message(_tw_msg())
     tab.view._flush()
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=0))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=0))
     tab.view._flush()
     rows = tab.view.message_model.all_messages()
     user_rows = [m for m in rows if m.author is not None]
@@ -309,7 +309,7 @@ async def test_timeout_expiry_ungrays_rows(win, monkeypatch):
     tab = win._tabs[0]
     tab.add_message(_tw_msg())
     tab.view._flush()
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     rows = [m for m in tab.view.message_model.all_messages() if m.author is not None]
     assert all(m.flags & MessageFlags.DISABLED for m in rows)
     assert len(fired) == 1
@@ -330,8 +330,8 @@ async def test_timeout_expiry_skipped_when_newer_ban_active(win, monkeypatch):
     tab = win._tabs[0]
     tab.add_message(_tw_msg())
     tab.view._flush()
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=None))  # permaban
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=None))  # permaban
     tab.view._flush()
     assert len(fired) == 1  # only the timed entry scheduled a timer
     clock["now"] = 601
@@ -345,18 +345,18 @@ async def test_timeout_expiry_skipped_when_newer_ban_active(win, monkeypatch):
 
 async def test_userstate_demotion_disables_shield(win):
     tab = win._tabs[0]
-    win._on_user_state(UserState(channel="#forsen", mod=True, badges=[]))
+    win._on_user_state(UserState(channel="#redcyberdragon29", mod=True, badges=[]))
     assert tab.header._shield.isEnabled()
     tab.header._shield.setChecked(True)
-    win._on_user_state(UserState(channel="#forsen", mod=False, badges=[]))
+    win._on_user_state(UserState(channel="#redcyberdragon29", mod=False, badges=[]))
     assert not tab.header._shield.isEnabled()
     assert not tab.header._shield.isChecked()
 
 
 async def test_tab_readd_reevaluates_shield(win):
-    win._on_user_state(UserState(channel="#forsen", mod=True, badges=[]))
+    win._on_user_state(UserState(channel="#redcyberdragon29", mod=True, badges=[]))
     win._close_tab(0)
-    tab = win.add_tab("forsen", None)
+    tab = win.add_tab("redcyberdragon29", None)
     win._feeds[-1].stop()
     assert tab.header._shield.isEnabled()  # cached ModerationState still grants rights
 
@@ -452,7 +452,7 @@ async def test_search_snapshot_includes_disabled_rows(win):
     msg = _tw_msg()
     tab.add_message(msg)
     tab.view._flush()
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     tab.view._flush()
     win._on_search_requested(tab, "", False)
     popup = win._search_popup
@@ -477,7 +477,7 @@ async def test_timeout_expiry_fires_early_still_ungrays(win, monkeypatch):
     tab = win._tabs[0]
     tab.add_message(_tw_msg())
     tab.view._flush()
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     assert len(fired) == 1
     fired[0]()  # clock still at 0: BEFORE the 600 s deadline
     rows = [m for m in tab.view.message_model.all_messages() if m.author is not None]
@@ -496,9 +496,9 @@ async def test_timeout_expiry_skipped_when_newer_timeout_active(win, monkeypatch
     tab = win._tabs[0]
     tab.add_message(_tw_msg())
     tab.view._flush()
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     clock["now"] = 60.0
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=1200))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=1200))
     tab.view._flush()
     assert len(fired) == 2
     clock["now"] = 601
@@ -512,9 +512,9 @@ async def test_untimeout_schedules_no_timer(win, monkeypatch):
     fired: list = []
     monkeypatch.setattr(
         "chattersyn.ui.main_window.QTimer.singleShot", lambda ms, cb: fired.append(cb))
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     assert len(fired) == 1
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=0))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=0))
     assert len(fired) == 1
 
 
@@ -532,10 +532,10 @@ async def test_timeout_expiry_ungrays_when_entry_pruned_before_fire(win, monkeyp
     tab = win._tabs[0]
     tab.add_message(_tw_msg())
     tab.view._flush()
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     assert len(fired) == 1
     clock["now"] = 700.0
-    win._moderation.disabled_logins("forsen")  # prunes the expired entry
+    win._moderation.disabled_logins("redcyberdragon29")  # prunes the expired entry
     fired[0]()
     rows = [m for m in tab.view.message_model.all_messages() if m.author is not None]
     assert not any(m.flags & MessageFlags.DISABLED for m in rows)
@@ -545,9 +545,9 @@ async def test_clearchat_full_clear_breaks_stack(win):
     """A full clear starts a new epoch: a later timeout for the same user
     must not fold onto the pre-clear row above the clear marker."""
     tab = win._tabs[0]
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
-    win._on_bridge_event(ClearChat(channel="forsen", user=None))
-    win._on_bridge_event(ClearChat(channel="forsen", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user=None))
+    win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     tab.view._flush()
     assert [m.plain for m in _system_rows(win)] == [
         "Bob was timed out for 600s.",
@@ -725,9 +725,9 @@ async def test_hide_button_uses_rows_chat_id_after_clear(win):
 
 
 async def test_roomstate_label_replayed_on_new_tab(win):
-    win._on_bridge_event(RoomState(channel="forsen", state={"slow": 30, "subs_only": True}))
+    win._on_bridge_event(RoomState(channel="redcyberdragon29", state={"slow": 30, "subs_only": True}))
     assert not win._tabs[0].header._modes_label.isHidden()
-    tab2 = win.add_tab("forsen", None)
+    tab2 = win.add_tab("redcyberdragon29", None)
     win._feeds[-1].stop()
     assert not tab2.header._modes_label.isHidden()
     assert "slow 30s" in tab2.header._modes_label.text()
@@ -737,10 +737,10 @@ async def test_roomstate_cache_dropped_when_last_tab_closes(win):
     """Closing the last tab for a channel drops the replay cache: modes
     may change while unjoined, and a refused re-join (90-channel cap)
     would otherwise replay the stale label forever."""
-    win._on_bridge_event(RoomState(channel="forsen", state={"slow": 30}))
-    assert win._roomstate_text.get("forsen")
+    win._on_bridge_event(RoomState(channel="redcyberdragon29", state={"slow": 30}))
+    assert win._roomstate_text.get("redcyberdragon29")
     win._close_tab(0)
-    assert "forsen" not in win._roomstate_text
+    assert "redcyberdragon29" not in win._roomstate_text
 
 
 async def test_twitch_auth_reconnect_failure_skips_connected_status(win, monkeypatch):

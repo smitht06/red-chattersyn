@@ -52,7 +52,7 @@ BADGE_POOL = [
 
 
 class FakeFeed:
-    def __init__(self, tab, twitch_channel: str = "forsen", youtube_title: str = "Demo Stream"):
+    def __init__(self, tab, twitch_channel: str = "redcyberdragon29", youtube_title: str = "Demo Stream"):
         self.tab = tab
         self.twitch_channel = twitch_channel
         self.youtube_title = youtube_title

@@ -120,7 +120,8 @@ async def test_saved_tabs_skipped_when_restore_disabled(qapp, qsettings):
                             "general": {"restore_tabs": False}}),
                    demo=True, qsettings=qsettings)
     try:
-        assert [tab.twitch_channel for tab in w._tabs] == ["forsen"]  # default tab
+        assert len(w._tabs) == 1
+        assert w._tabs[0] in w._streamer_tabs  # first-run default: the Stream tab
     finally:
         w.close()
 

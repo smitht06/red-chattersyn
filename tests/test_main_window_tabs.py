@@ -77,10 +77,10 @@ async def test_new_twitch_tab_dialog_creates_twitch_only(win, monkeypatch):
     assert win._notebook.tabText(win._notebook.indexOf(tab)) == "xqc"
 
 
-async def test_new_twitch_tab_dialog_empty_falls_back_to_forsen(win, monkeypatch):
+async def test_new_twitch_tab_dialog_empty_falls_back_to_default_channel(win, monkeypatch):
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("", True))
     win._new_twitch_tab()
-    assert win._tabs[-1].twitch_channel == "forsen"
+    assert win._tabs[-1].twitch_channel == "redcyberdragon29"
 
 
 async def test_new_youtube_tab_dialog_creates_youtube_only(win, monkeypatch):
@@ -135,6 +135,7 @@ async def test_streamer_tab_binds_on_twitch_login(win):
         joined.append(tab)
 
     win._join_twitch = recorder
+    win._close_tab(0)  # drop the first-run default Stream tab
     win._new_streamer_tab()
     tab = win._tabs[-1]
     assert tab.twitch_channel == "mylogin"
@@ -151,6 +152,7 @@ async def test_streamer_tab_binding_is_idempotent_and_sticky(win):
         joined.append(tab)
 
     win._join_twitch = recorder
+    win._close_tab(0)  # drop the first-run default Stream tab
     tab = win._new_streamer_tab()
     win._bind_streamer_tabs()  # re-bind pass: already bound, must be a no-op
     await asyncio.sleep(0)  # let any scheduled join run (there must be none)
@@ -231,6 +233,73 @@ async def test_restore_youtube_only_tab(qapp, qsettings):
         assert w._notebook.tabText(0) == "abc123"
     finally:
         w.close()
+
+
+async def test_first_run_default_tab_is_the_stream_tab(qapp, qsettings):
+    w = MainWindow(Settings({}), demo=True, qsettings=qsettings)
+    try:
+        assert len(w._tabs) == 1
+        assert w._tabs[0] in w._streamer_tabs
+        assert w._tabs[0].youtube_title == "Your Stream"
+        assert w._notebook.tabText(0) == "Your Stream"
+    finally:
+        w.close()
+
+
+async def test_save_tabs_writes_restore_format(win):
+    win._demo = False  # demo never writes tabs; exercise the real save path
+    win._close_tab(0)  # drop the auto-created default tab (saves [])
+    win.add_tab("xqc", None)
+    combo = win.add_tab("", "dQw4w9WgXcQ")
+    combo.youtube_target = "dQw4w9WgXcQ"  # real mode sets this when watching
+    win._new_streamer_tab()
+    assert win._settings.get("tabs") == [
+        {"twitch_channel": "xqc"},
+        {"twitch_channel": "", "youtube": {"video_id": "dQw4w9WgXcQ"}},
+        {"type": "streamer"},
+    ]
+
+
+async def test_close_tab_updates_saved_tabs(win):
+    win._demo = False
+    win.add_tab("xqc", None)
+    assert len(win._settings.get("tabs")) == 2  # default Stream tab + xqc
+    win._close_tab(win._notebook.count() - 1)
+    assert win._settings.get("tabs") == [{"type": "streamer"}]
+
+
+async def test_demo_never_writes_saved_tabs(win):
+    win._close_tab(0)
+    win.add_tab("xqc", None)
+    assert win._settings.get("tabs") is None or win._settings.get("tabs") == []
+
+
+async def test_restore_round_trip_reopens_saved_tabs(qapp, qsettings):
+    settings = Settings({})
+    w1 = MainWindow(settings, demo=True, qsettings=qsettings)
+    try:
+        for feed in list(w1._feeds):
+            feed.stop()
+        w1._feeds.clear()
+        w1._demo = False
+        w1._close_tab(0)
+        w1.add_tab("xqc", None)
+        combo = w1.add_tab("", "dQw4w9WgXcQ")
+        combo.youtube_target = "dQw4w9WgXcQ"
+        w1._new_streamer_tab()
+    finally:
+        w1.close()
+    w2 = MainWindow(settings, demo=True, qsettings=qsettings)
+    try:
+        for feed in list(w2._feeds):
+            feed.stop()
+        w2._feeds.clear()
+        assert [tab.twitch_channel for tab in w2._tabs] == ["xqc", "", ""]
+        assert [tab.youtube_title for tab in w2._tabs] == ["", "dQw4w9WgXcQ", "Your Stream"]
+        assert w2._tabs[2] in w2._streamer_tabs
+        assert w2._notebook.tabText(2) == "Your Stream"
+    finally:
+        w2.close()
 
 
 async def test_restore_streamer_type_creates_streamer_tab(qapp, qsettings):

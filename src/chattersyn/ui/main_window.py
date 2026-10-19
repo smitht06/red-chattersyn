@@ -203,7 +203,9 @@ class MainWindow(QMainWindow):
                     youtube_conf.get("video_id") or youtube_conf.get("channel_id") or "",
                 )
         else:
-            self.add_tab("forsen", None)
+            # First run (or restore disabled): the user's own Stream tab —
+            # their Twitch channel once connected, their YouTube live stream.
+            self._new_streamer_tab()
 
         theme.theme_notifier.changed.connect(self._on_theme_changed)
 
@@ -1401,9 +1403,10 @@ class MainWindow(QMainWindow):
         tab.header.set_chat_modes(self._roomstate_text.get(twitch_channel, ""))
         self._sync_send_limits(tab)
         self._sync_empty_state()
+        self._save_tabs()
 
         if self._demo:
-            feed = FakeFeed(tab, twitch_channel or "forsen", "Demo Stream")
+            feed = FakeFeed(tab, twitch_channel or "redcyberdragon29", "Demo Stream")
             self._feeds.append(feed)
             tab.set_send_handler(feed.handle_send)
             feed.start()
@@ -1444,6 +1447,9 @@ class MainWindow(QMainWindow):
         tab.set_youtube("Your Stream")  # don't leak the "mine:" sentinel into the header
         tab.set_youtube_status("waiting for your live stream…")
         self._bind_streamer_tabs()  # binds immediately if Twitch is already connected
+        # add_tab saved before the streamer registry entry existed; re-save so
+        # restore records {"type": "streamer"} instead of a plain "mine:" tab.
+        self._save_tabs()
         return tab
 
     def _bind_streamer_tabs(self) -> None:
@@ -1484,7 +1490,7 @@ class MainWindow(QMainWindow):
         if not ok:
             return
         twitch = twitch.strip().lstrip("#@").lower()
-        self.add_tab(twitch or "forsen", None)
+        self.add_tab(twitch or "redcyberdragon29", None)
 
     def _new_youtube_tab(self) -> None:
         youtube, ok = QInputDialog.getText(
@@ -1534,6 +1540,7 @@ class MainWindow(QMainWindow):
                 remaining.append(feed)
         self._feeds = remaining
         self._sync_empty_state()
+        self._save_tabs()
 
     # -- actions -----------------------------------------------------------------------
 
@@ -1709,8 +1716,30 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event) -> None:
         for feed in self._feeds:
             feed.stop()
+        self._save_tabs()
         self._save_geometry()
         super().closeEvent(event)
+
+    def _save_tabs(self) -> None:
+        """Persist the open tabs in the restore format: {"type": "streamer"}
+        for Stream tabs (their Twitch side re-binds from live tokens), and
+        {twitch_channel, youtube: {video_id}} for plain tabs. Called on every
+        tab mutation and at close, so a crash still restores the last state.
+        Demo mode never writes — running --demo must not clobber real tabs."""
+        if self._demo:
+            return
+        saved = []
+        for tab in self._tabs:
+            if tab in self._streamer_tabs:
+                saved.append({"type": "streamer"})
+                continue
+            entry: dict = {"twitch_channel": tab.twitch_channel}
+            target = (tab.youtube_target or "").strip()
+            if target:
+                entry["youtube"] = {"video_id": target}
+            saved.append(entry)
+        self._settings.set("tabs", saved)
+        self._settings.save()
 
 
 def _chip_name(platform: Platform) -> str:

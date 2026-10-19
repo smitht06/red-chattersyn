@@ -6,7 +6,7 @@ in Python with PySide6. One window, one input box — every message posts to
 
 ```text
 ┌────────────────────────────────────────────────────┐
-│ ● Twitch: forsen · ● YouTube: The Stream           │
+│ ● Twitch: redcyberdragon29 · ● YouTube: The Stream │
 │ [merged chat feed — Twitch + YouTube interleaved]  │
 │ [🛡] [Tw ✓] [Yt ✓]           Big Stream · 1,234…  │
 │ ▸ message goes here…                    [😀] [Send]│
@@ -194,6 +194,8 @@ shows the "YouTube auth required" placeholder until you authorize.
 
 - Chat **reading** uses YouTube's gRPC `liveChatMessages.streamList` push —
   quota-free; there is no polling cost.
+- Display names for chat authors cost 1 unit per 50 new chatters (gRPC chat
+  items carry only channel ids); names are cached for the session.
 - The streamer-bar stats refresh polls `videos.list` every ~2 min while a
   stream is live (1 quota unit per call).
 - Each **send** costs 20 units (10,000/day default). When the quota is
