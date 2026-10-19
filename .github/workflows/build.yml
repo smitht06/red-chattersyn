@@ -125,6 +125,10 @@ jobs:
           pattern: chattersyn-*-linux-x86_64
           path: artifacts
 
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: apt
+
       - name: Assemble APT repo
         env:
           APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
@@ -154,6 +158,8 @@ jobs:
           # users can fetch it as a stable URL for /etc/apt/keyrings.
           gpg --batch --yes --armor --export \
               "ChatterSyn APT Repository" > "$root/chattersyn.gpg"
+          # Install instructions at the repo root (Pages/GitHub readme).
+          cp apt/README.md "$root/README.md"
           echo "aptrepo=$root" >> "$GITHUB_ENV"
 
       - uses: peaceiris/actions-gh-pages@v4
