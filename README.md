@@ -87,21 +87,38 @@ puts the app back on per-rebuild prompts.
 `chattersyn.exe` (portable, nothing installed). First launch may show a
 SmartScreen prompt — More info → Run anyway.
 
-**Linux** — `chattersyn-<version>-linux-x86_64.deb` (Ubuntu/Debian/Mint
-x86_64): `sudo apt install ./chattersyn-<version>-linux-x86_64.deb`. Installs
-to `/opt/chattersyn` with a `chattersyn` launcher and a menu entry; remove
-with `sudo apt remove chattersyn`. A portable
-`chattersyn-<version>-linux-x86_64.tar.gz` is also published: extract and run
-`./chattersyn`. Built on Ubuntu 22.04 (glibc 2.35), so it runs on Linux Mint
-21+ and similar. Credentials are stored via the Secret Service
-(gnome-keyring / KWallet) when available; otherwise keyring falls back to a
-local file (`~/.local/share/python_keyring/`).
+**Linux** (Ubuntu/Debian/Mint x86_64) — add the APT repository once, and
+`apt upgrade` keeps ChatterSyn updated from then on:
+
+```sh
+curl -fsSL https://smitht06.github.io/red-chattersyn-apt/chattersyn.gpg \
+  | sudo gpg --dearmor -o /usr/share/keyrings/chattersyn.gpg
+echo "deb [signed-by=/usr/share/keyrings/chattersyn.gpg] https://smitht06.github.io/red-chattersyn-apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/chattersyn.list
+sudo apt update
+sudo apt install chattersyn
+```
+
+The repository is rebuilt and signed automatically on every release tag.
+Prefer a one-off install instead? The release also carries a standalone
+`chattersyn-<version>-linux-x86_64.deb`
+(`sudo apt install ./chattersyn-<version>-linux-x86_64.deb`) and a portable
+`chattersyn-<version>-linux-x86_64.tar.gz` (extract and run `./chattersyn`).
+
+Installs to `/opt/chattersyn` with a `chattersyn` launcher and a menu entry;
+remove with `sudo apt remove chattersyn`. Built on Ubuntu 22.04 (glibc 2.35),
+so it runs on Linux Mint 21+ and similar. Credentials are stored via the
+Secret Service (gnome-keyring / KWallet) when available; otherwise keyring
+falls back to a local file (`~/.local/share/python_keyring/`).
 
 ## Releasing
 
 Every push builds all three platforms; a pushed `v*` tag additionally runs a
 `release` job that publishes a GitHub Release with the binaries attached
-(macOS zip, Windows zip, Linux tar.gz + .deb). To cut a release:
+(macOS zip, Windows zip, Linux tar.gz + .deb) and an `apt-repo` job that
+publishes the Linux .deb into the APT repository (GPG-signed `dists/stable` in
+[smitht06/red-chattersyn-apt](https://github.com/smitht06/red-chattersyn-apt),
+served from GitHub Pages). To cut a release:
 
 1. Bump `version` in `pyproject.toml`, then run `uv lock`. CI installs with
    `uv sync --locked`, and a stale lockfile fails every build leg — the
@@ -117,9 +134,11 @@ Every push builds all three platforms; a pushed `v*` tag additionally runs a
 
    Artifact names are stamped from the `pyproject.toml` version at the tagged
    commit, so tag only after the bump lands on main.
-3. Watch the Actions tab: `build` (all three OSes, up to ~45 min) then
-   `release`, which attaches the artifacts to the release. Edit the release
-   notes on the release page afterwards.
+3. Watch the Actions tab: `build` (all three OSes, up to ~45 min), then
+   `release` (attaches the artifacts) and `apt-repo` (updates the APT
+   repository, so Linux users get the new version on their next
+   `apt update && apt upgrade`). Edit the release notes on the release page
+   afterwards.
 
 If a release comes out missing binaries: check the tag's workflow run
 (`gh run list`). Every OS failing at `uv sync --locked` means the lockfile
@@ -131,6 +150,10 @@ uploading the artifacts from a passing run:
 gh run download <passing-run-id> --dir /tmp/rel
 gh release upload vX.Y.Z /tmp/rel/*/*
 ```
+
+The APT repository only updates from a passing `apt-repo` run, so it stays on
+the previous version until the tag is fixed and re-pushed — `apt upgrade`
+simply won't offer the broken release, which is the intended behavior.
 
 ## Credentials setup
 
