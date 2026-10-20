@@ -141,16 +141,16 @@ def test_message_model_row_of(qapp):
 def test_scroll_to_message_sets_current(qapp):
     view = ChatView(Settings({}))
     for i in range(5):
-        view.add_message(_msg(f"m{i}", str(i)))
-    view._flush()
+        view.message_model.add(_msg(f"m{i}", str(i)))
+    view.message_model.flush()
     view.scroll_to_message("3")
     assert view.currentIndex().row() == 3
 
 
 def test_ctrl_f_emits_search_requested(qapp):
     view = ChatView(Settings({}))
-    view.add_message(_msg("hello", "m1"))
-    view._flush()
+    view.message_model.add(_msg("hello", "m1"))
+    view.message_model.flush()
     got = []
     view.search_requested.connect(lambda text, all_tabs: got.append((text, all_tabs)))
     QTest.keyClick(view, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)

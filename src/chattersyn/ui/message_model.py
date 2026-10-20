@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt
+from PySide6.QtCore import QAbstractListModel, QModelIndex, QSortFilterProxyModel, Qt
 
 from ..models.message import Message, MessageFlags, Platform
 
@@ -165,3 +165,37 @@ class MessageModel(QAbstractListModel):
 
     def platforms_in_view(self) -> set[Platform]:
         return {msg.platform for msg in self._messages}
+
+
+class PlatformProxyModel(QSortFilterProxyModel):
+    """Read-only view of a MessageModel filtered to one platform. Backs the
+    side-by-side panes: both panes read the same canonical MessageModel, so
+    mutations (delete/flag/clear) reflect in both automatically and no
+    message state is duplicated."""
+
+    MessageRole = MessageModel.MessageRole
+    PlatformRole = MessageModel.PlatformRole
+    PlainRole = MessageModel.PlainRole
+    IdRole = MessageModel.IdRole
+
+    def __init__(self, platform: Platform, source: MessageModel, parent=None):
+        super().__init__(parent)
+        self._platform = platform
+        self.setSourceModel(source)
+
+    def filterAcceptsRow(self, row: int, parent: QModelIndex) -> bool:
+        src = self.sourceModel()
+        return src.data(src.index(row, 0, parent), self.PlatformRole) == self._platform
+
+    def message_at(self, row: int) -> Message | None:
+        """Mirror MessageModel.message_at for a proxy row (click/copy paths)."""
+        return self.data(self.index(row, 0), self.MessageRole)
+
+    def row_of(self, msg_id: str) -> int | None:
+        """Proxy row for a message id (search "Go to message"); None if absent."""
+        src = self.sourceModel()
+        src_row = src.row_of(msg_id)
+        if src_row is None:
+            return None
+        proxy = self.mapFromSource(src.index(src_row, 0))
+        return proxy.row() if proxy.isValid() else None

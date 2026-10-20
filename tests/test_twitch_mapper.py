@@ -343,13 +343,13 @@ def test_room_id_captured_for_anonymous_emote_loading():
     assert sub.extra["room_id"] == "22484632"
 
 
-def test_badge_fallback_uses_public_cdn():
+def test_badge_fallback_has_no_url():
     msg = _map(PRIVMSG)  # no badge_lookup => anonymous run
     assert msg is not None
     badge = msg.author.badges[0]
     assert badge.set_id == "broadcaster"
-    assert badge.urls["1x"] == "https://badges.twitch.tv/v1/badges/broadcaster/1/1"
-    assert badge.urls["4x"] == "https://badges.twitch.tv/v1/badges/broadcaster/1/3"
+    assert badge.urls == {}  # the IRC set/version can't map to an image without Helix
+    assert badge.url_for() is None
 
 
 # -- helpers ---------------------------------------------------------------------------

@@ -166,10 +166,11 @@ def parse_badges(tags: dict[str, str], badge_lookup: BadgeLookup | None = None) 
             set_id=set_id,
             version_id=version_id,
             title=set_id,
-            # Helix data gives titles/tooltips; without it the public badge CDN
-            # still serves images for the set/version pair from the IRC tag.
-            urls={scale: f"https://badges.twitch.tv/v1/badges/{set_id}/{version_id}/{size}"
-                  for scale, size in (("1x", "1"), ("2x", "2"), ("4x", "3"))},
+            # Helix data supplies the image URLs too (a per-version GUID keyed
+            # on static-cdn.jtvnw.net); the IRC tag's set/version pair alone
+            # can't be mapped to an image without Helix, so leave urls empty
+            # and let the delegate show a labelled placeholder instead.
+            urls={},
         ))
     return badges
 

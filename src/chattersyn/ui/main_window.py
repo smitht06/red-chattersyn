@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
     QInputDialog,
+    QLabel,
     QMainWindow,
     QMessageBox,
     QStackedWidget,
@@ -33,6 +34,7 @@ from ..config.secrets import SecretsStore
 from ..config.settings import Settings
 from ..core.bus import bridge
 from ..core.text import TWITCH_MESSAGE_LIMIT, YOUTUBE_MESSAGE_LIMIT
+from .. import version
 from ..models.message import Author, Message, MessageFlags, Platform, TextRun
 from ..services.autocomplete import build_candidates
 from ..services.chat_index import ChatIndex
@@ -180,6 +182,9 @@ class MainWindow(QMainWindow):
             if demo
             else "Connecting to Twitch…"
         )
+        version_label = QLabel(f"v{version()}", self)
+        version_label.setStyleSheet("color: #6a6a6a; padding: 0 8px;")
+        self.statusBar().addPermanentWidget(version_label)
 
         if not demo:
             bridge.message.connect(self._on_bridge_message)
@@ -195,12 +200,13 @@ class MainWindow(QMainWindow):
                 if tab_conf.get("type") == "streamer":
                     # A saved Stream tab: the stored twitch_channel is stale
                     # (or empty) — binding re-derives it from live tokens.
-                    self._new_streamer_tab()
+                    self._new_streamer_tab(side_by_side=tab_conf.get("side_by_side", False))
                     continue
                 youtube_conf = tab_conf.get("youtube") or {}
                 self.add_tab(
                     tab_conf.get("twitch_channel", ""),
                     youtube_conf.get("video_id") or youtube_conf.get("channel_id") or "",
+                    side_by_side=tab_conf.get("side_by_side", False),
                 )
         else:
             # First run (or restore disabled): the user's own Stream tab —
@@ -379,7 +385,7 @@ class MainWindow(QMainWindow):
             # Existing models trim to the new cap on their next flush; new
             # tabs read the setting at construction.
             tab.view.message_model.max_messages = scrollback
-            tab.view.set_moderation_actions(self._mod_action_names())
+            tab.set_moderation_actions(self._mod_action_names())
         self._rebind_hotkeys()
         if self._demo:
             return
@@ -834,7 +840,11 @@ class MainWindow(QMainWindow):
             await asyncio.sleep(IDENTITY_RETRY_SECONDS)
 
     def _on_moderation_toggled(self, tab: Tab, enabled: bool) -> None:
-        tab.view.set_moderation_enabled(enabled)
+        tab.set_moderation_enabled(enabled)
+
+    def _on_side_by_side_toggled(self, tab: Tab, enabled: bool) -> None:
+        tab.set_side_by_side(enabled)
+        self._save_tabs()
 
     def _mod_action_names(self) -> list[str]:
         """Configured moderation-action labels (settings moderation_actions)."""
@@ -1024,7 +1034,7 @@ class MainWindow(QMainWindow):
         self._search_popup.focus_input()
 
     def _on_search_go_to(self, tab: Tab, msg: Message) -> None:
-        tab.view.scroll_to_message(msg.id)
+        tab.scroll_to_message(msg.id)
 
     def _on_search_closed(self) -> None:
         self._search_popup = None
@@ -1063,7 +1073,7 @@ class MainWindow(QMainWindow):
             self._mentions_popup.append(tab, msg)
 
     def _on_mentions_go_to(self, tab: Tab, msg: Message) -> None:
-        tab.view.scroll_to_message(msg.id)
+        tab.scroll_to_message(msg.id)
 
     def _on_mentions_clear(self) -> None:
         if self._highlights is not None:
@@ -1375,7 +1385,8 @@ class MainWindow(QMainWindow):
                 return tab
         return None
 
-    def add_tab(self, twitch_channel: str, youtube_target: str | None) -> Tab:
+    def add_tab(self, twitch_channel: str, youtube_target: str | None,
+                side_by_side: bool = False) -> Tab:
         twitch_channel = twitch_channel.strip().lstrip("#@").lower()
         youtube_target = (youtube_target or "").strip()
         tab = Tab(self._settings, twitch_channel, youtube_target)
@@ -1391,11 +1402,14 @@ class MainWindow(QMainWindow):
             functools.partial(self._on_send_toggle, tab))
         tab.header.moderation_toggled.connect(
             functools.partial(self._on_moderation_toggled, tab))
+        tab.header.side_by_side_toggled.connect(
+            functools.partial(self._on_side_by_side_toggled, tab))
         tab.mod_action_requested.connect(functools.partial(self._on_mod_action, tab))
         tab.delete_requested.connect(functools.partial(self._on_delete_requested, tab))
         tab.pin_requested.connect(functools.partial(self._on_pin_requested, tab))
-        tab.view.set_moderation_actions(self._mod_action_names())
-        tab.view.set_youtube_actions(["Ban", "Timeout", "Hide"])
+        tab.set_moderation_actions(self._mod_action_names())
+        tab.set_youtube_actions(["Ban", "Timeout", "Hide"])
+        tab.set_side_by_side(side_by_side)
         self._update_moderation_available(tab)
         # Replay the cached chat-mode label: an already-joined channel gets
         # no fresh ROOMSTATE (the join is a no-op), but the header must
@@ -1438,11 +1452,11 @@ class MainWindow(QMainWindow):
         dual = tab.header.twitch_enabled() and tab.header.youtube_enabled()
         tab.input.set_twitch_limit(YOUTUBE_MESSAGE_LIMIT if dual else TWITCH_MESSAGE_LIMIT)
 
-    def _new_streamer_tab(self) -> Tab:
+    def _new_streamer_tab(self, side_by_side: bool = False) -> Tab:
         """Stream tab: the signed-in user's own Twitch channel chat (joinable
         while offline) + the live chat of their current YouTube stream, which
         auto-attaches when they go live (waiting placeholder before that)."""
-        tab = self.add_tab("", MINE_TARGET)
+        tab = self.add_tab("", MINE_TARGET, side_by_side=side_by_side)
         self._streamer_tabs.append(tab)
         tab.set_youtube("Your Stream")  # don't leak the "mine:" sentinel into the header
         tab.set_youtube_status("waiting for your live stream…")
@@ -1731,12 +1745,14 @@ class MainWindow(QMainWindow):
         saved = []
         for tab in self._tabs:
             if tab in self._streamer_tabs:
-                saved.append({"type": "streamer"})
-                continue
-            entry: dict = {"twitch_channel": tab.twitch_channel}
-            target = (tab.youtube_target or "").strip()
-            if target:
-                entry["youtube"] = {"video_id": target}
+                entry: dict = {"type": "streamer"}
+            else:
+                entry = {"twitch_channel": tab.twitch_channel}
+                target = (tab.youtube_target or "").strip()
+                if target:
+                    entry["youtube"] = {"video_id": target}
+            if tab.side_by_side():
+                entry["side_by_side"] = True
             saved.append(entry)
         self._settings.set("tabs", saved)
         self._settings.save()

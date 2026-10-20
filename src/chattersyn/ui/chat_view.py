@@ -3,12 +3,11 @@ pause-on-hover, link/mention click routing and plain-text copy."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QKeySequence
 from PySide6.QtWidgets import QAbstractItemView, QApplication, QListView, QMenu, QToolTip
 
 from ..config.settings import Settings
-from ..models.message import Message
 from .message_delegate import MessageDelegate
 from .message_model import MessageModel
 
@@ -21,9 +20,9 @@ class ChatView(QListView):
     delete_requested = Signal(object)           # Message ("Moderate" submenu)
     pin_requested = Signal(object)              # Message ("Moderate" submenu)
 
-    def __init__(self, settings: Settings, parent=None):
+    def __init__(self, settings: Settings, parent=None, model=None):
         super().__init__(parent)
-        self._model = MessageModel(settings.get("scrollback", 1000), self)
+        self._model = model if model is not None else MessageModel(settings.get("scrollback", 1000), self)
         self.setModel(self._model)
         self._delegate = MessageDelegate(settings, self)
         self.setItemDelegate(self._delegate)
@@ -37,9 +36,6 @@ class ChatView(QListView):
         self.viewport().setMouseTracking(True)
         self.viewport().installEventFilter(self)
 
-        self._flush_timer = QTimer(self)
-        self._flush_timer.setInterval(100)
-        self._flush_timer.timeout.connect(self._flush)
         self._hover_paused = False
         self._hover_item: tuple[str, str] | None = None
 
@@ -49,10 +45,11 @@ class ChatView(QListView):
     def message_model(self) -> MessageModel:
         return self._model
 
-    def add_message(self, msg: Message) -> None:
-        self._model.add(msg)
-        if not self._flush_timer.isActive():
-            self._flush_timer.start()
+    def scroll_to_bottom_if_pinned(self) -> None:
+        """Auto-scroll after the owning Tab flushes the shared model, unless the
+        user has scrolled up or is hovering this pane."""
+        if self._at_bottom() and not self._hover_paused:
+            self.scrollToBottom()
 
     def refresh_visuals(self) -> None:
         self._delegate.clear_cache()
@@ -73,13 +70,6 @@ class ChatView(QListView):
     def _at_bottom(self) -> bool:
         bar = self.verticalScrollBar()
         return bar.value() >= bar.maximum() - 4
-
-    def _flush(self) -> None:
-        added, trimmed = self._model.flush()
-        if (added or trimmed) and self._at_bottom() and not self._hover_paused:
-            self.scrollToBottom()
-        if not self._model._pending:
-            self._flush_timer.stop()
 
     def _tooltip_for(self, hit: tuple[str, str] | None) -> str:
         if hit is None:
@@ -173,7 +163,7 @@ class ChatView(QListView):
         row = self._model.row_of(msg_id)
         if row is None:
             return
-        index = self._model.index(row)
+        index = self._model.index(row, 0)
         self.scrollTo(index, QAbstractItemView.ScrollHint.PositionAtCenter)
         self.setCurrentIndex(index)
 

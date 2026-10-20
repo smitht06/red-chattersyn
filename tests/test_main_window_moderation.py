@@ -49,7 +49,7 @@ async def test_clearchat_grays_rows_and_stacks(win):
     tab.add_message(_tw_msg())
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
-    tab.view._flush()
+    tab._flush()
 
     rows = tab.view.message_model.all_messages()
     user_rows = [m for m in rows if m.author is not None]
@@ -61,10 +61,10 @@ async def test_clearchat_grays_rows_and_stacks(win):
 async def test_clearchat_stack_restarts_when_user_posts_again(win):
     tab = win._tabs[0]
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
-    tab.view._flush()
+    tab._flush()
     win._on_bridge_message(_tw_msg())  # the user posts again: fresh stack
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
-    tab.view._flush()
+    tab._flush()
 
     assert [m.plain for m in _system_rows(win)] == [
         "Bob was timed out for 600s.", "Bob was timed out for 600s."]
@@ -74,7 +74,7 @@ async def test_clearchat_stack_expires_after_window(win, monkeypatch):
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     monkeypatch.setattr("chattersyn.ui.main_window.time.monotonic", lambda: 1e9)
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
-    win._tabs[0].view._flush()
+    win._tabs[0]._flush()
     assert len(_system_rows(win)) == 2  # outside 5s window: a fresh row
 
 
@@ -83,7 +83,7 @@ async def test_clearchat_stack_breaks_after_20_messages(win):
     for i in range(21):
         win._on_bridge_message(_tw_msg(login=f"user{i}", name=f"User{i}"))
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
-    win._tabs[0].view._flush()
+    win._tabs[0]._flush()
     assert len(_system_rows(win)) == 2
 
 
@@ -93,9 +93,9 @@ async def test_clearchat_full_clear_grays_all_rows(win):
     tab = win._tabs[0]
     tab.add_message(_tw_msg())
     tab.add_message(_tw_msg())
-    tab.view._flush()
+    tab._flush()
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user=None))
-    tab.view._flush()
+    tab._flush()
     rows = tab.view.message_model.all_messages()
     assert len(rows) == 3
     assert all(m.flags & MessageFlags.DISABLED for m in rows if m.author is not None)
@@ -158,7 +158,7 @@ async def test_delete_requested_youtube_hides_one_row(win):
     tab = win._tabs[0]
     msg = Message.text(Platform.YOUTUBE, "lc1", Author("bad", login="bad"), "spam")
     tab.add_message(msg)
-    tab.view._flush()
+    tab._flush()
     win._on_delete_requested(tab, msg)
     assert msg.flags & MessageFlags.DISABLED
 
@@ -166,7 +166,7 @@ async def test_delete_requested_youtube_hides_one_row(win):
 async def test_delete_requested_twitch_is_deferred(win):
     tab = win._tabs[0]
     win._on_delete_requested(tab, _tw_msg())
-    tab.view._flush()
+    tab._flush()
     assert "channel:moderate" in _system_rows(win)[-1].plain
 
 
@@ -184,10 +184,10 @@ async def test_hide_action_disables_users_rows(win):
     author = Author("bad", login="bad", user_id="UCbad")
     tab.add_message(Message.text(Platform.YOUTUBE, "lc1", author, "spam"))
     tab.add_message(Message.text(Platform.YOUTUBE, "lc1", author, "more"))
-    tab.view._flush()
+    tab._flush()
     msg = Message.text(Platform.YOUTUBE, "lc1", author, "spam")
     win._on_youtube_mod_action(tab, msg, "Hide")
-    tab.view._flush()
+    tab._flush()
     rows = [m for m in tab.view.message_model.all_messages() if m.author is not None]
     assert len(rows) == 2 and all(m.flags & MessageFlags.DISABLED for m in rows)
 
@@ -249,11 +249,11 @@ async def test_usercard_youtube_delete_hides_locally(win):
     author = Author("Bad", login="bad", user_id="UCbad")
     tab.add_message(Message.text(Platform.YOUTUBE, "lc1", author, "spam"))
     tab.add_message(Message.text(Platform.YOUTUBE, "lc1", author, "more"))
-    tab.view._flush()
+    tab._flush()
     win._on_usercard_action(
         tab, UsercardTarget(Platform.YOUTUBE, "bad", "Bad", user_id="UCbad"),
         "/delete bad")
-    tab.view._flush()
+    tab._flush()
     # The note AND the actual hiding must both happen (a no-op hide that
     # only writes the note must fail this test).
     rows = [m for m in tab.view.message_model.all_messages() if m.author is not None]
@@ -273,7 +273,7 @@ async def test_clearchat_two_tabs_same_channel_stack_identically(win):
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     for tab in (tab1, tab2):
-        tab.view._flush()
+        tab._flush()
         system = [m for m in tab.view.message_model.all_messages() if m.is_system]
         # Bookkeeping runs once per event: both tabs show the same count.
         assert len(system) == 1
@@ -287,10 +287,10 @@ async def test_clearchat_untimeout_ungrays_without_stacking(win):
     inflation, no permanent entry."""
     tab = win._tabs[0]
     tab.add_message(_tw_msg())
-    tab.view._flush()
+    tab._flush()
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=0))
-    tab.view._flush()
+    tab._flush()
     rows = tab.view.message_model.all_messages()
     user_rows = [m for m in rows if m.author is not None]
     assert user_rows and not any(m.flags & MessageFlags.DISABLED for m in user_rows)
@@ -308,7 +308,7 @@ async def test_timeout_expiry_ungrays_rows(win, monkeypatch):
         "chattersyn.services.moderation.time.monotonic", lambda: clock["now"])
     tab = win._tabs[0]
     tab.add_message(_tw_msg())
-    tab.view._flush()
+    tab._flush()
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     rows = [m for m in tab.view.message_model.all_messages() if m.author is not None]
     assert all(m.flags & MessageFlags.DISABLED for m in rows)
@@ -329,10 +329,10 @@ async def test_timeout_expiry_skipped_when_newer_ban_active(win, monkeypatch):
         "chattersyn.services.moderation.time.monotonic", lambda: clock["now"])
     tab = win._tabs[0]
     tab.add_message(_tw_msg())
-    tab.view._flush()
+    tab._flush()
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=None))  # permaban
-    tab.view._flush()
+    tab._flush()
     assert len(fired) == 1  # only the timed entry scheduled a timer
     clock["now"] = 601
     fired[0]()  # the 600s timeout expired, but the ban is now permanent
@@ -414,7 +414,7 @@ async def test_usercard_self_youtube_hides_mod_buttons(win):
     msg = Message.text(Platform.YOUTUBE, "lc1",
                        Author("Me", login="ucme", user_id="UCme"), "hello")
     tab.add_message(msg)
-    tab.view._flush()
+    tab._flush()
     win._show_usercard(msg, "ucme")
     popup = win._usercard_popup
     assert popup is not None
@@ -451,9 +451,9 @@ async def test_search_snapshot_includes_disabled_rows(win):
     tab = win._tabs[0]
     msg = _tw_msg()
     tab.add_message(msg)
-    tab.view._flush()
+    tab._flush()
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
-    tab.view._flush()
+    tab._flush()
     win._on_search_requested(tab, "", False)
     popup = win._search_popup
     assert popup is not None
@@ -476,7 +476,7 @@ async def test_timeout_expiry_fires_early_still_ungrays(win, monkeypatch):
         "chattersyn.services.moderation.time.monotonic", lambda: clock["now"])
     tab = win._tabs[0]
     tab.add_message(_tw_msg())
-    tab.view._flush()
+    tab._flush()
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     assert len(fired) == 1
     fired[0]()  # clock still at 0: BEFORE the 600 s deadline
@@ -495,11 +495,11 @@ async def test_timeout_expiry_skipped_when_newer_timeout_active(win, monkeypatch
         "chattersyn.services.moderation.time.monotonic", lambda: clock["now"])
     tab = win._tabs[0]
     tab.add_message(_tw_msg())
-    tab.view._flush()
+    tab._flush()
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     clock["now"] = 60.0
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=1200))
-    tab.view._flush()
+    tab._flush()
     assert len(fired) == 2
     clock["now"] = 601
     fired[0]()  # the 600 s timer; its deadline was replaced by the 1200 s one
@@ -531,7 +531,7 @@ async def test_timeout_expiry_ungrays_when_entry_pruned_before_fire(win, monkeyp
         "chattersyn.services.moderation.time.monotonic", lambda: clock["now"])
     tab = win._tabs[0]
     tab.add_message(_tw_msg())
-    tab.view._flush()
+    tab._flush()
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     assert len(fired) == 1
     clock["now"] = 700.0
@@ -548,7 +548,7 @@ async def test_clearchat_full_clear_breaks_stack(win):
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user=None))
     win._on_bridge_event(ClearChat(channel="redcyberdragon29", user="Bob", duration=600))
-    tab.view._flush()
+    tab._flush()
     assert [m.plain for m in _system_rows(win)] == [
         "Bob was timed out for 600s.",
         "Chat has been cleared by a moderator.",
@@ -665,10 +665,10 @@ async def test_usercard_youtube_delete_without_user_id_hides_by_login(win):
     tab = win._tabs[0]
     tab.youtube_live_chat_id = "lc1"
     tab.add_message(Message.text(Platform.YOUTUBE, "lc1", Author("Bad", login="bad"), "spam"))
-    tab.view._flush()
+    tab._flush()
     win._on_usercard_action(
         tab, UsercardTarget(Platform.YOUTUBE, "bad", "Bad"), "/delete bad")
-    tab.view._flush()
+    tab._flush()
     rows = [m for m in tab.view.message_model.all_messages() if m.author is not None]
     assert rows and all(m.flags & MessageFlags.DISABLED for m in rows)
     assert "hid Bad" in _system_rows(win)[-1].plain
@@ -682,7 +682,7 @@ async def test_usercard_youtube_ban_without_user_id_skips(win):
     win._youtube = types.SimpleNamespace(api=_FakeYtApi())
     win._on_usercard_action(
         tab, UsercardTarget(Platform.YOUTUBE, "bad", "Bad"), "/ban bad")
-    tab.view._flush()
+    tab._flush()
     assert "no channel id recorded" in _system_rows(win)[-1].plain
 
 
@@ -693,11 +693,11 @@ async def test_usercard_delete_uses_rows_chat_id_after_clear(win):
     tab = win._tabs[0]
     tab.add_message(Message.text(
         Platform.YOUTUBE, "lc1", Author("Bad", login="bad"), "spam"))
-    tab.view._flush()
+    tab._flush()
     target = UsercardTarget(Platform.YOUTUBE, "bad", "Bad", channel_id="lc1")
     tab.youtube_live_chat_id = ""  # chat id cleared while the card was open
     win._on_usercard_action(tab, target, "/delete bad")
-    tab.view._flush()
+    tab._flush()
     rows = [m for m in tab.view.message_model.all_messages() if m.author is not None]
     assert rows and all(m.flags & MessageFlags.DISABLED for m in rows)
     assert "hid Bad" in _system_rows(win)[-1].plain
@@ -711,11 +711,11 @@ async def test_hide_button_uses_rows_chat_id_after_clear(win):
     tab.youtube_live_chat_id = "lc1"
     author = Author("Bad", login="bad", user_id="UCbad")
     tab.add_message(Message.text(Platform.YOUTUBE, "lc1", author, "spam"))
-    tab.view._flush()
+    tab._flush()
     msg = Message.text(Platform.YOUTUBE, "lc1", author, "spam")
     tab.youtube_live_chat_id = ""
     win._on_youtube_mod_action(tab, msg, "Hide")
-    tab.view._flush()
+    tab._flush()
     rows = [m for m in tab.view.message_model.all_messages() if m.author is not None]
     assert len(rows) == 1 and all(m.flags & MessageFlags.DISABLED for m in rows)
     assert "hid Bad" in _system_rows(win)[-1].plain

@@ -84,8 +84,8 @@ def _variant_value(fmt: QTextFormat, prop: int):
 
 
 def _placeholder_pixmap(alt: str) -> QPixmap:
-    """Rounded box with the emote/badge name (like Chatterino's loading state;
-    also used for emotes without URLs). Rendered at 2x for crisp scaling."""
+    """Rounded box with the emote name (Chatterino's loading state; also used
+    for emotes without URLs). Rendered at 2x for crisp scaling."""
     pm = QPixmap(56, 56)
     pm.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pm)
@@ -328,17 +328,6 @@ class MessageDelegate(QStyledItemDelegate):
             cursor.insertText(msg.plain, gray)
         else:
             author = msg.author
-            for badge in author.badges:
-                fmt = QTextImageFormat()
-                fmt.setName(f"emote://e/{len(doc.emotes)}")
-                fmt.setWidth(16)
-                fmt.setHeight(16)
-                fmt.setProperty(EMOTE_ALT, badge.title or badge.set_id)
-                fmt.setProperty(EMOTE_ANIMATED, False)
-                fmt.setToolTip(badge.tooltip or badge.title or badge.set_id)
-                doc.emotes.append((badge.url_for(dpr) or "", False, badge.title or badge.set_id))
-                cursor.insertImage(fmt)
-
             name_fmt = QTextCharFormat(base)
             name_fmt.setFontWeight(QFont.Weight.Bold)
             name_color = QColor(author.color) if author.color else palette.color(palette.ColorRole.Text)

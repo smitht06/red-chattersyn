@@ -38,6 +38,21 @@ if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null 2>&1; then
     exit 1
 fi
 
+# Keep the frozen-bundle version fallback in sync with [project].version so the
+# shipped binary shows the right version (a PyInstaller bundle has no dist-info,
+# so the app falls back to __version__ in src/chattersyn/__init__.py).
+python3 - "$version" <<'PY'
+import pathlib, re, sys
+version = sys.argv[1]
+path = pathlib.Path("src/chattersyn/__init__.py")
+text = path.read_text()
+updated, n = re.subn(
+    r'^__version__ = "[^"]*"$', f'__version__ = "{version}"', text, count=1, flags=re.M)
+if n != 1:
+    raise SystemExit("could not locate __version__ in src/chattersyn/__init__.py")
+path.write_text(updated)
+PY
+
 git add -A
 git commit -m "${message}"
 git push

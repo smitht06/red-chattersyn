@@ -41,9 +41,9 @@ def test_render_smoke(qapp):
                    f"message {i} with link https://example.com/{i}", f"m{i}")
         if i == 5:
             msg.flags = MessageFlags.HIGHLIGHTED
-        view.add_message(msg)
-    view.add_message(_emote_msg("m20"))
-    view._flush()
+        view.message_model.add(msg)
+    view.message_model.add(_emote_msg("m20"))
+    view.message_model.flush()
     qapp.processEvents()
 
     image = QImage(600, 400, QImage.Format.Format_ARGB32)
@@ -62,15 +62,20 @@ def test_hit_test_username(qapp):
     theme.apply(qapp, "dark")
     view = ChatView(Settings())
     view.resize(600, 200)
-    view.add_message(_msg(Platform.TWITCH, "some text"))
-    view._flush()
+    view.message_model.add(_msg(Platform.TWITCH, "some text"))
+    view.message_model.flush()
     qapp.processEvents()
 
     index = view.message_model.index(0)
     rect = view.visualRect(index)
-    # Username starts after the [Tw] chip + margins + the 16px badge (~52px).
-    hit = view._delegate.hit_test(index, QPointF(rect.x() + 60, rect.y() + 8), rect)
-    assert hit is not None and hit[0] == "user"
+    # Scan the first line for the username hit, which sits after the platform chip.
+    found = None
+    for x in range(int(rect.x()) + 40, int(rect.x()) + 200, 5):
+        hit = view._delegate.hit_test(index, QPointF(x, rect.y() + 8), rect)
+        if hit and hit[0] == "user":
+            found = hit
+            break
+    assert found == ("user", "alice")
 
 
 def test_hit_test_link(qapp):
@@ -87,8 +92,8 @@ def test_hit_test_link(qapp):
               TextRun(" out")],
         plain="check https://example.com out",
     )
-    view.add_message(msg)
-    view._flush()
+    view.message_model.add(msg)
+    view.message_model.flush()
     qapp.processEvents()
 
     index = view.message_model.index(0)
@@ -106,8 +111,8 @@ def test_hit_test_past_text_end_is_no_hit(qapp):
     theme.apply(qapp, "dark")
     view = ChatView(Settings())
     view.resize(600, 200)
-    view.add_message(_msg(Platform.TWITCH, "short"))
-    view._flush()
+    view.message_model.add(_msg(Platform.TWITCH, "short"))
+    view.message_model.flush()
     qapp.processEvents()
 
     index = view.message_model.index(0)
@@ -163,8 +168,8 @@ def test_disabled_veil_covers_row_without_timestamps(qapp):
         msg = _msg(Platform.TWITCH, "hello")
         if disabled:
             msg.flags = MessageFlags.DISABLED
-        view.add_message(msg)
-        view._flush()
+        view.message_model.add(msg)
+        view.message_model.flush()
         qapp.processEvents()
         image = QImage(600, 100, QImage.Format.Format_ARGB32)
         view.render(image)
@@ -185,10 +190,10 @@ def test_mod_buttons_hit_test(qapp):
     view = ChatView(Settings())
     view.resize(600, 200)
     msg = _emote_msg()  # bob: no protected badges
-    view.add_message(msg)
+    view.message_model.add(msg)
     view.set_moderation_enabled(True)
     view.set_moderation_actions(["Ban"])
-    view._flush()
+    view.message_model.flush()
     qapp.processEvents()
 
     layout = view._delegate._layout_for(msg, view.width(), 1.0)
@@ -206,8 +211,8 @@ def test_mod_buttons_hidden_when_mode_off(qapp):
     view.resize(600, 200)
     view.set_moderation_actions(["Ban"])
     msg = _emote_msg()
-    view.add_message(msg)
-    view._flush()
+    view.message_model.add(msg)
+    view.message_model.flush()
     layout = view._delegate._layout_for(msg, view.width(), 1.0)
     assert layout.buttons == []
 
@@ -219,8 +224,8 @@ def test_mod_buttons_skip_protected_rows(qapp):
     view.set_moderation_enabled(True)
     view.set_moderation_actions(["Ban"])
     msg = _msg(Platform.TWITCH, "hi")  # alice carries a moderator badge
-    view.add_message(msg)
-    view._flush()
+    view.message_model.add(msg)
+    view.message_model.flush()
     layout = view._delegate._layout_for(msg, view.width(), 1.0)
     assert layout.buttons == []
 
@@ -237,8 +242,8 @@ def test_youtube_rows_use_youtube_actions(qapp):
         author=Author("bob", login="bob"),
         runs=[TextRun("hi")], plain="hi",
     )
-    view.add_message(msg)
-    view._flush()
+    view.message_model.add(msg)
+    view.message_model.flush()
     layout = view._delegate._layout_for(msg, view.width(), 1.0)
     assert [b[4] for b in layout.buttons] == ["Ban", "Timeout", "Hide"]
 
@@ -254,7 +259,7 @@ def test_youtube_owner_rows_skip_buttons(qapp):
         author=Author("Owner", login="owner", badges=[Badge("yt", "owner", "Owner")]),
         runs=[TextRun("hi")], plain="hi",
     )
-    view.add_message(msg)
-    view._flush()
+    view.message_model.add(msg)
+    view.message_model.flush()
     layout = view._delegate._layout_for(msg, view.width(), 1.0)
     assert layout.buttons == []

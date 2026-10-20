@@ -44,6 +44,7 @@ class ShrinkableLabel(QLabel):
 class TabHeader(QWidget):
     send_toggle_changed = Signal(str, bool)  # platform, enabled
     moderation_toggled = Signal(bool)  # shield on/off (per-tab moderation mode)
+    side_by_side_toggled = Signal(bool)  # split Twitch | YouTube into two panes
 
     def __init__(self, settings: Settings, twitch_channel: str = "", youtube_title: str = "", parent=None):
         super().__init__(parent)
@@ -98,11 +99,18 @@ class TabHeader(QWidget):
         self._shield.setStyleSheet(_SHIELD_DISABLED)
         self._shield.toggled.connect(self._on_shield_toggled)
 
+        self._sbs_button = QPushButton("⇶", self)
+        self._sbs_button.setCheckable(True)
+        self._sbs_button.setToolTip("Side-by-side — Twitch | YouTube")
+        self._sbs_button.setStyleSheet(_CHIP_OFF)
+        self._sbs_button.toggled.connect(self._on_sbs_toggled)
+
         layout.addWidget(self._twitch_label)
         layout.addWidget(self._youtube_label)
         layout.addWidget(self._modes_label)
         layout.addStretch(1)
         layout.addWidget(self._shield)
+        layout.addWidget(self._sbs_button)
         layout.addWidget(self._twitch_chip)
         layout.addWidget(self._youtube_chip)
         layout.addWidget(self._status_label)
@@ -189,3 +197,18 @@ class TabHeader(QWidget):
     def _on_shield_toggled(self, checked: bool) -> None:
         self._update_shield_style()
         self.moderation_toggled.emit(checked)
+
+    def set_side_by_side(self, enabled: bool) -> None:
+        """Reflect a programmatic side-by-side state (restore) without
+        re-emitting the toggle, which would trigger a save loop in main_window."""
+        self._sbs_button.blockSignals(True)
+        self._sbs_button.setChecked(bool(enabled))
+        self._sbs_button.blockSignals(False)
+        self._update_sbs_style()
+
+    def _on_sbs_toggled(self, checked: bool) -> None:
+        self._update_sbs_style()
+        self.side_by_side_toggled.emit(checked)
+
+    def _update_sbs_style(self) -> None:
+        self._sbs_button.setStyleSheet(_CHIP_ON if self._sbs_button.isChecked() else _CHIP_OFF)

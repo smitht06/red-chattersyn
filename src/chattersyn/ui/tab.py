@@ -6,13 +6,23 @@ from __future__ import annotations
 import uuid
 from collections.abc import Callable
 
-from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSplitter,
+    QStackedWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..config.settings import Settings
-from ..models.message import Message
+from ..models.message import Message, Platform
 from .chat_view import ChatView
 from .input_widget import InputWidget
+from .message_model import MessageModel, PlatformProxyModel
 from .tab_header import TabHeader
 
 
@@ -48,8 +58,32 @@ class Tab(QWidget):
         layout.setSpacing(0)
 
         self.header = TabHeader(settings, twitch_channel, youtube_title)
-        self.view = ChatView(settings)
         self.input = InputWidget(settings)
+
+        # One canonical model feeds every view: the merged view reads it
+        # directly, the side-by-side panes read platform-filtered proxies over
+        # it, so mutations (delete/flag/clear) reflect in all three at once.
+        self._model = MessageModel(settings.get("scrollback", 1000), self)
+        self.view = ChatView(settings, model=self._model)
+        self._twitch_view = ChatView(
+            settings, model=PlatformProxyModel(Platform.TWITCH, self._model))
+        self._youtube_view = ChatView(
+            settings, model=PlatformProxyModel(Platform.YOUTUBE, self._model))
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(self._twitch_view)
+        splitter.addWidget(self._youtube_view)
+        splitter.setSizes([1, 1])
+
+        self._stack = QStackedWidget(self)
+        self._stack.addWidget(self.view)      # index 0 — merged
+        self._stack.addWidget(splitter)       # index 1 — side by side
+        self._side_by_side = False
+
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setInterval(100)
+        self._flush_timer.timeout.connect(self._flush)
 
         self._offer_banner = QFrame(self)
         self._offer_banner.setStyleSheet(
@@ -105,19 +139,15 @@ class Tab(QWidget):
         self._pin_banner.hide()
 
         layout.addWidget(self.header)
-        layout.addWidget(self.view, 1)
+        layout.addWidget(self._stack, 1)
         layout.addWidget(self._pin_banner)
         layout.addWidget(self._offer_banner)
         layout.addWidget(self._reply_banner)
         layout.addWidget(self.input)
 
         self.input.send_clicked.connect(self._on_send)
-        self.view.usercard_requested.connect(self.usercard_requested)
-        self.view.reply_requested.connect(self.reply_requested)
-        self.view.search_requested.connect(self.search_requested)
-        self.view.mod_action_requested.connect(self.mod_action_requested)
-        self.view.delete_requested.connect(self.delete_requested)
-        self.view.pin_requested.connect(self.pin_requested)
+        for view in self._all_views():
+            self._connect_view(view)
 
     # -- API ----------------------------------------------------------------------
 
@@ -125,7 +155,22 @@ class Tab(QWidget):
         self.send_handler = handler
 
     def add_message(self, msg: Message) -> None:
-        self.view.add_message(msg)
+        self._model.add(msg)
+        if not self._flush_timer.isActive():
+            self._flush_timer.start()
+
+    @property
+    def message_model(self) -> MessageModel:
+        return self._model
+
+    def set_side_by_side(self, enabled: bool) -> None:
+        """Swap between the merged view and the Twitch | YouTube splitter."""
+        self._side_by_side = bool(enabled)
+        self._stack.setCurrentIndex(1 if enabled else 0)
+        self.header.set_side_by_side(enabled)
+
+    def side_by_side(self) -> bool:
+        return self._side_by_side
 
     def set_twitch(self, channel: str, live: bool = False) -> None:
         self.twitch_channel = channel
@@ -159,7 +204,45 @@ class Tab(QWidget):
         self.header.set_status(" · ".join(parts))
 
     def refresh_visuals(self) -> None:
-        self.view.refresh_visuals()
+        for view in self._all_views():
+            view.refresh_visuals()
+
+    def set_moderation_enabled(self, enabled: bool) -> None:
+        for view in self._all_views():
+            view.set_moderation_enabled(enabled)
+
+    def set_moderation_actions(self, actions: list[str]) -> None:
+        for view in self._all_views():
+            view.set_moderation_actions(actions)
+
+    def set_youtube_actions(self, actions: list[str]) -> None:
+        for view in self._all_views():
+            view.set_youtube_actions(actions)
+
+    def scroll_to_message(self, msg_id: str) -> None:
+        """Center a message in whichever pane holds it (search "Go to message")."""
+        for view in self._all_views():
+            view.scroll_to_message(msg_id)
+
+    # -- internal ------------------------------------------------------------------
+
+    def _all_views(self) -> list[ChatView]:
+        return [self.view, self._twitch_view, self._youtube_view]
+
+    def _connect_view(self, view: ChatView) -> None:
+        view.usercard_requested.connect(self.usercard_requested)
+        view.reply_requested.connect(self.reply_requested)
+        view.search_requested.connect(self.search_requested)
+        view.mod_action_requested.connect(self.mod_action_requested)
+        view.delete_requested.connect(self.delete_requested)
+        view.pin_requested.connect(self.pin_requested)
+
+    def _flush(self) -> None:
+        self._model.flush()
+        for view in self._all_views():
+            view.scroll_to_bottom_if_pinned()
+        if not self._model._pending:
+            self._flush_timer.stop()
 
     def show_offer(self, detail: str, accept_label: str) -> None:
         """Blocked-send banner: '… — [Send to Twitch only] [Edit]'."""
