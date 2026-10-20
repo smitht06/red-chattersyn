@@ -192,15 +192,14 @@ jobs:
           echo "aptrepo=$root" >> "$GITHUB_ENV"
 
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/pages-action@v1
+        uses: cloudflare/wrangler-action@v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          # Must match the Pages project name, so the site lives at
-          # https://chattersyn-apt.pages.dev (README install instructions
+          # `--project-name` must match the Pages project so the site lives at
+          # https://chattersyn-apt.pages.dev (the README install instructions
           # point there). Rename here + in apt/README.md to move it.
-          projectName: chattersyn-apt
-          directory: ${{ env.aptrepo }}
+          command: pages deploy ${{ env.aptrepo }} --project-name=chattersyn-apt
 
       - uses: actions/upload-artifact@v4
         if: always()
