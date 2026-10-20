@@ -9,9 +9,9 @@ YouTube chat client. Republished automatically by CI on every release tag.
 Add the signing key and the source, then install:
 
 ```sh
-curl -fsSL https://smitht06.github.io/red-chattersyn-apt/chattersyn.gpg \
+curl -fsSL https://chattersyn-apt.pages.dev/chattersyn.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/chattersyn.gpg
-echo "deb [signed-by=/usr/share/keyrings/chattersyn.gpg] https://smitht06.github.io/red-chattersyn-apt stable main" \
+echo "deb [signed-by=/usr/share/keyrings/chattersyn.gpg] https://chattersyn-apt.pages.dev stable main" \
   | sudo tee /etc/apt/sources.list.d/chattersyn.list
 sudo apt update
 sudo apt install chattersyn

@@ -1,0 +1,6 @@
+# The .deb is too large to serve directly — it exceeds both GitHub's 100 MB
+# git limit and Cloudflare Pages' 25 MB per-file limit — so it lives as a
+# GitHub *release* asset (2 GB limit). apt requests this relative pool/ path;
+# this rule 302-redirects it to the matching release asset. `:ver` is a
+# Cloudflare Pages placeholder that matches one path segment (e.g. "0.3.0").
+/pool/main/c/chattersyn/chattersyn-:ver-linux-x86_64.deb  https://github.com/smitht06/red-chattersyn/releases/download/v:ver/chattersyn-:ver-linux-x86_64.deb  302

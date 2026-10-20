@@ -91,9 +91,9 @@ SmartScreen prompt — More info → Run anyway.
 `apt upgrade` keeps ChatterSyn updated from then on:
 
 ```sh
-curl -fsSL https://smitht06.github.io/red-chattersyn-apt/chattersyn.gpg \
+curl -fsSL https://chattersyn-apt.pages.dev/chattersyn.gpg \
   | sudo gpg --dearmor -o /usr/share/keyrings/chattersyn.gpg
-echo "deb [signed-by=/usr/share/keyrings/chattersyn.gpg] https://smitht06.github.io/red-chattersyn-apt stable main" \
+echo "deb [signed-by=/usr/share/keyrings/chattersyn.gpg] https://chattersyn-apt.pages.dev stable main" \
   | sudo tee /etc/apt/sources.list.d/chattersyn.list
 sudo apt update
 sudo apt install chattersyn
@@ -116,9 +116,10 @@ falls back to a local file (`~/.local/share/python_keyring/`).
 Every push builds all three platforms; a pushed `v*` tag additionally runs a
 `release` job that publishes a GitHub Release with the binaries attached
 (macOS zip, Windows zip, Linux tar.gz + .deb) and an `apt-repo` job that
-publishes the Linux .deb into the APT repository (GPG-signed `dists/stable` in
-[smitht06/red-chattersyn-apt](https://github.com/smitht06/red-chattersyn-apt),
-served from GitHub Pages). To cut a release:
+publishes the Linux .deb into the APT repository. The GPG-signed `dists/stable`
+index is deployed to Cloudflare Pages; the .deb itself stays a GitHub release
+asset (2 GB limit) and is reached via a Pages redirect, since it exceeds
+GitHub's 100 MB git limit. To cut a release:
 
 1. Bump `version` in `pyproject.toml`, then run `uv lock`. CI installs with
    `uv sync --locked`, and a stale lockfile fails every build leg — the

@@ -114,10 +114,13 @@ jobs:
           files: artifacts/*
 
   apt-repo:
-    # Publish the Linux .deb into the APT repository served from GitHub Pages
-    # (repo smitht06/red-chattersyn-apt): pool/ + a GPG-signed dists/stable
-    # index. Users add the source once; afterwards `apt update && apt upgrade`
-    # delivers new releases. Also runs on workflow_dispatch for smoke tests.
+    # Publish the Linux .deb into the APT repository. The GPG-signed index
+    # (dists/stable) deploys to Cloudflare Pages; the .deb itself is a GitHub
+    # *release* asset (2 GB limit), reached via a Pages _redirects rule — it
+    # exceeds both GitHub's 100 MB git limit and Pages' 25 MB per-file limit,
+    # so it can't be committed or served directly. Users add the source once;
+    # afterwards `apt update && apt upgrade` delivers new releases. Also runs
+    # on workflow_dispatch for smoke tests.
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     needs: build
     runs-on: ubuntu-latest
@@ -158,20 +161,19 @@ jobs:
           ver="${{ steps.deb.outputs.ver }}"
           deb="${{ steps.deb.outputs.deb }}"
           root="$RUNNER_TEMP/aptrepo"
-          # Debian pool layout: commit the .deb under pool/ so apt fetches it
-          # via a relative Filename. apt treats Filename as relative to the
-          # repo base, so an absolute URL would be prepended with the base and
-          # 404. Committing the same bytes apt downloads also means the
-          # index's Size/SHA256 always match — no "Hash Sum mismatch".
-          pool="$root/pool/main/c/chattersyn"
-          mkdir -p "$pool"
           deb_name="chattersyn-${ver}-linux-x86_64.deb"
-          cp "$deb" "$pool/$deb_name"
+          # The .deb is NOT copied into the published tree — it's a GitHub
+          # *release* asset, reached via a Cloudflare Pages redirect
+          # (_redirects) that rewrites the relative pool/ path apt requests.
+          # We still pass the artifact here so gen_apt_index.py hashes it for
+          # the Size/SHA256 the index publishes (they must describe the exact
+          # bytes apt downloads via the redirect). Filename stays relative:
+          # apt treats it as relative to the repository base.
           # Writes Packages, Packages.gz and Release. Not apt-ftparchive:
           # on ubuntu-24.04 it silently indexed nothing and published an
           # empty (but validly signed!) Release file.
           python3 scripts/gen_apt_index.py \
-              "$pool/$deb_name" "pool/main/c/chattersyn/$deb_name" "$root"
+              "$deb" "pool/main/c/chattersyn/$deb_name" "$root"
           cd "$root"
           export GNUPGHOME="$RUNNER_TEMP/gnupg"
           mkdir -m 700 "$GNUPGHOME"
@@ -184,23 +186,21 @@ jobs:
           # users can fetch it as a stable URL for /etc/apt/keyrings.
           gpg --batch --yes --armor --export \
               "ChatterSyn APT Repository" > "$root/chattersyn.gpg"
-          # Install instructions at the repo root (Pages/GitHub readme).
+          # Install instructions + the deb redirect rule at the repo root.
           cp "$GITHUB_WORKSPACE/apt/README.md" "$root/README.md"
+          cp "$GITHUB_WORKSPACE/apt/_redirects" "$root/_redirects"
           echo "aptrepo=$root" >> "$GITHUB_ENV"
 
-      - uses: peaceiris/actions-gh-pages@v4
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/pages-action@v1
         with:
-          deploy_key: ${{ secrets.APT_DEPLOY_KEY }}
-          external_repository: smitht06/red-chattersyn-apt
-          publish_branch: gh-pages
-          publish_dir: ${{ env.aptrepo }}
-          # Squash history each publish: the .deb (~80-100 MB) is committed,
-          # and keeping every version would bloat the Pages repo unboundedly.
-          # `apt upgrade` only ever needs the latest version.
-          force_orphan: true
-          user_name: github-actions[bot]
-          user_email: github-actions[bot]@users.noreply.github.com
-          commit_message: "apt repo: ${{ github.ref_name }}"
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # Must match the Pages project name, so the site lives at
+          # https://chattersyn-apt.pages.dev (README install instructions
+          # point there). Rename here + in apt/README.md to move it.
+          projectName: chattersyn-apt
+          directory: ${{ env.aptrepo }}
 
       - uses: actions/upload-artifact@v4
         if: always()
