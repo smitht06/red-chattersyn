@@ -199,7 +199,11 @@ jobs:
           # `--project-name` must match the Pages project so the site lives at
           # https://chattersyn-apt.pages.dev (the README install instructions
           # point there). Rename here + in apt/README.md to move it.
-          command: pages deploy ${{ env.aptrepo }} --project-name=chattersyn-apt
+          # `--branch=main` forces production: on a tag push the checkout is a
+          # detached HEAD, so wrangler's git-branch detection would otherwise
+          # deploy to a preview branch named after the tag instead of the live
+          # site.
+          command: pages deploy ${{ env.aptrepo }} --project-name=chattersyn-apt --branch=main
 
       - uses: actions/upload-artifact@v4
         if: always()
