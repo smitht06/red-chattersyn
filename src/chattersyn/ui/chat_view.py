@@ -93,6 +93,15 @@ class ChatView(QListView):
 
     # -- events ---------------------------------------------------------------------
 
+    def resizeEvent(self, event) -> None:
+        # Row heights depend on width (long messages wrap to more lines as the
+        # window narrows). QListView's default Fixed resize mode re-flows only
+        # the resized item, leaving rows below at stale y positions, so a row
+        # that grew taller overlaps the next one. A delayed items-layout forces
+        # a full re-flow; it coalesces the rapid resize events of a drag.
+        super().resizeEvent(event)
+        self.scheduleDelayedItemsLayout()
+
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if obj is self.viewport():
             if event.type() == QEvent.Type.Enter:

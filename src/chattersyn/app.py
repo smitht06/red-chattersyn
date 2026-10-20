@@ -72,10 +72,15 @@ async def _main(app: QApplication, settings: Settings, demo: bool) -> None:
     window = MainWindow(settings, demo=demo)
     window.show()
 
-    # Clean shutdown: aboutToQuit just sets the event and cancels tasks; the
-    # main coroutine then drains them BEFORE asyncio.run closes the loop.
+    # The default quitOnLastWindowClosed stops the Qt event loop the moment
+    # the last window closes, before the async shutdown below can run — qasync's
+    # run_until_complete then aborts with "Event loop stopped before Future
+    # completed". Take over quitting instead: wait on lastWindowClosed (which
+    # fires WITHOUT stopping the loop), stop the services while it still runs,
+    # then return — the future's completion callback stops the loop for real.
+    app.setQuitOnLastWindowClosed(False)
     quit_event = asyncio.Event()
-    app.aboutToQuit.connect(quit_event.set)
+    app.lastWindowClosed.connect(quit_event.set)
     await quit_event.wait()
 
     # Stop network services before the loop closes (they need a running loop).

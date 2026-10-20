@@ -3,7 +3,7 @@ per-platform send-toggle chips [Tw✓][Yt✓]."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
 
 from ..config.settings import Settings
@@ -30,6 +30,17 @@ QPushButton { background: #232323; color: #4a4a4a; border: 1px solid #333333;
 """
 
 
+class ShrinkableLabel(QLabel):
+    """QLabel whose text never sets a minimum width, so a long channel name
+    or stream title can't stop the window being resized small. When there
+    isn't room the text clips at the widget edge (no ellipsis)."""
+
+    def minimumSizeHint(self) -> QSize:
+        # Width 0 lets the layout shrink the label — and so the window —
+        # below the full-title width; the height keeps the single text line.
+        return QSize(0, super().minimumSizeHint().height())
+
+
 class TabHeader(QWidget):
     send_toggle_changed = Signal(str, bool)  # platform, enabled
     moderation_toggled = Signal(bool)  # shield on/off (per-tab moderation mode)
@@ -44,10 +55,10 @@ class TabHeader(QWidget):
         layout.setContentsMargins(10, 4, 10, 4)
         layout.setSpacing(10)
 
-        self._twitch_label = QLabel(self)
+        self._twitch_label = ShrinkableLabel(self)
         self._twitch_label.setTextFormat(Qt.TextFormat.RichText)
 
-        self._youtube_label = QLabel(self)
+        self._youtube_label = ShrinkableLabel(self)
         self._youtube_label.setTextFormat(Qt.TextFormat.RichText)
 
         self._twitch_chip = QPushButton("Tw ✓", self)
@@ -72,11 +83,11 @@ class TabHeader(QWidget):
         self._youtube_pre_block = True
         self._youtube_block_reason = ""
 
-        self._status_label = QLabel("", self)
+        self._status_label = ShrinkableLabel("", self)
         self._status_label.setStyleSheet("color: #8a8a8a; font-size: 9pt;")
 
         # Chat-mode indicator (ROOMSTATE-driven; docs/m4.md moderation mode).
-        self._modes_label = QLabel("", self)
+        self._modes_label = ShrinkableLabel("", self)
         self._modes_label.setStyleSheet("color: #a0a0c0; font-size: 8.5pt;")
         self._modes_label.hide()
 
