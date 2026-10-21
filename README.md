@@ -67,10 +67,20 @@ Prebuilt bundles for macOS, Windows, and Linux are built by GitHub Actions on
 every push and published on the [Releases](https://github.com/smitht06/red-chattersyn/releases)
 page (tag `v*`), or as CI artifacts on the run itself. No Python install needed.
 
-**macOS** (Apple Silicon) — `chattersyn-<version>-macos-arm64.zip`: unzip and
-drag `chattersyn.app` to Applications. It is ad-hoc signed (not notarized), so
-the first launch needs right-click → Open → Open in Finder to get past
-Gatekeeper.
+**macOS** (Apple Silicon, macOS 14.4+) — the recommended way is the Homebrew
+tap, republished automatically on every release:
+
+```sh
+brew tap smitht06/chattersyn
+brew install --cask chattersyn
+```
+
+New releases arrive with `brew upgrade --cask chattersyn`. Prefer a one-off
+install? The release also carries a standalone
+`chattersyn-<version>-macos-arm64.zip`: unzip and drag `chattersyn.app` to
+Applications. The app is ad-hoc signed (not notarized) — brew installs
+outside Quarantine, so tap installs open normally, but a manually downloaded
+zip needs right-click → Open → Open on first launch to get past Gatekeeper.
 
 macOS asks for your login password whenever the app reads its credentials
 from the Keychain (the Twitch/YouTube tokens live there). CI builds are
@@ -115,11 +125,12 @@ falls back to a local file (`~/.local/share/python_keyring/`).
 
 Every push builds all three platforms; a pushed `v*` tag additionally runs a
 `release` job that publishes a GitHub Release with the binaries attached
-(macOS zip, Windows zip, Linux tar.gz + .deb) and an `apt-repo` job that
-publishes the Linux .deb into the APT repository. The GPG-signed `dists/stable`
-index is deployed to Cloudflare Pages; the .deb itself stays a GitHub release
-asset (2 GB limit) and is reached via a Pages redirect, since it exceeds
-GitHub's 100 MB git limit. To cut a release:
+(macOS zip, Windows zip, Linux tar.gz + .deb), an `apt-repo` job that
+publishes the Linux .deb into the APT repository, and a `homebrew` job that
+publishes the macOS cask into the Homebrew tap (`smitht06/chattersyn`). The
+GPG-signed `dists/stable` index is deployed to Cloudflare Pages; the .deb
+itself stays a GitHub release asset (2 GB limit) and is reached via a Pages
+redirect, since it exceeds GitHub's 100 MB git limit. To cut a release:
 
 1. Bump `version` in `pyproject.toml`, then run `uv lock`. CI installs with
    `uv sync --locked`, and a stale lockfile fails every build leg — the
@@ -136,10 +147,11 @@ GitHub's 100 MB git limit. To cut a release:
    Artifact names are stamped from the `pyproject.toml` version at the tagged
    commit, so tag only after the bump lands on main.
 3. Watch the Actions tab: `build` (all three OSes, up to ~45 min), then
-   `release` (attaches the artifacts) and `apt-repo` (updates the APT
+   `release` (attaches the artifacts), `apt-repo` (updates the APT
    repository, so Linux users get the new version on their next
-   `apt update && apt upgrade`). Edit the release notes on the release page
-   afterwards.
+   `apt update && apt upgrade`), and `homebrew` (pushes the new cask, so
+   macOS users get it on their next `brew upgrade --cask chattersyn`).
+   Edit the release notes on the release page afterwards.
 
 If a release comes out missing binaries: check the tag's workflow run
 (`gh run list`). Every OS failing at `uv sync --locked` means the lockfile
@@ -154,7 +166,10 @@ gh release upload vX.Y.Z /tmp/rel/*/*
 
 The APT repository only updates from a passing `apt-repo` run, so it stays on
 the previous version until the tag is fixed and re-pushed — `apt upgrade`
-simply won't offer the broken release, which is the intended behavior.
+simply won't offer the broken release, which is the intended behavior. The
+Homebrew tap works the same way: the cask stays on the previous version until
+a passing `homebrew` run pushes it, and `brew upgrade --cask chattersyn`
+keeps reporting the old release.
 
 ## Credentials setup
 

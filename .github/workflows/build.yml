@@ -211,3 +211,124 @@ jobs:
           name: apt-repo-index
           path: ${{ env.aptrepo }}/dists
           if-no-files-found: ignore
+
+  homebrew:
+    # Publish the macOS cask into the Homebrew tap
+    # (smitht06/homebrew-chattersyn, tapped as `smitht06/chattersyn`). The tap
+    # is a plain git repo brew clones — no Pages/Cloudflare hosting. The
+    # sha256 is computed from the REMOTE release asset (the exact bytes brew
+    # will download), never the freshly rebuilt artifact: rebuilds are not
+    # byte-identical, and a mismatch would fail `brew install`'s checksum
+    # verification the same way the apt Size/SHA256 mismatch did. Also runs on
+    # workflow_dispatch for smoke tests.
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout FIRST, download LAST: a checkout run after the download
+      # deleted artifacts/ despite clean: false (sparse-checkout worktree
+      # update), so nothing git-flavored may run between the download and
+      # the steps that read it.
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          # No `pattern`: download all artifacts merged flat, exactly like the
+          # release and apt-repo jobs. The `pattern` input was silently
+          # matching nothing.
+          path: artifacts
+          merge-multiple: true
+
+      - name: Locate macOS zip
+        id: zip
+        run: |
+          echo "--- artifacts/ tree ---"
+          find artifacts -type f | sort || true
+          zip="$(find artifacts -name 'chattersyn-*-macos-arm64.zip' | head -1)"
+          if [ -z "$zip" ]; then
+            echo "FATAL: no chattersyn-*-macos-arm64.zip under artifacts/" >&2
+            exit 1
+          fi
+          ver="$(basename "$zip" | sed 's/^chattersyn-//; s/-macos-arm64\.zip$//')"
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Probe release asset (first hop, no -L)
+        run: |
+          set -euo pipefail
+          ver="${{ steps.zip.outputs.ver }}"
+          url="https://github.com/smitht06/red-chattersyn/releases/download/v${ver}/chattersyn-${ver}-macos-arm64.zip"
+          # First hop only: github.com answers 302 for an existing asset and
+          # 404 for a missing one; the CDN blob host can serve stale 404s and
+          # rejects HEAD. On a tag push the `release` job uploads the asset in
+          # parallel with this job — retry until it appears (or fail after
+          # ~10 min; the tap then stays on the previous version, like the apt
+          # repo).
+          for _ in $(seq 1 60); do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' "$url")"
+            if [ "$code" = "302" ]; then
+              echo "release asset present (302)"
+              exit 0
+            fi
+            echo "asset not up yet (HTTP $code), retrying in 10s"
+            sleep 10
+          done
+          echo "FATAL: release asset never appeared at $url" >&2
+          exit 1
+
+      - name: Hash remote release asset
+        id: sha
+        run: |
+          set -euo pipefail
+          ver="${{ steps.zip.outputs.ver }}"
+          url="https://github.com/smitht06/red-chattersyn/releases/download/v${ver}/chattersyn-${ver}-macos-arm64.zip"
+          mkdir -p "$RUNNER_TEMP/remote"   # mkdir before curl -o writes into it
+          for attempt in 1 2 3 4 5; do
+            if curl -fL --retry 3 -o "$RUNNER_TEMP/remote/chattersyn.zip" "$url"; then
+              break
+            fi
+            echo "download attempt $attempt failed (stale CDN 404?), retrying in 10s"
+            sleep 10
+          done
+          sha="$(sha256sum "$RUNNER_TEMP/remote/chattersyn.zip" | awk '{print $1}')"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Generate cask
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tap"
+          python3 scripts/gen_cask.py \
+              "${{ steps.zip.outputs.ver }}" "${{ steps.sha.outputs.sha256 }}" "$RUNNER_TEMP/tap"
+          echo "tap=$RUNNER_TEMP/tap" >> "$GITHUB_ENV"
+          cat "$RUNNER_TEMP/tap/Casks/chattersyn.rb"
+
+      - name: Set up tap deploy key
+        uses: webfactory/ssh-agent@v0.10.0
+        with:
+          ssh-private-key: ${{ secrets.TAP_DEPLOY_KEY }}
+
+      - name: Push cask to tap repo
+        run: |
+          set -euo pipefail
+          clone="$RUNNER_TEMP/taprepo"
+          git clone --depth 1 git@github.com:smitht06/homebrew-chattersyn.git "$clone"
+          cp "$RUNNER_TEMP/tap/Casks/chattersyn.rb" "$clone/Casks/chattersyn.rb"
+          cp "$RUNNER_TEMP/tap/README.md" "$clone/README.md"
+          cd "$clone"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "tap already up to date, nothing to push"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -m "chattersyn ${{ steps.zip.outputs.ver }}" \
+                      -m "Co-Authored-By: Claude Code <noreply@anthropic.com>"
+          git pull --rebase origin main
+          git push origin main
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: homebrew-cask
+          path: ${{ env.tap }}/Casks
+          if-no-files-found: ignore
