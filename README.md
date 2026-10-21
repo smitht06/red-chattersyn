@@ -72,6 +72,7 @@ tap, republished automatically on every release:
 
 ```sh
 brew tap smitht06/chattersyn
+brew trust smitht06/chattersyn   # one-time: brew requires trusting third-party taps
 brew install --cask chattersyn
 ```
 

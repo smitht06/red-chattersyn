@@ -8,6 +8,7 @@ YouTube chat client. Republished automatically by CI on every release tag.
 
 ```sh
 brew tap smitht06/chattersyn
+brew trust smitht06/chattersyn   # brew 7.0.10+ requires trusting third-party taps
 brew install --cask chattersyn
 ```
 

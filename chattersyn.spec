@@ -112,6 +112,10 @@ if sys.platform == "darwin":
             "CFBundleDisplayName": "ChatterSyn",
             "CFBundleName": "ChatterSyn",
             "NSHighResolutionCapable": True,
-            "LSMinimumSystemVersion": "12.0",
+            # Qt 6.12 (PySide6) runs on macOS 14.4+; keep the honest floor so
+            # brew's audit_min_os agrees with the cask's depends_on macos:
+            # :sonoma, and macOS blocks the launch instead of Qt failing at
+            # runtime.
+            "LSMinimumSystemVersion": "14.4",
         },
     )
