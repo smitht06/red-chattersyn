@@ -4,7 +4,8 @@
 # Mirrors the packaging/linux/control template convention.
 #
 # Stanza order follows brew's StanzaOrder cop (version/sha256, then
-# url/name/desc/homepage, depends_on, app, zap — quit before trash).
+# url/name/desc/homepage, depends_on arch before depends_on macos, app,
+# zap — quit before trash).
 cask "chattersyn" do
   version "__VERSION__"
   sha256 "__SHA256__"
@@ -14,12 +15,12 @@ cask "chattersyn" do
   desc "Chatterino-style dual chat client for Twitch and YouTube"
   homepage "https://github.com/smitht06/red-chattersyn"
 
-  depends_on macos: ">= :sonoma"
   depends_on arch: :arm64
+  depends_on macos: :sonoma
 
   app "chattersyn.app"
 
-  zap quit: "com.chattersyn.app",
+  zap quit:  "com.chattersyn.app",
       trash: [
         "~/Library/Preferences/ChatterSyn",
         "~/Library/Preferences/com.chattersyn.chattersyn.plist",
