@@ -153,22 +153,63 @@ jobs:
           echo "deb=$deb" >> "$GITHUB_OUTPUT"
           echo "ver=$ver" >> "$GITHUB_OUTPUT"
 
+      - name: Probe release asset (first hop, no -L)
+        run: |
+          set -euo pipefail
+          ver="${{ steps.deb.outputs.ver }}"
+          url="https://github.com/smitht06/red-chattersyn/releases/download/v${ver}/chattersyn-${ver}-linux-x86_64.deb"
+          # First hop only: github.com answers 302 for an existing asset and
+          # 404 for a missing one; the CDN blob host can serve stale 404s and
+          # rejects HEAD. On a tag push the `release` job uploads the asset in
+          # parallel with this job — retry until it appears (or fail after
+          # ~10 min; the repo then stays on the previous index, like the tap).
+          for _ in $(seq 1 60); do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' "$url")"
+            if [ "$code" = "302" ]; then
+              echo "release asset present (302)"
+              exit 0
+            fi
+            echo "asset not up yet (HTTP $code), retrying in 10s"
+            sleep 10
+          done
+          echo "FATAL: release asset never appeared at $url" >&2
+          exit 1
+
+      - name: Download remote release asset
+        run: |
+          set -euo pipefail
+          ver="${{ steps.deb.outputs.ver }}"
+          url="https://github.com/smitht06/red-chattersyn/releases/download/v${ver}/chattersyn-${ver}-linux-x86_64.deb"
+          mkdir -p "$RUNNER_TEMP/remote"   # mkdir before curl -o writes into it
+          for attempt in 1 2 3 4 5; do
+            if curl -fL --retry 3 -o "$RUNNER_TEMP/remote/chattersyn.deb" "$url"; then
+              break
+            fi
+            echo "download attempt $attempt failed (stale CDN 404?), retrying in 10s"
+            sleep 10
+          done
+          ls -l "$RUNNER_TEMP/remote/chattersyn.deb"
+
       - name: Assemble APT repo
         env:
           APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
         run: |
           set -euo pipefail
           ver="${{ steps.deb.outputs.ver }}"
-          deb="${{ steps.deb.outputs.deb }}"
+          deb="$RUNNER_TEMP/remote/chattersyn.deb"
           root="$RUNNER_TEMP/aptrepo"
           deb_name="chattersyn-${ver}-linux-x86_64.deb"
           # The .deb is NOT copied into the published tree — it's a GitHub
           # *release* asset, reached via a Cloudflare Pages redirect
           # (_redirects) that rewrites the relative pool/ path apt requests.
-          # We still pass the artifact here so gen_apt_index.py hashes it for
-          # the Size/SHA256 the index publishes (they must describe the exact
-          # bytes apt downloads via the redirect). Filename stays relative:
-          # apt treats it as relative to the repository base.
+          # gen_apt_index.py hashes the REMOTE release asset downloaded above,
+          # never the freshly rebuilt artifact: rebuilds are not byte-identical
+          # (embedded timestamps), so hashing the local copy while the redirect
+          # serves the release asset publishes Size/SHA256 that don't match
+          # what apt downloads -> "Hash Sum mismatch" (bit the live repo on
+          # 2026-10-19, and a dispatch smoke test would have re-triggered it —
+          # the dispatch path is why the asset is downloaded here). Filename
+          # stays relative: apt treats it as relative to the repository base.
           # Writes Packages, Packages.gz and Release. Not apt-ftparchive:
           # on ubuntu-24.04 it silently indexed nothing and published an
           # empty (but validly signed!) Release file.
