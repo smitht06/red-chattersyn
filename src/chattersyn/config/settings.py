@@ -31,6 +31,9 @@ DEFAULTS: dict[str, Any] = {
         "toggle_search": "Ctrl+F",
         "toggle_theme": "",
         "emote_picker": "Ctrl+E",
+        "zoom_in": "Ctrl+=",
+        "zoom_out": "Ctrl+-",
+        "zoom_reset": "Ctrl+0",
     },
     # The Data API key lives in the OS keyring (SecretsStore), not here. A
     # legacy plain-text key in settings.json is migrated into the keyring on

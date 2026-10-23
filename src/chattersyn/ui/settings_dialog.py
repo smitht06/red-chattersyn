@@ -53,6 +53,9 @@ HOTKEY_DEFAULTS = {
     "toggle_search": "Ctrl+F",
     "toggle_theme": "",
     "emote_picker": "Ctrl+E",
+    "zoom_in": "Ctrl+=",
+    "zoom_out": "Ctrl+-",
+    "zoom_reset": "Ctrl+0",
 }
 
 HOTKEY_LABELS = {
@@ -65,6 +68,9 @@ HOTKEY_LABELS = {
     "toggle_search": "Search messages",
     "toggle_theme": "Toggle light/dark theme",
     "emote_picker": "Open emote picker",
+    "zoom_in": "Zoom in",
+    "zoom_out": "Zoom out",
+    "zoom_reset": "Reset zoom",
 }
 
 _NAV_STYLE = """

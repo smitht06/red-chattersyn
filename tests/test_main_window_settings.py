@@ -59,7 +59,8 @@ async def test_rebind_hotkeys_after_settings_change(win):
 async def test_hotkey_handlers_cover_all_actions(win):
     assert set(win._hotkey_handlers()) == {
         "open_settings", "new_tab", "close_tab", "next_tab", "prev_tab",
-        "focus_input", "toggle_search", "toggle_theme", "emote_picker"}
+        "focus_input", "toggle_search", "toggle_theme", "emote_picker",
+        "zoom_in", "zoom_out", "zoom_reset"}
 
 
 # -- tab cycling / focus / search ------------------------------------------------------

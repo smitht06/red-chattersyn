@@ -5,7 +5,8 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QPoint, QPointF, QSettings, Qt
+from PySide6.QtGui import QWheelEvent
 from PySide6.QtWidgets import QInputDialog
 
 from chattersyn.config.settings import Settings
@@ -182,6 +183,41 @@ async def test_file_menu_offers_all_three_new_tab_types(win):
     texts = [a.text() for a in file_menu.actions() if not a.isSeparator()]
     assert texts[:4] == [
         "New Stream Tab", "New Twitch Tab", "New YouTube Tab", "Close Tab"]
+
+
+async def test_zoom_bindings_are_registered_hotkeys(win):
+    # Zoom is in the user-editable hotkey registry (not hardcoded menu keys).
+    keys = {name: s.key().toString() for name, s in win._hotkey_shortcuts.items()
+            if name.startswith("zoom_")}
+    assert keys == {"zoom_in": "Ctrl+=", "zoom_out": "Ctrl+-", "zoom_reset": "Ctrl+0"}
+
+
+async def test_zoom_action_scales_ui(win):
+    win._settings.set("ui_scale", 1.0)
+    win._zoom(1.1)
+    assert win._settings.get("ui_scale", 1.0) == pytest.approx(1.1)
+    win._zoom(1.0, reset=True)
+    assert win._settings.get("ui_scale", 1.0) == 1.0
+
+
+def _wheel(angle: int, ctrl: bool) -> QWheelEvent:
+    mods = Qt.KeyboardModifier.ControlModifier if ctrl else Qt.KeyboardModifier.NoModifier
+    return QWheelEvent(QPointF(10, 10), QPointF(10, 10), QPoint(0, 0), QPoint(0, angle),
+                       Qt.MouseButton.NoButton, mods, Qt.ScrollPhase.NoScrollPhase, False)
+
+
+async def test_ctrl_wheel_zooms_in_and_out(win):
+    win._settings.set("ui_scale", 1.0)
+    assert win.eventFilter(win, _wheel(120, ctrl=True)) is True  # up -> zoom in
+    assert win._settings.get("ui_scale", 1.0) == pytest.approx(1.1)
+    assert win.eventFilter(win, _wheel(-120, ctrl=True)) is True  # down -> zoom out
+    assert win._settings.get("ui_scale", 1.0) == pytest.approx(1.0, abs=1e-6)
+
+
+async def test_plain_wheel_is_not_consumed(win):
+    win._settings.set("ui_scale", 1.0)
+    assert win.eventFilter(win, _wheel(120, ctrl=False)) is False
+    assert win._settings.get("ui_scale", 1.0) == 1.0
 
 
 # -- empty state -------------------------------------------------------------------------

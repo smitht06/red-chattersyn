@@ -362,8 +362,7 @@ jobs:
           fi
           git -c user.name="github-actions[bot]" \
               -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
-              commit -m "chattersyn ${{ steps.zip.outputs.ver }}" \
-                      -m "Co-Authored-By: Claude Code <noreply@anthropic.com>"
+              commit -m "chattersyn ${{ steps.zip.outputs.ver }}"
           git pull --rebase origin main
           git push origin main
 

@@ -9,6 +9,9 @@ build/
 .DS_Store
 crash.log
 
+# Local-only agent memory; not committed
+CLAUDE.md
+
 # Generated at build time from packaging/icon.png
 packaging/icon.icns
 packaging/icon.ico

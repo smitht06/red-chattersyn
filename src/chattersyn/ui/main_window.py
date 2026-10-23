@@ -16,7 +16,7 @@ import logging
 import time
 from collections.abc import Callable
 
-from PySide6.QtCore import QSettings, QTimer, QUrl
+from PySide6.QtCore import QEvent, QSettings, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -176,6 +176,7 @@ class MainWindow(QMainWindow):
 
         self._build_menus()
         self._setup_hotkeys()
+        QApplication.instance().installEventFilter(self)
         self._restore_geometry()
         self.statusBar().showMessage(
             "Demo feed (M1) — M2/M3 wire Twitch IRC + YouTube live chat"
@@ -270,16 +271,15 @@ class MainWindow(QMainWindow):
         picker_action.triggered.connect(self._open_emote_picker_for_current)
         view_menu.addAction(picker_action)
         view_menu.addSeparator()
+        # Zoom key bindings live in the hotkey registry (settings hotkeys.*), so
+        # users can rebind them; these menu actions carry no key of their own.
         zoom_in = QAction("Zoom In", self)
-        zoom_in.setShortcut(QKeySequence.ZoomIn)
         zoom_in.triggered.connect(lambda: self._zoom(1.1))
         view_menu.addAction(zoom_in)
         zoom_out = QAction("Zoom Out", self)
-        zoom_out.setShortcut(QKeySequence.ZoomOut)
         zoom_out.triggered.connect(lambda: self._zoom(1 / 1.1))
         view_menu.addAction(zoom_out)
         zoom_reset = QAction("Reset Zoom", self)
-        zoom_reset.setShortcut(QKeySequence("Ctrl+0"))
         zoom_reset.triggered.connect(lambda: self._zoom(1.0, reset=True))
         view_menu.addAction(zoom_reset)
 
@@ -321,6 +321,9 @@ class MainWindow(QMainWindow):
             "toggle_search": self._toggle_search,
             "toggle_theme": self._toggle_theme,
             "emote_picker": self._open_emote_picker_for_current,
+            "zoom_in": lambda: self._zoom(1.1),
+            "zoom_out": lambda: self._zoom(1 / 1.1),
+            "zoom_reset": lambda: self._zoom(1.0, reset=True),
         }
 
     def _notebook_next(self) -> None:
@@ -1570,6 +1573,14 @@ class MainWindow(QMainWindow):
         self._settings.set("ui_scale", scale)
         theme.apply(QApplication.instance(), self._settings.get("theme", "dark"), scale)
         self._settings.save()
+
+    def eventFilter(self, obj, event):  # noqa: N802 — Qt override
+        if event.type() == QEvent.Type.Wheel and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta:
+                self._zoom(1.1 if delta > 0 else 1 / 1.1)
+            return True  # Ctrl+wheel zooms instead of scrolling the view under it
+        return super().eventFilter(obj, event)
 
     def _on_theme_changed(self) -> None:
         for tab in self._tabs:
