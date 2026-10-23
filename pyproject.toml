@@ -1,6 +1,6 @@
 [project]
 name = "chattersyn"
-version = "0.5.0"
+version = "0.5.2"
 description = "Chatterino-style dual chat client: Twitch + YouTube live chat, one input posts to both"
 requires-python = ">=3.11,<3.14"
 dependencies = [
