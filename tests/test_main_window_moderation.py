@@ -13,6 +13,7 @@ from PySide6.QtCore import QSettings
 
 from chattersyn.config.settings import Settings
 from chattersyn.models.message import Author, Badge, Message, MessageFlags, Platform
+from chattersyn.services.commands import CommandController, ModAction
 from chattersyn.services.twitch.mapper import ClearChat, RoomState, UserState
 from chattersyn.services.youtube.service import WatchState, YoutubeState
 from chattersyn.ui.main_window import MainWindow
@@ -815,3 +816,76 @@ async def test_twitch_auth_failed_reconnect_never_claims_authenticated(win, monk
         types.SimpleNamespace(openUrl=lambda u: None))
     await win._run_twitch_auth()
     assert win.statusBar().currentMessage() != "twitch authenticated"
+
+
+# -- Twitch ban/timeout via Helix ----------------------------------------------------
+
+
+class _FakeHelix:
+    def __init__(self, fail: Exception | None = None):
+        self.calls = []
+        self.fail = fail
+
+    async def user_by_login(self, login):
+        return {"id": {"redcyberdragon29": "100", "bob": "200"}[login]} if login in (
+            "redcyberdragon29", "bob") else None
+
+    async def ban_user(self, *args, **kwargs):
+        if self.fail:
+            raise self.fail
+        self.calls.append(("ban", args, kwargs))
+
+    async def unban_user(self, *args):
+        self.calls.append(("unban", args))
+
+
+def _fake_twitch(helix, scopes=("chat:read", "chat:edit", "moderator:manage:banned_users")):
+    return types.SimpleNamespace(
+        helix=helix,
+        tokens=types.SimpleNamespace(user_id="999", scopes=list(scopes)),
+        self_author=lambda: None)
+
+
+async def test_slash_timeout_runs_helix_ban_not_chat_send(win, monkeypatch):
+    helix = _FakeHelix()
+    win._twitch = _fake_twitch(helix)
+    win._commands = CommandController(win._settings)  # demo mode has none
+    sent = []
+    monkeypatch.setattr(win, "_send_text", lambda *a, **k: sent.append(a))
+    tab = win._tabs[0]
+    win._run_command(tab, "/timeout bob 10m spam")
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert sent == []  # never posted to chat as text
+    assert helix.calls == [("ban", ("100", "999", "200"), {"duration": 600, "reason": "spam"})]
+
+
+async def test_twitch_unban_adds_confirmation_row(win):
+    helix = _FakeHelix()
+    win._twitch = _fake_twitch(helix)
+    tab = win._tabs[0]
+    await win._twitch_mod(tab, ModAction("unban", "bob"))
+    tab._flush()
+    assert helix.calls == [("unban", ("100", "999", "200"))]
+    assert _system_rows(win)[-1].plain == "You removed the ban/timeout on bob."
+
+
+async def test_twitch_ban_without_scope_asks_to_reconnect(win):
+    helix = _FakeHelix()
+    win._twitch = _fake_twitch(helix, scopes=("chat:read", "chat:edit"))
+    tab = win._tabs[0]
+    await win._twitch_mod(tab, ModAction("ban", "bob"))
+    tab._flush()
+    assert helix.calls == []
+    assert "Reconnect your Twitch account" in _system_rows(win)[-1].plain
+
+
+async def test_twitch_ban_failure_and_unknown_user_reported(win):
+    win._twitch = _fake_twitch(_FakeHelix(fail=RuntimeError("already banned")))
+    tab = win._tabs[0]
+    await win._twitch_mod(tab, ModAction("ban", "bob"))
+    await win._twitch_mod(tab, ModAction("ban", "ghost", duration=60))
+    tab._flush()
+    assert [m.plain for m in _system_rows(win)[-2:]] == [
+        "Twitch ban failed: already banned",
+        "No Twitch user named ghost — timeout not sent."]

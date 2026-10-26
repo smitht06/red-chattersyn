@@ -22,7 +22,10 @@ log = logging.getLogger(__name__)
 AUTHORIZE_URL = "https://id.twitch.tv/oauth2/authorize"
 TOKEN_URL = "https://id.twitch.tv/oauth2/token"
 VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
-SCOPES = ["chat:read", "chat:edit"]
+# Helix ban/timeout/unban; tokens granted before it was added lack it and
+# need a reconnect.
+MODERATION_SCOPE = "moderator:manage:banned_users"
+SCOPES = ["chat:read", "chat:edit", MODERATION_SCOPE]
 TOKEN_KEY = "twitch_token"
 FLOW_TIMEOUT = 300.0  # user has 5 minutes to complete the browser flow
 
@@ -187,6 +190,8 @@ class TwitchAuth:
         if info:
             tokens.login = info.get("login", "")
             tokens.user_id = info.get("user_id", "")
+            if "scopes" in info:  # what the token actually grants today
+                tokens.scopes = list(info.get("scopes") or [])
             self.save_tokens(tokens)
         return tokens
 

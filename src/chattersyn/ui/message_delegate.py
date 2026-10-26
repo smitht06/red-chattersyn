@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -145,6 +145,9 @@ class _RowLayout:
     gutter: int = 0  # right-side reserve for moderation buttons
     # (x, y, w, h, label) relative to the row rect origin
     buttons: list[tuple[float, float, float, float, str]] = field(default_factory=list)
+    # (resource name "emote://e/N", url) for animated (GIF) emotes — these are
+    # re-resolved each frame so the movie keeps playing.
+    animated: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _format_timestamp(ts, fmt: str) -> str:
@@ -170,6 +173,14 @@ class MessageDelegate(QStyledItemDelegate):
         self._mod_version = 0
         theme.theme_notifier.changed.connect(self.clear_cache)
         image_cache.image_ready.connect(self._on_image_ready)
+        image_cache.frame_changed.connect(self._on_frame_changed)
+        # Animated emotes repaint on a coalescing timer: QMovie emits a frame
+        # tick 15-60x/sec per emote, so we batch them into one flush + repaint.
+        self._dirty_frames: set[str] = set()
+        self._frame_timer = QTimer(self)
+        self._frame_timer.setInterval(16)  # ~60fps ceiling
+        self._frame_timer.setSingleShot(True)
+        self._frame_timer.timeout.connect(self._flush_frames)
 
     # -- moderation mode ---------------------------------------------------------
 
@@ -233,6 +244,40 @@ class MessageDelegate(QStyledItemDelegate):
 
     def _on_image_ready(self, url: str) -> None:
         self.invalidate_url(url)
+
+    def _on_frame_changed(self, url: str) -> None:
+        # Coalesce rapid frame ticks (one QMovie emits 15-60fps) into a single
+        # flush; the current frame is read at flush time, not signal time.
+        self._dirty_frames.add(url)
+        if not self._frame_timer.isActive():
+            self._frame_timer.start()
+
+    def _flush_frames(self) -> None:
+        dirty = self._dirty_frames
+        self._dirty_frames = set()
+        if not dirty:
+            return
+        # One cache lookup per dirty url, then overwrite each cached layout's
+        # image resource with the movie's current frame so the next paint
+        # shows the animation advanced (QTextDocument caches the first frame
+        # served by loadResource otherwise).
+        frames: dict[str, QPixmap] = {}
+        for url in dirty:
+            movie = image_cache.request(url, animated=True)
+            if isinstance(movie, QMovie):
+                pix = movie.currentPixmap()
+                if not pix.isNull():
+                    frames[url] = pix
+        if not frames:
+            return
+        for layout in self._layouts.values():
+            if not layout.animated:
+                continue
+            for name, url in layout.animated:
+                if url in frames:
+                    layout.doc.addResource(
+                        QTextDocument.ResourceType.ImageResource, QUrl(name), frames[url])
+        self._refresh()
 
     def _cache(self, key: tuple[str, int, str, int, int, str], layout: _RowLayout) -> None:
         self._layouts[key] = layout
@@ -372,15 +417,19 @@ class MessageDelegate(QStyledItemDelegate):
                     scale = "2x" if dpr >= 2.0 else "1x"
                     url = emote.url_for_scale(scale) or ""
                     alt = run.alt or emote.name
+                    # Twitch's "default" CDN format serves a GIF for animated
+                    # emotes, but neither IRC tags nor our registry record
+                    # which ones — let the image cache detect frames.
+                    animated = bool(emote.animated) or emote.provider == "twitch"
                     fmt = QTextImageFormat()
                     fmt.setName(f"emote://e/{len(doc.emotes)}")
                     size = max(20, emote.height_px)
                     fmt.setWidth(size)
                     fmt.setHeight(size)
                     fmt.setProperty(EMOTE_ALT, alt)
-                    fmt.setProperty(EMOTE_ANIMATED, emote.animated)
+                    fmt.setProperty(EMOTE_ANIMATED, animated)
                     fmt.setToolTip(alt)
-                    doc.emotes.append((url, bool(emote.animated), alt))
+                    doc.emotes.append((url, animated, alt))
                     cursor.insertImage(fmt)
                     if url:
                         urls.append(url)
@@ -402,6 +451,9 @@ class MessageDelegate(QStyledItemDelegate):
         if line.isValid():
             text_center = line.y() + line.ascent() - (fm.ascent() - fm.descent()) / 2
 
+        animated = [(f"emote://e/{i}", url) for i, (url, anim, _alt) in enumerate(doc.emotes)
+                    if anim and url]
+
         return _RowLayout(
             doc=doc,
             height=height,
@@ -414,6 +466,7 @@ class MessageDelegate(QStyledItemDelegate):
             text_center=text_center,
             gutter=gutter,
             buttons=button_rects,
+            animated=animated,
         )
 
     # -- Qt delegate API ----------------------------------------------------------

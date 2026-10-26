@@ -19,6 +19,18 @@ NAMES = ["alice", "bob_the_builder", "charlieTV", "dana_kappa", "eveLUL", "frank
 COLORS = ["#ff0000", "#1e90ff", "#2ba640", "#b22222", "#ff8c1a", "#a970ff", "#5f9ea0",
           "#ff69b4", "#8a2be2", "#d2691e", "#3cb371", "#c71585"]
 TWITCH_EMOTES = ["Kappa", "PogChamp", "LUL", "OMEGALUL", "monkaS", "KEKW", "PepeLaugh", "4Head", "EZ"]
+
+# A real animated 7TV emote (PETPET) so --demo visibly plays a moving emote
+# instead of only showing placeholder boxes. The CDN URL is public and stable.
+_ANIMATED_EMOTE = Emote(
+    "01FSNK0GP000038GDBZ91HT6SQ", "PETPET", "7tv",
+    urls={
+        "1x": "https://cdn.7tv.app/emote/01FSNK0GP000038GDBZ91HT6SQ/1x.webp",
+        "2x": "https://cdn.7tv.app/emote/01FSNK0GP000038GDBZ91HT6SQ/2x.webp",
+    },
+    animated=True,
+    height_px=32,
+)
 YOUTUBE_LINES = [
     "hello everyone!! 😄",
     "this stream is great 🎉",
@@ -84,7 +96,7 @@ class FakeFeed:
         text = random.choice(TWITCH_LINES)
         runs: list = []
         if "KEKW" in text:
-            runs.append(ImageRun(Emote("1", "KEKW", "7tv", height_px=28), "KEKW"))
+            runs.append(ImageRun(_ANIMATED_EMOTE, "KEKW"))
         else:
             runs.append(TextRun(text))
         if random.random() < 0.4:

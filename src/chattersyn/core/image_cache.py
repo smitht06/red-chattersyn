@@ -21,13 +21,15 @@ MAX_MOVIES = 64
 TIMEOUT = httpx.Timeout(connect=10.0, read=20.0, write=20.0, pool=10.0)
 
 
-def _decode_image(data: bytes) -> QImage:
-    """Runs in an executor thread; QImage/QImageReader are safe off the GUI thread."""
+def _decode_image(data: bytes) -> tuple[QImage, bool]:
+    """Runs in an executor thread; QImage/QImageReader are safe off the GUI thread.
+    Returns (first frame, has more than one frame)."""
     buf = QBuffer()
     buf.setData(QByteArray(data))
     buf.open(QIODevice.OpenModeFlag.ReadOnly)
     reader = QImageReader(buf)
-    return reader.read()
+    multi_frame = reader.supportsAnimation() and reader.imageCount() > 1
+    return reader.read(), multi_frame
 
 
 def _estimate_bytes(image: QImage) -> int:
@@ -36,6 +38,7 @@ def _estimate_bytes(image: QImage) -> int:
 
 class ImageCache(QObject):
     image_ready = Signal(str)  # url
+    frame_changed = Signal(str)  # url — an animated emote advanced a frame
 
     def __init__(self, parent: QObject | None = None):
         super().__init__(parent)
@@ -52,7 +55,9 @@ class ImageCache(QObject):
     def request(self, url: str, animated: bool = False) -> QPixmap | QMovie | None:
         """Return the cached object for `url`, or None (a fetch is then in flight).
 
-        Call again after the `image_ready(url)` signal to get the image.
+        With `animated`, multi-frame images come back as a playing QMovie and
+        single-frame ones as a QPixmap. Call again after the `image_ready(url)`
+        signal to get the image.
         """
         key = self._key(url, animated)
         cached = self._cache.get(key)
@@ -99,7 +104,7 @@ class ImageCache(QObject):
         unhide_venv_files()
         loop = asyncio.get_running_loop()
         try:
-            image = await loop.run_in_executor(None, _decode_image, data)
+            image, multi_frame = await loop.run_in_executor(None, _decode_image, data)
         except Exception as exc:
             log.debug("image decode failed for %s: %s", url, exc)
             self._inflight.discard(key)
@@ -109,12 +114,17 @@ class ImageCache(QObject):
             self._inflight.discard(key)
             return
 
-        if animated:
+        # An "animated" request is a request to play the image IF it has
+        # frames: single-frame data is stored as a plain pixmap so it never
+        # takes one of the max_movies slots (Twitch emotes are requested this
+        # way because IRC tags don't say which ones animate).
+        if animated and multi_frame:
             buffer = QBuffer()
             buffer.setData(QByteArray(data))
             buffer.open(QIODevice.OpenModeFlag.ReadOnly)
             movie = QMovie(buffer)
             movie.setCacheMode(QMovie.CacheMode.CacheAll)
+            movie.frameChanged.connect(lambda _frame, u=url: self.frame_changed.emit(u))
             movie.start()
             entry: QPixmap | tuple[QMovie, QBuffer] = (movie, buffer)
             self._movies += 1

@@ -250,6 +250,18 @@ class CommandContext:
 
 
 @dataclass
+class ModAction:
+    """A Twitch ban/timeout/unban the UI runs through Helix — Twitch removed
+    the IRC PRIVMSG forms of these commands in Feb 2023."""
+
+    kind: str                               # "ban" (incl. timeouts) | "unban"
+    user: str                               # login, or a user id when by_id
+    by_id: bool = False
+    duration: int = 0                       # seconds; 0 = permanent ban
+    reason: str = ""
+
+
+@dataclass
 class CommandOutcome:
     """What the UI should do after dispatch."""
 
@@ -260,6 +272,7 @@ class CommandOutcome:
     twitch_only: bool = False               # disable the YouTube toggle for this send
     reply_parent_id: str = ""
     reply_parent_login: str = ""
+    twitch_mod: ModAction | None = None     # Helix moderation call to run
 
 
 class CommandController:
@@ -387,7 +400,8 @@ class CommandController:
 
     def _cmd_irc_mod(self, ctx: CommandContext, args: list[str], raw: str) -> CommandOutcome:
         """One of the server-side moderation commands: validate the user's
-        arguments, then send the literal command over PRIVMSG (Twitch-only) —
+        arguments, then either hand ban/timeout/unban to the UI as a Helix
+        ModAction or send the literal command over PRIVMSG (Twitch-only) —
         the server's NOTICE feedback comes back as a mapped system row."""
         # Lowercase: the registry lookup lowercases, so "/Ban" must behave
         # exactly like "/ban" (all _IRC_MOD_* tables are keyed lowercase).
@@ -413,6 +427,15 @@ class CommandController:
             if not 1 <= seconds <= TIMEOUT_MAX_SECONDS:
                 return CommandOutcome(
                     True, system=f"Invalid timeout duration: {duration} (1s – 2w)")
+            return CommandOutcome(True, twitch_mod=ModAction(
+                "ban", out_args[0], duration=seconds, reason=" ".join(out_args[2:])))
+        if name == "ban":
+            return CommandOutcome(True, twitch_mod=ModAction(
+                "ban", out_args[0], reason=" ".join(out_args[1:])))
+        if name == "banid":
+            return CommandOutcome(True, twitch_mod=ModAction("ban", out_args[0], by_id=True))
+        if name in ("unban", "untimeout"):
+            return CommandOutcome(True, twitch_mod=ModAction("unban", out_args[0]))
         return CommandOutcome(
             True, send_text=f"/{name} {' '.join(out_args)}".strip(), twitch_only=True)
 

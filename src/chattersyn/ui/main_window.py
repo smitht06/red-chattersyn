@@ -29,18 +29,19 @@ from PySide6.QtWidgets import (
     QStackedWidget,
 )
 
+from .. import version
 from ..config.paths import config_dir
 from ..config.secrets import SecretsStore
 from ..config.settings import Settings
 from ..core.bus import bridge
 from ..core.text import TWITCH_MESSAGE_LIMIT, YOUTUBE_MESSAGE_LIMIT
-from .. import version
 from ..models.message import Author, Message, MessageFlags, Platform, TextRun
 from ..services.autocomplete import build_candidates
 from ..services.chat_index import ChatIndex
 from ..services.commands import (
     CommandContext,
     CommandController,
+    ModAction,
     expand_placeholders,
     load_user_commands,
 )
@@ -49,7 +50,7 @@ from ..services.highlights import HighlightController
 from ..services.logger import ChatLogger
 from ..services.moderation import STACK_MAX_MESSAGES, STACK_WINDOW, ModerationState
 from ..services.send import SendCoordinator, SendResult, SendTargets
-from ..services.twitch.auth import DEFAULT_TWITCH_CLIENT_ID, TwitchAuthError
+from ..services.twitch.auth import DEFAULT_TWITCH_CLIENT_ID, MODERATION_SCOPE, TwitchAuthError
 from ..services.twitch.mapper import ClearChat, ClearMsg, RoomState, UserState
 from ..services.twitch.service import TwitchService
 from ..services.youtube.auth import YouTubeAuthError
@@ -1151,6 +1152,49 @@ class MainWindow(QMainWindow):
                 reply_parent_id=outcome.reply_parent_id or None,
                 reply_parent_login=outcome.reply_parent_login or None,
                 force_twitch_only=outcome.twitch_only)
+        if outcome.twitch_mod is not None:
+            asyncio.ensure_future(self._twitch_mod(tab, outcome.twitch_mod))
+
+    async def _twitch_mod(self, tab: Tab, action: ModAction) -> None:
+        """Ban/timeout/unban through Helix (Twitch removed the IRC forms in
+        2023). A ban or timeout comes back as the server's CLEARCHAT, so only
+        failures and unbans (which have no IRC echo) add a row."""
+        twitch = self._twitch
+        helix = twitch.helix if twitch is not None else None
+        tokens = twitch.tokens if twitch is not None else None
+        if helix is None or tokens is None:
+            self._twitch_note(tab, "Connect a Twitch account to moderate.")
+            return
+        if MODERATION_SCOPE not in tokens.scopes:
+            self._twitch_note(
+                tab, "Reconnect your Twitch account (Connect Twitch Account…) "
+                     "to grant ChatterSyn moderation permission.")
+            return
+        verb = "unban" if action.kind == "unban" else ("timeout" if action.duration else "ban")
+        try:
+            channel = await helix.user_by_login(tab.twitch_channel)
+            if action.by_id:
+                user_id = action.user
+            else:
+                user = await helix.user_by_login(action.user)
+                user_id = user["id"] if user else ""
+            if not channel or not user_id:
+                self._twitch_note(tab, f"No Twitch user named {action.user} — {verb} not sent.")
+                return
+            if action.kind == "unban":
+                await helix.unban_user(channel["id"], tokens.user_id, user_id)
+            else:
+                await helix.ban_user(channel["id"], tokens.user_id, user_id,
+                                     duration=action.duration, reason=action.reason)
+        except Exception as exc:
+            self._twitch_note(tab, f"Twitch {verb} failed: {exc}")
+            return
+        if action.kind == "unban":
+            self._twitch_note(tab, f"You removed the ban/timeout on {action.user}.")
+
+    def _twitch_note(self, tab: Tab, text: str) -> None:
+        tab.add_message(Message.system(
+            Platform.TWITCH, self._system_channel(tab, Platform.TWITCH), text))
 
     def _command_context(self, tab: Tab) -> CommandContext:
         author = self._twitch.self_author() if self._twitch is not None else None
@@ -1639,8 +1683,8 @@ class MainWindow(QMainWindow):
 
     def _on_usercard_action(self, tab: Tab, target: UsercardTarget, text: str) -> None:
         if target.platform is Platform.TWITCH:
-            # /ban /unban /timeout ... go out as IRC PRIVMSG mod commands
-            # (Chatterino's own mechanism); NOTICE msg-ids give feedback.
+            # /ban /unban /timeout run through Helix (_twitch_mod); other
+            # mod commands still go out as IRC PRIVMSG.
             self._run_command(tab, text)
             return
         cmd = text.split()[0] if text.split() else ""

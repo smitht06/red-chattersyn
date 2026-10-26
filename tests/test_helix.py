@@ -238,3 +238,51 @@ async def test_user_follows_and_channel_followers():
         assert await helix.channel_followers("9") is None
     finally:
         await helix.close()
+
+
+
+# -- moderation -----------------------------------------------------------------------
+
+
+@respx.mock
+async def test_ban_and_timeout_post_moderation_bans():
+    import json
+    route = respx.post(f"{BASE}/moderation/bans").mock(
+        return_value=httpx.Response(200, json={"data": [{}]}))
+    _, helix = make_helix(["tok-1"])
+    try:
+        await helix.ban_user("10", "20", "30", reason="spam")
+        await helix.ban_user("10", "20", "30", duration=600)
+    finally:
+        await helix.close()
+    first, second = (call.request for call in route.calls)
+    assert dict(first.url.params) == {"broadcaster_id": "10", "moderator_id": "20"}
+    assert json.loads(first.content) == {"data": {"user_id": "30", "reason": "spam"}}
+    assert json.loads(second.content) == {"data": {"user_id": "30", "duration": 600}}
+
+
+@respx.mock
+async def test_unban_deletes_moderation_bans():
+    route = respx.delete(f"{BASE}/moderation/bans").mock(return_value=httpx.Response(204))
+    _, helix = make_helix(["tok-1"])
+    try:
+        await helix.unban_user("10", "20", "30")
+    finally:
+        await helix.close()
+    assert dict(route.calls[0].request.url.params) == {
+        "broadcaster_id": "10", "moderator_id": "20", "user_id": "30"}
+
+
+@respx.mock
+async def test_moderation_error_carries_twitch_message():
+    respx.post(f"{BASE}/moderation/bans").mock(return_value=httpx.Response(
+        400, json={"error": "Bad Request", "status": 400,
+                   "message": "The user specified in the user_id field is already banned."}))
+    _, helix = make_helix(["tok-1"])
+    try:
+        await helix.ban_user("10", "20", "30")
+        raise AssertionError("expected HelixError")
+    except HelixError as exc:
+        assert "already banned" in str(exc)
+    finally:
+        await helix.close()

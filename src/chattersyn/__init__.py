@@ -1,8 +1,9 @@
 """ChatterSyn — Chatterino-style dual chat client for Twitch + YouTube live chat."""
 
-from importlib.metadata import PackageNotFoundError, version as _installed_version
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _installed_version
 
-__version__ = "0.5.3"
+__version__ = "0.6.0"
 
 
 def version() -> str:

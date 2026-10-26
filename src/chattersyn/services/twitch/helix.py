@@ -55,21 +55,40 @@ class Helix:
         return token
 
     async def _get(self, path: str, params: dict) -> dict:
+        response = await self._call("GET", path, params)
+        response.raise_for_status()
+        return response.json()
+
+    async def _write(self, method: str, path: str, params: dict, body: dict | None = None) -> None:
+        """POST/DELETE; failures raise HelixError carrying Twitch's message
+        (e.g. "The user specified in the user_id field is already banned.")."""
+        response = await self._call(method, path, params, body)
+        if response.is_error:
+            try:
+                message = response.json().get("message", "")
+            except ValueError:
+                message = ""
+            raise HelixError(message or f"HTTP {response.status_code}")
+
+    async def _call(self, method: str, path: str, params: dict,
+                    body: dict | None = None) -> httpx.Response:
         token = self._token or await self._pull_token()
-        response = await self._request(path, params, token)
+        response = await self._request(path, params, token, method, body)
         if response.status_code == 401:
             # Token rejected (e.g. revoked): force one re-pull (the provider
             # may refresh) and retry.
             self._token = None
             token = await self._pull_token()
-            response = await self._request(path, params, token)
-        response.raise_for_status()
-        return response.json()
+            response = await self._request(path, params, token, method, body)
+        return response
 
-    async def _request(self, path: str, params: dict, token: str) -> httpx.Response:
-        return await self._client.get(
+    async def _request(self, path: str, params: dict, token: str, method: str = "GET",
+                       body: dict | None = None) -> httpx.Response:
+        return await self._client.request(
+            method,
             f"{BASE}{path}",
             params=params,
+            json=body,
             headers={"Client-Id": self.client_id, "Authorization": f"Bearer {token}"},
         )
 
@@ -149,6 +168,30 @@ class Helix:
         data = await self._get("/channels/followers", {"broadcaster_id": broadcaster_id})
         total = data.get("total")
         return int(total) if isinstance(total, (int, str)) and str(total).isdigit() else None
+
+    # -- moderation ----------------------------------------------------------------------
+    # Both need the moderator:manage:banned_users scope; moderator_id must be
+    # the token's own user id.
+
+    async def ban_user(self, broadcaster_id: str, moderator_id: str, user_id: str,
+                       duration: int = 0, reason: str = "") -> None:
+        """Ban (duration 0) or time out (1..1209600 s) a user."""
+        data: dict = {"user_id": user_id}
+        if duration:
+            data["duration"] = duration
+        if reason:
+            data["reason"] = reason
+        await self._write(
+            "POST", "/moderation/bans",
+            {"broadcaster_id": broadcaster_id, "moderator_id": moderator_id},
+            {"data": data})
+
+    async def unban_user(self, broadcaster_id: str, moderator_id: str, user_id: str) -> None:
+        """Lift a ban or an active timeout."""
+        await self._write(
+            "DELETE", "/moderation/bans",
+            {"broadcaster_id": broadcaster_id, "moderator_id": moderator_id,
+             "user_id": user_id})
 
     # -- streams -----------------------------------------------------------------------
 

@@ -10,6 +10,7 @@ from chattersyn.models.message import Author, Message, Platform
 from chattersyn.services.commands import (
     CommandContext,
     CommandController,
+    ModAction,
     UserCommand,
     expand_placeholders,
     load_user_commands,
@@ -250,9 +251,9 @@ def test_mod_stubs(name):
     assert outcome.system == f"The /{name} command is not implemented yet."
 
 
-@pytest.mark.parametrize("name", ["ban", "announcepurple", "slow"])
+@pytest.mark.parametrize("name", ["announcepurple", "slow"])
 def test_irc_mod_commands_pass_through(name):
-    """Server-side moderation builtins go out as IRC PRIVMSG (Twitch-only)."""
+    """Non-ban moderation builtins go out as IRC PRIVMSG (Twitch-only)."""
     ctrl = _controller()
     outcome = ctrl.dispatch(f"/{name} somebody", _ctx())
     assert outcome.handled
@@ -264,19 +265,37 @@ def test_irc_mod_commands_accept_mixed_case():
     """'/Ban' must behave exactly like '/ban' — dispatch lowercases only the
     registry lookup, and the handler must not KeyError on the raw case."""
     ctrl = _controller()
-    for text, expected in (("/Ban bob", "/ban bob"), ("/TimeOut bob 10m", "/timeout bob 10m"),
-                           ("/UNBAN bob", "/unban bob"), ("/Slow 30", "/slow 30")):
+    for text, expected in (("/Ban bob", ModAction("ban", "bob")),
+                           ("/TimeOut bob 10m", ModAction("ban", "bob", duration=600)),
+                           ("/UNBAN bob", ModAction("unban", "bob"))):
         outcome = ctrl.dispatch(text, _ctx())
         assert outcome.handled
-        assert outcome.send_text == expected
+        assert outcome.twitch_mod == expected
+    assert ctrl.dispatch("/Slow 30", _ctx()).send_text == "/slow 30"
+
+
+def test_ban_family_becomes_helix_actions():
+    """ban/banid/unban/untimeout never go out as chat text — Twitch removed
+    the IRC forms, so they'd be posted as plain messages or rejected."""
+    ctrl = _controller()
+    cases = {
+        "/ban bob": ModAction("ban", "bob"),
+        "/banid 12345": ModAction("ban", "12345", by_id=True),
+        "/unban @bob": ModAction("unban", "bob"),
+        "/untimeout bob": ModAction("unban", "bob"),
+    }
+    for text, expected in cases.items():
+        outcome = ctrl.dispatch(text, _ctx())
+        assert outcome.twitch_mod == expected
+        assert outcome.send_text == ""
+    assert ctrl.dispatch("/ban bob", _ctx(twitch_channel="")).twitch_mod is None
 
 
 def test_timeout_validates_duration_and_strips_at():
     ctrl = _controller()
     outcome = ctrl.dispatch("/timeout @bob 5m", _ctx())
     assert outcome.handled
-    assert outcome.send_text == "/timeout bob 5m"
-    assert outcome.twitch_only
+    assert outcome.twitch_mod == ModAction("ban", "bob", duration=300)
     bad = ctrl.dispatch("/timeout bob forever", _ctx())
     assert bad.system == "Invalid timeout duration: forever"
 
@@ -286,35 +305,36 @@ def test_timeout_defaults_to_10_minutes():
     a duration-less /timeout with a usage NOTICE."""
     ctrl = _controller()
     outcome = ctrl.dispatch("/timeout bob", _ctx())
-    assert outcome.send_text == "/timeout bob 600"
+    assert outcome.twitch_mod == ModAction("ban", "bob", duration=600)
     with_reason = ctrl.dispatch("/timeout bob 10m spam", _ctx())
-    assert with_reason.send_text == "/timeout bob 10m spam"
+    assert with_reason.twitch_mod == ModAction("ban", "bob", duration=600, reason="spam")
 
 
 def test_timeout_accepts_combined_durations():
     """Combos like 1d2h are documented (docs/m4.md) and accepted by Twitch."""
     ctrl = _controller()
     outcome = ctrl.dispatch("/timeout bob 1d2h", _ctx())
-    assert outcome.send_text == "/timeout bob 1d2h"
+    assert outcome.twitch_mod.duration == 93600
     more = ctrl.dispatch("/timeout bob 1w2d3h4m5s", _ctx())
-    assert more.send_text == "/timeout bob 1w2d3h4m5s"
+    assert more.twitch_mod.duration == 604800 + 2 * 86400 + 3 * 3600 + 4 * 60 + 5
 
 
 def test_warn_and_commercial_accept_documented_args():
     ctrl = _controller()
     assert ctrl.dispatch("/warn bob spam", _ctx()).send_text == "/warn bob spam"
     assert ctrl.dispatch("/commercial 60", _ctx()).send_text == "/commercial 60"
-    assert ctrl.dispatch("/ban bob annoying", _ctx()).send_text == "/ban bob annoying"
+    assert ctrl.dispatch("/ban bob annoying", _ctx()).twitch_mod == ModAction(
+        "ban", "bob", reason="annoying")
 
 
 def test_mod_commands_accept_multi_word_reasons():
     """The reason tail is free text (Twitch joins the remaining words) —
     the arity cap must not reject it."""
     ctrl = _controller()
-    assert (ctrl.dispatch("/timeout bob 10m Bad word detected", _ctx()).send_text
-            == "/timeout bob 10m Bad word detected")
-    assert (ctrl.dispatch("/ban bob annoying more words", _ctx()).send_text
-            == "/ban bob annoying more words")
+    assert (ctrl.dispatch("/timeout bob 10m Bad word detected", _ctx()).twitch_mod
+            == ModAction("ban", "bob", duration=600, reason="Bad word detected"))
+    assert (ctrl.dispatch("/ban bob annoying more words", _ctx()).twitch_mod
+            == ModAction("ban", "bob", reason="annoying more words"))
     assert (ctrl.dispatch("/warn bob spam spam spam", _ctx()).send_text
             == "/warn bob spam spam spam")
 
@@ -327,9 +347,9 @@ def test_timeout_duration_range_validated():
         "Invalid timeout duration: 0 (1s – 2w)"
     assert ctrl.dispatch("/timeout bob 999w", _ctx()).system == \
         "Invalid timeout duration: 999w (1s – 2w)"
-    assert ctrl.dispatch("/timeout bob 2w", _ctx()).send_text == "/timeout bob 2w"
-    assert ctrl.dispatch("/timeout bob 1", _ctx()).send_text == "/timeout bob 1"
-    assert ctrl.dispatch("/timeout bob 30s", _ctx()).send_text == "/timeout bob 30s"
+    assert ctrl.dispatch("/timeout bob 2w", _ctx()).twitch_mod.duration == 1209600
+    assert ctrl.dispatch("/timeout bob 1", _ctx()).twitch_mod.duration == 1
+    assert ctrl.dispatch("/timeout bob 30s", _ctx()).twitch_mod.duration == 30
 
 
 def test_timeout_zero_unit_duration_rejected_not_crash():

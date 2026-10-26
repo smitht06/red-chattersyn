@@ -1,11 +1,13 @@
 """Offscreen render + hit-test smoke tests for the message delegate."""
 
+import base64
 import datetime as dt
 
-from PySide6.QtCore import QPointF
-from PySide6.QtGui import QImage
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QPointF, QUrl
+from PySide6.QtGui import QImage, QMovie, QTextDocument
 
 from chattersyn.config.settings import Settings
+from chattersyn.core.image_cache import image_cache
 from chattersyn.models.emote import Emote
 from chattersyn.models.message import Author, Badge, ImageRun, Message, MessageFlags, Platform, TextRun
 from chattersyn.ui import theme
@@ -30,6 +32,29 @@ def _emote_msg(msg_id: str = "m2") -> Message:
         runs=[TextRun("nice "), ImageRun(Emote("1", "Kappa", "twitch", height_px=28), "Kappa")],
         plain="nice Kappa",
     )
+
+
+def _animated_emote_msg(url: str, msg_id: str = "m3") -> Message:
+    author = Author("bob", login="bob", color="#1e90ff")
+    emote = Emote("2", "KappaLoop", "7tv", urls={"1x": url}, animated=True, height_px=28)
+    return Message(
+        id=msg_id, platform=Platform.TWITCH, channel_id="ch", ts=dt.datetime.now(),
+        author=author,
+        runs=[TextRun("spin "), ImageRun(emote, "KappaLoop")],
+        plain="spin KappaLoop",
+    )
+
+
+def _one_frame_gif_movie() -> QMovie:
+    """A real QMovie wrapping a minimal 1-frame GIF, so the frame-flush path's
+    isinstance/currentPixmap checks exercise genuine Qt objects offscreen."""
+    gif = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==")
+    buf = QBuffer()
+    buf.setData(QByteArray(gif))
+    buf.open(QIODevice.OpenModeFlag.ReadOnly)
+    movie = QMovie(buf)
+    movie.start()
+    return movie
 
 
 def test_render_smoke(qapp):
@@ -263,3 +288,79 @@ def test_youtube_owner_rows_skip_buttons(qapp):
     view.message_model.flush()
     layout = view._delegate._layout_for(msg, view.width(), 1.0)
     assert layout.buttons == []
+
+
+# -- animated (GIF) emotes ------------------------------------------------------------
+
+
+def test_animated_emote_tracked_in_layout(qapp):
+    theme.apply(qapp, "dark")
+    view = ChatView(Settings())
+    view.resize(600, 200)
+    url = "https://cdn.example/KappaLoop.gif"
+    view.message_model.add(_animated_emote_msg(url))
+    view.message_model.flush()
+    qapp.processEvents()
+
+    animated = view._delegate._layout_for(
+        view.message_model.message_at(0), view.width(), 1.0).animated
+    assert animated == [("emote://e/0", url)]  # first (only) emote image
+
+    static = view._delegate._layout_for(
+        _emote_msg(), view.width(), 1.0).animated
+    assert static == []  # static PNG emotes never enter the frame-flush path
+
+
+def test_frame_flush_overwrites_resource_and_clears_dirty(qapp, monkeypatch):
+    theme.apply(qapp, "dark")
+    url = "https://cdn.example/KappaLoop.gif"
+    view = ChatView(Settings())
+    view.resize(600, 200)
+    view.message_model.add(_animated_emote_msg(url))
+    view.message_model.flush()
+    qapp.processEvents()
+
+    delegate = view._delegate
+    layout = delegate._layout_for(view.message_model.message_at(0), view.width(), 1.0)
+    name = layout.animated[0][0]
+
+    movie = _one_frame_gif_movie()
+    qapp.processEvents()
+    monkeypatch.setattr(image_cache, "request", lambda u, animated=False: movie)
+
+    delegate._dirty_frames.add(url)
+    delegate._flush_frames()
+    assert delegate._dirty_frames == set()
+
+    # With the movie gone, loadResource would serve the 56x56 placeholder —
+    # only a resource stored by the flush yields the GIF's 1x1 frame.
+    monkeypatch.setattr(image_cache, "request", lambda u, animated=False: None)
+    stored = layout.doc.resource(
+        QTextDocument.ResourceType.ImageResource, QUrl(name))
+    assert stored is not None and (stored.width(), stored.height()) == (1, 1)
+
+
+def test_on_frame_changed_coalesces_into_timer(qapp, monkeypatch):
+    theme.apply(qapp, "dark")
+    delegate = MessageDelegate(Settings())
+    delegate._dirty_frames.add("https://cdn.example/other.gif")
+    monkeypatch.setattr(image_cache, "request", lambda u, animated=False: None)
+    delegate._on_frame_changed("https://cdn.example/KappaLoop.gif")
+    assert "https://cdn.example/KappaLoop.gif" in delegate._dirty_frames
+    assert delegate._frame_timer.isActive()  # single-shot repaint scheduled
+    delegate._frame_timer.stop()  # don't leak a timer into later tests
+
+
+def test_twitch_emotes_requested_as_possibly_animated(qapp):
+    """IRC tags don't say which Twitch emotes animate (the CDN's "default"
+    format serves a GIF when they do), so they take the animated path and
+    the image cache decides by frame count."""
+    theme.apply(qapp, "dark")
+    view = ChatView(Settings())
+    url = "https://static-cdn.jtvnw.net/emoticons/v2/1/default/dark/1.0"
+    emote = Emote("1", "Kappa", "twitch", urls={"1x": url}, height_px=28)
+    msg = Message(
+        id="m4", platform=Platform.TWITCH, channel_id="ch", ts=dt.datetime.now(),
+        author=Author("bob", login="bob"), runs=[ImageRun(emote, "Kappa")], plain="Kappa")
+    layout = view._delegate._layout_for(msg, 600, 1.0)
+    assert layout.animated == [("emote://e/0", url)]

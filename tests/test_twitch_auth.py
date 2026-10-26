@@ -140,8 +140,10 @@ async def test_ensure_valid_clears_when_refresh_fails():
 async def test_refresh_accepts_scope_as_array():
     # The token endpoint returns scope as a JSON array (the real shape);
     # refresh must normalize it like the exchange does.
+    # (The second validate omits "scopes" so the refreshed list survives.)
     store = DictStore({TOKEN_KEY: TwitchTokens(**tokens_json()).to_json()})
-    respx.get(VALIDATE_URL).mock(side_effect=[httpx.Response(401), VALIDATE_OK])
+    respx.get(VALIDATE_URL).mock(side_effect=[httpx.Response(401), httpx.Response(
+        200, json={"client_id": "cid", "login": "testuser", "user_id": "999"})])
     respx.post(TOKEN_URL).mock(return_value=httpx.Response(
         200, json={"access_token": "acc-3", "refresh_token": "ref-3",
                    "scope": ["chat:read"], "expires_in": 3600}))
@@ -322,3 +324,20 @@ async def test_exchange_missing_client_secret_hints_public_client():
         assert TOKEN_KEY not in store.data
     finally:
         await auth.close()
+
+
+@respx.mock
+async def test_ensure_valid_syncs_scopes_from_validate():
+    """Validate reports what the token grants today — a token minted before
+    the moderation scope was requested must not claim to have it."""
+    stored = TwitchTokens(**tokens_json())
+    stored.scopes = ["chat:read", "chat:edit", "moderator:manage:banned_users"]
+    store = DictStore({TOKEN_KEY: stored.to_json()})
+    respx.get(VALIDATE_URL).mock(return_value=VALIDATE_OK)
+    auth = make_auth(store)
+    try:
+        tokens = await auth.ensure_valid()
+    finally:
+        await auth.close()
+    assert tokens.scopes == ["chat:read", "chat:edit"]
+    assert TwitchTokens.from_json(store.get(TOKEN_KEY)).scopes == ["chat:read", "chat:edit"]
