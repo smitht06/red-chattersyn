@@ -131,7 +131,17 @@ publishes the Linux .deb into the APT repository, and a `homebrew` job that
 publishes the macOS cask into the Homebrew tap (`smitht06/chattersyn`). The
 GPG-signed `dists/stable` index is deployed to Cloudflare Pages; the .deb
 itself stays a GitHub release asset (2 GB limit) and is reached via a Pages
-redirect, since it exceeds GitHub's 100 MB git limit. To cut a release:
+redirect, since it exceeds GitHub's 100 MB git limit.
+
+The easy way, in Claude Code, is `/release` (skill in
+`.claude/skills/release/`). It defaults to the last tag + 0.0.1 and asks you
+about the version, the files and dependency updates as it goes. It writes the
+release notes (via `/release-notes`), bumps the version, gets your final
+confirmation, runs `scripts/release.sh`, then tracks CI and checks that the
+GitHub release, APT repo and Homebrew cask all updated
+(`scripts/release_tools.py watch` / `verify`, no `gh` needed).
+
+To cut a release by hand:
 
 1. Bump `version` in `pyproject.toml`, then run `uv lock`. CI installs with
    `uv sync --locked`, and a stale lockfile fails every build leg — the
@@ -152,7 +162,10 @@ redirect, since it exceeds GitHub's 100 MB git limit. To cut a release:
    repository, so Linux users get the new version on their next
    `apt update && apt upgrade`), and `homebrew` (pushes the new cask, so
    macOS users get it on their next `brew upgrade --cask chattersyn`).
-   Edit the release notes on the release page afterwards.
+   Then write the release notes: in Claude Code, `/release-notes` (skill in
+   `.claude/skills/release-notes/`) drafts them from the diff since the
+   previous tag and refreshes the "Latest release" section at the bottom of
+   this README; paste the same notes into the release page.
 
 If a release comes out missing binaries: check the tag's workflow run
 (`gh run list`). Every OS failing at `uv sync --locked` means the lockfile
@@ -262,3 +275,32 @@ Architecture: one qasync loop on the main thread; Twitch over
 IRC-over-WebSocket plus Helix REST; YouTube over gRPC streamList (read) plus
 REST (send); Qt model/delegate chat rendering. See the plan in
 `~/.claude/plans/i-want-an-app-idempotent-pebble.md` for the full design.
+
+<!-- release-notes:start -->
+## Latest release: v0.7.0 (2026-10-26)
+
+### New
+
+- **Twitch chat badges.** Broadcaster, moderator, VIP, subscriber and other
+  badges now show in front of chatters' names, and hovering a badge shows its
+  name. Badges need a connected Twitch account. You can turn them off in
+  Settings → General → **Show Twitch chat badges**.
+- **Viewer counts on Stream tabs.** The Stream tab header always shows each
+  platform's logo with its live viewer count (for example 1,234 or 15.7K), or
+  a gray dash when that platform isn't live. Hover for the exact number.
+
+### Improved
+
+- **Platform logos in chat.** Each message now starts with the Twitch or
+  YouTube logo instead of the "Tw"/"Yt" text label.
+- **User card layout.** The card that opens when you click a username has
+  been rearranged. Ban and Unban, the timeout durations and your custom
+  actions each get their own group, so no button label is cut off any more.
+  The details line up, and the avatar is round, with the user's initial
+  showing until the picture loads.
+- **Live status appears right away.** The Twitch live indicator and viewer
+  count now appear as soon as the app starts or a Stream tab connects, rather
+  than after about a minute.
+
+Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
+<!-- release-notes:end -->

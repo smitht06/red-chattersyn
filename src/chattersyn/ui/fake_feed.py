@@ -55,11 +55,21 @@ TWITCH_LINES = [
     "whats the song called",
     "LUL he walked right into it",
 ]
+def _twitch_badge_urls(guid: str) -> dict[str, str]:
+    # Twitch's public global-badge art (the same URLs Helix hands out).
+    base = f"https://static-cdn.jtvnw.net/badges/v1/{guid}"
+    return {"1x": f"{base}/1", "2x": f"{base}/2"}
+
+
 BADGE_POOL = [
-    Badge(set_id="broadcaster", version_id="1", title="Broadcaster"),
-    Badge(set_id="moderator", version_id="1", title="Moderator"),
-    Badge(set_id="vip", version_id="1", title="VIP"),
-    Badge(set_id="subscriber", version_id="0", title="Subscriber"),
+    Badge(set_id="broadcaster", version_id="1", title="Broadcaster",
+          urls=_twitch_badge_urls("5527c58c-fb7d-422d-b71b-f309dcb85cc1")),
+    Badge(set_id="moderator", version_id="1", title="Moderator",
+          urls=_twitch_badge_urls("3267646d-33f0-4b17-b3df-f923a41db1d0")),
+    Badge(set_id="vip", version_id="1", title="VIP",
+          urls=_twitch_badge_urls("b817aba4-fad8-49e2-b88a-7cc744dfa6ec")),
+    Badge(set_id="subscriber", version_id="0", title="Subscriber",
+          urls=_twitch_badge_urls("5d9f2208-5dd8-11e7-8513-2ff4adfae661")),
 ]
 
 

@@ -35,19 +35,19 @@ from ..config.settings import Settings
 from ..core.image_cache import image_cache
 from ..models.message import Message, MessageFlags, Platform, TextRun
 from . import theme
+from .platform_logos import platform_logo
 
 # -- custom format property ids ------------------------------------------------
 
 EMOTE_ALT = QTextFormat.Property.UserProperty + 2
 EMOTE_ANIMATED = QTextFormat.Property.UserProperty + 3
 MENTION = QTextFormat.Property.UserProperty + 5
+BADGE = QTextFormat.Property.UserProperty + 6  # badge title (hover tooltip)
 
-CHIP_STYLE = {
-    Platform.TWITCH: ("Tw", "#9146ff"),
-    Platform.YOUTUBE: ("Yt", "#e62117"),
-}
-CHIP_W = 26
-CHIP_H = 15
+BADGE_SIZE = 18  # Twitch badge art is 18x18 at 1x
+
+LOGO_SIZE = 16  # platform logo marking each row's source (platform_logos.py)
+LOGO_GAP = 6
 ROW_MARGIN_X = 6
 ROW_MARGIN_Y = 3
 BAR_W = 3
@@ -138,9 +138,9 @@ class _RowLayout:
     ts_text: str = ""
     ts_width: int = 0
     uname_span: tuple[int, int] | None = None
-    chip: tuple[str, str] | None = None
+    chip: Platform | None = None  # platform whose logo leads the row
     urls: list[str] = field(default_factory=list)
-    x_offset: int = 0  # where the document starts (after chip + margins)
+    x_offset: int = 0  # where the document starts (after logo + margins)
     text_center: float = 0.0  # first-line text band center, document coords
     gutter: int = 0  # right-side reserve for moderation buttons
     # (x, y, w, h, label) relative to the row rect origin
@@ -323,8 +323,8 @@ class MessageDelegate(QStyledItemDelegate):
         ts_text = _format_timestamp(msg.ts, ts_fmt) if self._settings.get("timestamps.enabled", True) else ""
         ts_width = int(QFontMetricsF(ts_font).horizontalAdvance(ts_text)) if ts_text else 0
 
-        chip = CHIP_STYLE.get(msg.platform) if not msg.is_system else None
-        chip_w = CHIP_W + 4 if chip else 0
+        chip = msg.platform if not msg.is_system else None
+        chip_w = LOGO_SIZE + LOGO_GAP if chip is not None else 0
 
         # Moderation buttons reserve a right gutter.
         buttons = self._mod_buttons_for(msg)
@@ -373,6 +373,28 @@ class MessageDelegate(QStyledItemDelegate):
             cursor.insertText(msg.plain, gray)
         else:
             author = msg.author
+            if self._settings.get("badges.enabled", True):
+                shown = 0
+                for badge in author.badges:
+                    # Only badges with art: anonymous sessions (no Helix) and
+                    # YouTube's synthesized badges have no image URL, and a
+                    # labelled placeholder box per badge is just noise.
+                    badge_url = badge.url_for(dpr)
+                    if not badge_url:
+                        continue
+                    title = badge.title or badge.set_id
+                    fmt = QTextImageFormat()
+                    fmt.setName(f"emote://e/{len(doc.emotes)}")
+                    fmt.setWidth(BADGE_SIZE)
+                    fmt.setHeight(BADGE_SIZE)
+                    fmt.setVerticalAlignment(QTextCharFormat.VerticalAlignment.AlignMiddle)
+                    fmt.setProperty(BADGE, title)
+                    doc.emotes.append((badge_url, False, title))
+                    cursor.insertImage(fmt)
+                    urls.append(badge_url)
+                    shown += 1
+                if shown:
+                    cursor.insertText(" ", base)
             name_fmt = QTextCharFormat(base)
             name_fmt.setFontWeight(QFont.Weight.Bold)
             name_color = QColor(author.color) if author.color else palette.color(palette.ColorRole.Text)
@@ -522,20 +544,11 @@ class MessageDelegate(QStyledItemDelegate):
             painter.fillRect(rect, tint)
             painter.fillRect(rect.x(), rect.y(), BAR_W, rect.height(), bar)
 
-        # Platform chip — rides on the first line's text band
-        if layout.chip:
-            chip_text, chip_color = layout.chip
-            chip_y = rect.y() + ROW_MARGIN_Y + 2 + layout.text_center - CHIP_H / 2
-            chip_rect = QRectF(rect.x() + ROW_MARGIN_X, chip_y, CHIP_W, CHIP_H)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(chip_color))
-            painter.drawRoundedRect(chip_rect, 3.5, 3.5)
-            chip_font = QFont()
-            chip_font.setPointSizeF(7.0)
-            chip_font.setBold(True)
-            painter.setFont(chip_font)
-            painter.setPen(QColor("#ffffff"))
-            painter.drawText(chip_rect, Qt.AlignmentFlag.AlignCenter, chip_text)
+        # Platform logo — rides on the first line's text band
+        logo = platform_logo(layout.chip, LOGO_SIZE, dpr) if layout.chip is not None else None
+        if logo is not None:
+            logo_y = rect.y() + ROW_MARGIN_Y + 2 + layout.text_center - LOGO_SIZE / 2
+            painter.drawPixmap(QPointF(rect.x() + ROW_MARGIN_X, logo_y), logo)
 
         # Message body
         painter.translate(rect.x() + layout.x_offset, rect.y() + ROW_MARGIN_Y + 2)
@@ -589,7 +602,7 @@ class MessageDelegate(QStyledItemDelegate):
             or self._settings.get("highlight_color", "#7a5cff"))
 
     def hit_test(self, index, pos: QPointF, visual_rect) -> tuple[str, str] | None:
-        """Map a viewport click to ("link"|"user"|"emote"|"mod", payload) or None."""
+        """Map a viewport click to ("link"|"user"|"emote"|"badge"|"mod", payload) or None."""
         if not index.isValid():
             return None
         model = index.model()
@@ -622,6 +635,9 @@ class MessageDelegate(QStyledItemDelegate):
         if isinstance(mention, str) and mention:
             return ("user", mention)
         if fmt.objectType() == QTextFormat.ObjectTypes.ImageObject:
+            badge = fmt.stringProperty(BADGE)
+            if badge:
+                return ("badge", badge)
             alt = fmt.stringProperty(EMOTE_ALT)
             if alt:
                 return ("emote", alt)

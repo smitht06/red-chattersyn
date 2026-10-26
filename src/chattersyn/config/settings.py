@@ -17,6 +17,7 @@ DEFAULTS: dict[str, Any] = {
     "ui_scale": 1.0,
     "scrollback": 1000,
     "timestamps": {"enabled": True, "format": "HH:mm:ss"},
+    "badges": {"enabled": True},
     "tabs": [],
     "general": {"restore_tabs": True},
     "send": {"truncate_mode": "highlight", "block_urls_for_youtube": True},

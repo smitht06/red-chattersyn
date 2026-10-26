@@ -77,7 +77,7 @@ class ChatView(QListView):
         kind, payload = hit
         if kind == "link":
             return payload
-        if kind == "emote":
+        if kind in ("emote", "badge"):
             return payload
         return ""
 
@@ -112,7 +112,9 @@ class ChatView(QListView):
         hit = None
         if index.isValid():
             hit = self._delegate.hit_test(index, event.position(), self.visualRect(index))
-        cursor = Qt.CursorShape.PointingHandCursor if hit else Qt.CursorShape.ArrowCursor
+        # Badges only carry a tooltip — no click action, so no hand cursor.
+        clickable = hit is not None and hit[0] != "badge"
+        cursor = Qt.CursorShape.PointingHandCursor if clickable else Qt.CursorShape.ArrowCursor
         self.viewport().setCursor(cursor)
         if hit != self._hover_item:
             self._hover_item = hit

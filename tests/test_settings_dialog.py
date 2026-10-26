@@ -146,6 +146,8 @@ def test_accept_writes_general_and_accounts(qapp, tmp_path, settings_path):
     dialog._scale.setValue(1.25)
     dialog._scrollback.setValue(500)
     dialog._restore_tabs.setChecked(False)
+    assert dialog._badges.isChecked()  # badges default on
+    dialog._badges.setChecked(False)
     dialog._api_key.setText("new-key")
     dialog.accept()
     data = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -153,6 +155,7 @@ def test_accept_writes_general_and_accounts(qapp, tmp_path, settings_path):
     assert data["ui_scale"] == 1.25
     assert data["scrollback"] == 500
     assert data["general"]["restore_tabs"] is False
+    assert data["badges"]["enabled"] is False
     # Twitch has no credential fields anymore: sign-in is the browser flow
     # with the baked-in client ID, so the dialog writes nothing for Twitch
     # (the file only carries the default, an advanced manual override slot).

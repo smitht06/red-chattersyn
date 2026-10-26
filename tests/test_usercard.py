@@ -210,3 +210,20 @@ def test_append_recent_grows_live(qapp):
     popup.append_recent(("tag", _msg("fresh", "m9")))
     assert popup._recent.model().rowCount() == 1
     assert popup._recent_label.text() == "Recent messages (1)"
+
+
+def test_mod_buttons_have_room_for_their_labels(qapp):
+    """Regression: every action used to share one row of a 320px card and
+    the labels were clipped ("Bar", "nba"). Each button must fit its text."""
+    popup = UsercardPopup(
+        Settings({}), _target(), [], self_is_mod=True,
+        custom_actions=[{"name": "Permaban", "template": "/ban {user.name}"},
+                        {"name": "Purge", "template": "/timeout {user.login} 1"}])
+    popup.show()
+    qapp.processEvents()
+    try:
+        for button in popup._mod_buttons:
+            text_w = button.fontMetrics().horizontalAdvance(button.text())
+            assert button.width() >= text_w + 8, button.text()
+    finally:
+        popup.close()

@@ -476,17 +476,23 @@ class MainWindow(QMainWindow):
         live dot and the uptime/viewers status (or "offline since HH:MM"
         after a stream goes down)."""
         while True:
+            # Poll first, then sleep: a restored tab's live dot and viewer
+            # count shouldn't sit empty for the first minute.
+            if self._twitch is not None and self._twitch.helix is not None:
+                channels = {tab.twitch_channel for tab in self._tabs if tab.twitch_channel}
+                for channel in channels:
+                    await self._poll_twitch_channel(channel)
             await asyncio.sleep(TWITCH_LIVE_POLL_SECONDS)
-            if self._twitch is None or self._twitch.helix is None:
-                continue
-            channels = {tab.twitch_channel for tab in self._tabs if tab.twitch_channel}
-            for channel in channels:
-                try:
-                    stream = await self._twitch.helix.streams(channel)
-                except Exception as exc:  # network/HTTP: skip, retry next tick
-                    log.warning("Twitch live poll failed for %s: %s", channel, exc)
-                    continue
-                self._apply_twitch_stream(channel, stream)
+
+    async def _poll_twitch_channel(self, channel: str) -> None:
+        if self._twitch is None or self._twitch.helix is None:
+            return
+        try:
+            stream = await self._twitch.helix.streams(channel)
+        except Exception as exc:  # network/HTTP: skip, retry next tick
+            log.warning("Twitch live poll failed for %s: %s", channel, exc)
+            return
+        self._apply_twitch_stream(channel, stream)
 
     def _apply_twitch_stream(self, channel: str, stream: dict | None) -> None:
         now = dt.datetime.now()
@@ -506,6 +512,9 @@ class MainWindow(QMainWindow):
         for tab in self._tabs:
             if tab.twitch_channel == channel:
                 tab.header.set_twitch(channel, live=stream is not None)
+                tab.header.set_viewer_count(
+                    Platform.TWITCH,
+                    int(stream.get("viewer_count") or 0) if stream is not None else None)
                 tab.set_twitch_status(text)
 
     @staticmethod
@@ -749,6 +758,7 @@ class MainWindow(QMainWindow):
                         self._identity_retry_task = asyncio.ensure_future(
                             self._retry_identity())
             tab.set_youtube(event.title or tab.youtube_title, live=True)
+            tab.header.set_viewer_count(Platform.YOUTUBE, event.viewers or 0)
             # Stats come from the initial resolution and the ~120 s refresh
             # (service _stats_loop); parts present at the time are shown.
             tab.set_youtube_status(self._format_stream_status(
@@ -757,9 +767,11 @@ class MainWindow(QMainWindow):
             tab.header.set_youtube_send_enabled(True)
         elif state is WatchState.UPCOMING:
             tab.set_youtube(event.title or tab.youtube_title, live=False)
+            tab.header.set_viewer_count(Platform.YOUTUBE, None)
             tab.set_youtube_status("upcoming — connecting when the stream starts")
         elif state is WatchState.OFFLINE:
             tab.set_youtube(event.title or tab.youtube_title, live=False)
+            tab.header.set_viewer_count(Platform.YOUTUBE, None)
             # offlineAt: the header keeps "offline since HH:MM" until it goes
             # live again (the resolver re-checks periodically).
             tab.set_youtube_status(
@@ -767,6 +779,7 @@ class MainWindow(QMainWindow):
                 f" · offline since {dt.datetime.now():%H:%M}")
         elif state is WatchState.ENDED:
             tab.set_youtube(event.title or tab.youtube_title, live=False)
+            tab.header.set_viewer_count(Platform.YOUTUBE, None)
             tab.set_youtube_status(f"stream ended · offline since {dt.datetime.now():%H:%M}")
         elif state is WatchState.UNAVAILABLE:
             tab.set_youtube_status("chat unavailable")
@@ -1507,6 +1520,7 @@ class MainWindow(QMainWindow):
         self._streamer_tabs.append(tab)
         tab.set_youtube("Your Stream")  # don't leak the "mine:" sentinel into the header
         tab.set_youtube_status("waiting for your live stream…")
+        tab.header.show_viewer_counts(True)
         self._bind_streamer_tabs()  # binds immediately if Twitch is already connected
         # add_tab saved before the streamer registry entry existed; re-save so
         # restore records {"type": "streamer"} instead of a plain "mine:" tab.
@@ -1529,6 +1543,8 @@ class MainWindow(QMainWindow):
             tab.set_twitch(login)
             self._retitle_tab(tab)
             asyncio.ensure_future(self._join_twitch(tab))
+            # Live dot + viewer count now, not at the next poll tick.
+            asyncio.ensure_future(self._poll_twitch_channel(login))
 
     def _retitle_tab(self, tab: Tab) -> None:
         index = self._notebook.indexOf(tab)

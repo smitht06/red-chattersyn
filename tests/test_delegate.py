@@ -364,3 +364,77 @@ def test_twitch_emotes_requested_as_possibly_animated(qapp):
         author=Author("bob", login="bob"), runs=[ImageRun(emote, "Kappa")], plain="Kappa")
     layout = view._delegate._layout_for(msg, 600, 1.0)
     assert layout.animated == [("emote://e/0", url)]
+
+
+# -- Twitch chat badges -------------------------------------------------------------
+
+_MOD_BADGE = Badge("moderator", "1", "Moderator", urls={"1x": "https://cdn.example/mod/1"})
+
+
+def _badged_msg(badges, msg_id="b1") -> Message:
+    author = Author("alice", login="alice", color="#ff0000", badges=badges)
+    return Message.text(Platform.TWITCH, "ch", author, "hi")
+
+
+def test_badges_render_before_username_with_art_only(qapp):
+    theme.apply(qapp, "dark")
+    view = ChatView(Settings())
+    no_art = Badge("subscriber", "0", "Subscriber")  # anonymous session: no URL
+    layout = view._delegate._layout_for(_badged_msg([_MOD_BADGE, no_art]), 600, 1.0)
+    assert layout.doc.emotes == [("https://cdn.example/mod/1", False, "Moderator")]
+    assert "https://cdn.example/mod/1" in layout.urls  # repaints when the art lands
+    # badge image + separating space come before the username span
+    assert layout.uname_span == (2, 2 + len("alice"))
+    assert layout.doc.toPlainText().startswith("￼ alice: hi")
+
+
+def test_badges_toggle_off_hides_them(qapp):
+    theme.apply(qapp, "dark")
+    view = ChatView(Settings({"badges": {"enabled": False}}))
+    layout = view._delegate._layout_for(_badged_msg([_MOD_BADGE]), 600, 1.0)
+    assert layout.doc.emotes == []
+    assert layout.uname_span == (0, len("alice"))
+
+
+def test_hit_test_badge_gives_title_not_emote(qapp):
+    theme.apply(qapp, "dark")
+    view = ChatView(Settings())
+    view.resize(600, 200)
+    view.message_model.add(_badged_msg([_MOD_BADGE]))
+    view.message_model.flush()
+    qapp.processEvents()
+
+    index = view.message_model.index(0)
+    rect = view.visualRect(index)
+    hits = {view._delegate.hit_test(index, QPointF(x, rect.y() + 12), rect)
+            for x in range(int(rect.x()) + 30, int(rect.x()) + 120, 2)}
+    assert ("badge", "Moderator") in hits
+    assert ("user", "alice") in hits
+    assert view._tooltip_for(("badge", "Moderator")) == "Moderator"
+
+
+# -- platform logos -------------------------------------------------------------------
+
+
+def test_rows_carry_platform_logo_not_text_chip(qapp):
+    theme.apply(qapp, "dark")
+    view = ChatView(Settings())
+    twitch = view._delegate._layout_for(_msg(Platform.TWITCH, "hi"), 600, 1.0)
+    youtube = view._delegate._layout_for(_msg(Platform.YOUTUBE, "hi", msg_id="m-yt"), 600, 1.0)
+    system = view._delegate._layout_for(
+        Message.system(Platform.TWITCH, "ch", "Bob was timed out."), 600, 1.0)
+    assert twitch.chip is Platform.TWITCH and youtube.chip is Platform.YOUTUBE
+    assert system.chip is None and system.x_offset < twitch.x_offset
+
+
+def test_platform_logo_renders_crisp_at_device_ratio(qapp):
+    from chattersyn.ui.platform_logos import platform_logo
+
+    for platform in (Platform.TWITCH, Platform.YOUTUBE):
+        logo = platform_logo(platform, 16, 2.0)
+        assert logo is not None and not logo.isNull()
+        assert (logo.width(), logo.height()) == (32, 32)  # device pixels
+        assert logo.devicePixelRatio() == 2.0
+        image = logo.toImage()
+        assert any(image.pixelColor(x, y).alpha() > 0 for x in range(32) for y in range(32))
+    assert platform_logo(Platform.TWITCH, 16, 2.0) is platform_logo(Platform.TWITCH, 16, 2.0)

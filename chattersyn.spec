@@ -57,7 +57,7 @@ else:
 #     plugins, not Pillow).
 #   - the Qt* modules below are link-time / hook pulls from QtMultimedia or
 #     QtWidgets, none of which the app imports (it uses only QtCore, QtGui,
-#     QtWidgets, QtNetwork, QtMultimedia). Excluding the Python bindings stops
+#     QtWidgets, QtNetwork, QtMultimedia, and QtSvg for the platform logos). Excluding the Python bindings stops
 #     their hooks (plugins/translations) from running; the corresponding Qt
 #     shared libraries are dropped wherever they are only reachable via the
 #     module rather than a hard link-time dependency.

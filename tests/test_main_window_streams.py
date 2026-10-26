@@ -9,6 +9,7 @@ import respx
 from PySide6.QtCore import QSettings
 
 from chattersyn.config.settings import Settings
+from chattersyn.models.message import Platform
 from chattersyn.services.twitch.helix import BASE, Helix
 from chattersyn.services.youtube.service import WatchState, YoutubeState
 from chattersyn.ui.main_window import MainWindow
@@ -255,3 +256,59 @@ async def test_streamer_tab_auth_required_blocks_youtube_send(win):
     assert not tab.header.youtube_enabled()
     assert not tab.header._youtube_chip.isEnabled()
     assert tab.header._status_label.text() == "YouTube auth required"
+
+
+# -- always-visible viewer counts (Stream tabs) --------------------------------------------
+
+
+def test_format_viewers_is_compact():
+    from chattersyn.ui.tab_header import format_viewers
+
+    assert [format_viewers(n) for n in (0, 987, 1234, 9999, 12345, 123456, 1234567)] == [
+        "0", "987", "1,234", "9,999", "12.3K", "123K", "1.2M"]
+
+
+async def test_viewer_counts_only_on_stream_tabs(win):
+    assert not win._tabs[0].header.viewer_counts_visible()  # plain channel tab
+    stream_tab = win._new_streamer_tab()
+    assert stream_tab.header.viewer_counts_visible()
+    # Before any data: a dash per platform, never blank.
+    assert stream_tab.header.viewer_count_text(Platform.TWITCH) == "—"
+    assert stream_tab.header.viewer_count_text(Platform.YOUTUBE) == "—"
+
+
+async def test_twitch_poll_updates_and_clears_viewer_count(win):
+    tab = win._new_streamer_tab()
+    tab.set_twitch("me")
+    win._apply_twitch_stream("me", {"title": "T", "viewer_count": 1234, "started_at": ""})
+    assert tab.header.viewer_count_text(Platform.TWITCH) == "1,234"
+    win._apply_twitch_stream("me", None)  # went offline
+    assert tab.header.viewer_count_text(Platform.TWITCH) == "—"
+
+
+async def test_youtube_state_updates_and_clears_viewer_count(win):
+    tab = win._new_streamer_tab()
+    live = dict(watch_key=tab.tab_key, video_id="v1", live_chat_id="lc1",
+                title="Stream", channel_title="Chan", channel_id="UC1")
+    win._on_youtube_state(YoutubeState(state=WatchState.LIVE, viewers=15678, **live))
+    assert tab.header.viewer_count_text(Platform.YOUTUBE) == "15.7K"
+    win._on_youtube_state(YoutubeState(state=WatchState.ENDED, **live))
+    assert tab.header.viewer_count_text(Platform.YOUTUBE) == "—"
+
+
+async def test_twitch_live_poller_polls_before_first_sleep(win, monkeypatch):
+    """A restored tab shouldn't wait a full poll interval for its count."""
+    import asyncio
+    import types
+
+    polled = []
+
+    async def streams(channel):
+        polled.append(channel)
+        return None
+
+    win._twitch = types.SimpleNamespace(helix=types.SimpleNamespace(streams=streams))
+    task = asyncio.ensure_future(win._poll_twitch_live())
+    await asyncio.sleep(0.05)
+    task.cancel()
+    assert polled == ["redcyberdragon29"]

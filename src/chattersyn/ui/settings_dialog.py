@@ -324,6 +324,10 @@ class SettingsDialog(QDialog):
             self._settings.get("timestamps.format", "HH:mm:ss"), page)
         form.addRow("Timestamp format:", self._timestamp_format)
 
+        self._badges = QCheckBox("Show Twitch chat badges", page)
+        self._badges.setChecked(bool(self._settings.get("badges.enabled", True)))
+        form.addRow("", self._badges)
+
         self._restore_tabs = QCheckBox("Restore tabs from the last session", page)
         self._restore_tabs.setChecked(
             bool(self._settings.get("general.restore_tabs", True)))
@@ -693,6 +697,7 @@ class SettingsDialog(QDialog):
             "scrollback": self._scrollback.value(),
             "timestamps.enabled": self._timestamps.isChecked(),
             "timestamps.format": self._timestamp_format.text().strip() or "HH:mm:ss",
+            "badges.enabled": self._badges.isChecked(),
             "general.restore_tabs": self._restore_tabs.isChecked(),
             "highlights": self._highlights,
             "moderation_actions": self._moderation_actions,
