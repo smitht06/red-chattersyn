@@ -12,6 +12,7 @@ import httpx
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QObject, Signal
 from PySide6.QtGui import QImage, QImageReader, QMovie, QPixmap
 
+from .disk_cache import DiskCache
 from .sandbox_fix import unhide_venv_files
 
 log = logging.getLogger(__name__)
@@ -49,6 +50,8 @@ class ImageCache(QObject):
         self._client: httpx.AsyncClient | None = None
         self.max_bytes = MAX_BYTES
         self.max_movies = MAX_MOVIES
+        # Optional on-disk copy of downloaded bytes (DiskCache; wired by app.py).
+        self.disk: DiskCache | None = None
 
     # -- public ---------------------------------------------------------------
 
@@ -88,21 +91,24 @@ class ImageCache(QObject):
         return ("a:" if animated else "i:") + url
 
     async def _fetch(self, url: str, animated: bool, key: str) -> None:
-        try:
-            if self._client is None:
-                self._client = httpx.AsyncClient(timeout=TIMEOUT)
-            response = await self._client.get(url)
-            response.raise_for_status()
-            data = response.content
-        except Exception as exc:
-            log.debug("image fetch failed for %s: %s", url, exc)
-            self._inflight.discard(key)
-            return
+        loop = asyncio.get_running_loop()
+        data = await self._disk_call(loop, "get", url)
+        from_disk = data is not None
+        if data is None:
+            try:
+                if self._client is None:
+                    self._client = httpx.AsyncClient(timeout=TIMEOUT)
+                response = await self._client.get(url)
+                response.raise_for_status()
+                data = response.content
+            except Exception as exc:
+                log.debug("image fetch failed for %s: %s", url, exc)
+                self._inflight.discard(key)
+                return
 
         # Imageformat plugins load lazily at first decode; the sandbox may have
         # re-hidden them since startup, so heal right before decoding.
         unhide_venv_files()
-        loop = asyncio.get_running_loop()
         try:
             image, multi_frame = await loop.run_in_executor(None, _decode_image, data)
         except Exception as exc:
@@ -113,6 +119,9 @@ class ImageCache(QObject):
         if image.isNull():
             self._inflight.discard(key)
             return
+        if not from_disk:
+            # Only bytes that decoded are worth keeping for the next run.
+            await self._disk_call(loop, "put", url, data)
 
         # An "animated" request is a request to play the image IF it has
         # frames: single-frame data is stored as a plain pixmap so it never
@@ -137,6 +146,17 @@ class ImageCache(QObject):
         self._evict()
         self.image_ready.emit(url)
         self._inflight.discard(key)
+
+    async def _disk_call(self, loop, method: str, *args):
+        """DiskCache.<method>(*args) in the executor; disk trouble is logged
+        and ignored (None) so the network path always still works."""
+        if self.disk is None:
+            return None
+        try:
+            return await loop.run_in_executor(None, getattr(self.disk, method), *args)
+        except Exception as exc:
+            log.debug("image disk cache %s failed for %s: %s", method, args[0], exc)
+            return None
 
     def _discard(self, entry: QPixmap | tuple[QMovie, QBuffer]) -> None:
         if isinstance(entry, tuple):

@@ -29,6 +29,10 @@ first.
     and differs from the default (the developer may have bumped it already);
   - the latest existing tag, to redo its notes.
   - "Other" covers minor/major bumps.
+- **Release candidates** (`vX.Y.ZrcN`, from the /prerelease skill): the
+  range starts at the last **stable** tag, so each rc's notes cover
+  everything since the last stable release. They aren't relative to the
+  previous rc.
 - Date: the tag's commit date (`git log -1 --format=%cs vX.Y.Z`) for a tagged
   release, today for an upcoming one.
 
@@ -92,6 +96,10 @@ with the options "Yes, use them" (Recommended) and "Change something"
 touch the README before approval.**
 
 ## 5. Update the README
+
+**Skip this step for a release candidate.** The README's "Latest release"
+block always shows the latest *stable* release, and the script refuses rc
+versions anyway. Go straight to step 6.
 
 1. Write the approved body to a scratch file (your scratchpad directory, not
    the repo).

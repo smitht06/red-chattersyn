@@ -30,10 +30,11 @@ def _dialog(settings, tmp_path):
 
 def test_dialog_builds_all_pages(qapp, tmp_path):
     dialog = _dialog(Settings({}), tmp_path)
-    assert dialog._nav.count() == 8
-    assert dialog._stack.count() == 8
+    assert dialog._nav.count() == 9
+    assert dialog._stack.count() == 9
     assert dialog._nav.item(0).text() == "General"
-    assert dialog._nav.item(7).text() == "About"
+    assert dialog._nav.item(3).text() == "Emotes"
+    assert dialog._nav.item(8).text() == "About"
 
 
 def test_nav_row_switches_stack_page(qapp, tmp_path):
@@ -279,3 +280,45 @@ def test_account_status_labels_and_callbacks(qapp, tmp_path):
     dialog._on_disconnect_youtube()
     assert called == ["tw", "yt-off"]
     assert dialog._youtube_status_label.text() == "Not connected"
+
+
+# -- Emotes page ------------------------------------------------------------------------
+
+
+def test_emotes_page_defaults_and_persists_edits(qapp, tmp_path):
+    from chattersyn.services.emotes.youtube_emoji import DEFAULT_EMOJI
+
+    settings = Settings({})
+    dialog = _dialog(settings, tmp_path)
+    assert not dialog._yt_emoji.isChecked()  # emotes are removed by default
+    assert dialog._emoji_table.isHidden()  # table only shown with emoji on
+    assert dialog._emoji_rows() == DEFAULT_EMOJI
+    dialog.accept()
+    assert settings.get("youtube_emotes.map") is None  # untouched table: follow defaults
+
+    dialog = _dialog(settings, tmp_path)
+    dialog._yt_emoji.setChecked(True)
+    assert not dialog._emoji_table.isHidden()
+    dialog._emoji_table.setRowCount(0)
+    row = dialog._append_emoji_row("forsenE", "🙃")
+    dialog._append_emoji_row("", "ignored")  # blank names are skipped
+    assert row == 0
+    dialog.accept()
+    assert settings.get("youtube_emotes.emoji") is True
+    assert settings.get("youtube_emotes.map") == {"forsenE": "🙃"}
+    dialog = _dialog(settings, tmp_path)
+    assert dialog._emoji_rows() == {"forsenE": "🙃"}
+    dialog._reset_emoji_rows()
+    assert dialog._emoji_rows() == DEFAULT_EMOJI
+
+
+
+def test_emotes_page_has_one_option(qapp, tmp_path):
+    """One clear checkbox: the removal itself isn't optional, only whether
+    YouTube gets an emoji instead."""
+    from PySide6.QtWidgets import QCheckBox
+
+    dialog = _dialog(Settings({}), tmp_path)
+    page = dialog._stack.widget(3)
+    assert [box.text() for box in page.findChildren(QCheckBox)] == [
+        "On YouTube, replace emotes with a matching emoji"]

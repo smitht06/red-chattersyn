@@ -13,6 +13,7 @@ Hazards this spec exists to handle (see packaging notes):
   relative -> datas entries so they resolve inside the bundle.
 """
 
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -21,6 +22,7 @@ from PyInstaller.utils.hooks import collect_data_files
 
 ROOT = Path(SPECPATH)
 VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+BUNDLE_VERSION = re.match(r"\d+(?:\.\d+)*", VERSION).group(0)
 SRC = ROOT / "src"
 
 datas = [
@@ -107,8 +109,10 @@ if sys.platform == "darwin":
         icon=icon,
         bundle_identifier="com.chattersyn.app",
         info_plist={
-            "CFBundleShortVersionString": VERSION,
-            "CFBundleVersion": VERSION,
+            # macOS wants digits and dots: a release candidate (0.7.1rc1)
+            # carries its numeric base (0.7.1) here.
+            "CFBundleShortVersionString": BUNDLE_VERSION,
+            "CFBundleVersion": BUNDLE_VERSION,
             "CFBundleDisplayName": "ChatterSyn",
             "CFBundleName": "ChatterSyn",
             "NSHighResolutionCapable": True,

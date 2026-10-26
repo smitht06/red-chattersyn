@@ -112,6 +112,11 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
+          # Release candidates (vX.Y.ZrcN) are marked pre-release, so the
+          # repo's "Latest" stays on the last stable version. APT and
+          # Homebrew still publish them (build_deb maps the deb version to
+          # X.Y.Z~rcN so the final release sorts newer).
+          prerelease: ${{ contains(github.ref_name, 'rc') }}
 
   apt-repo:
     # Publish the Linux .deb into the APT repository. The GPG-signed index

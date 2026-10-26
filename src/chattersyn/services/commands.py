@@ -1,7 +1,7 @@
 """Chatterino-style command system: builtins + commands.json user commands.
 
 Dispatch order (mirrors Chatterino's CommandController::execCommand):
-  1. (emoji shortcode replacement — lands with the emote work, step 8)
+  1. (emoji shortcodes are expanded at send time — SendCoordinator.send)
   2. split on spaces
   3. if the first word(s) match a USER command trigger, substitute its func
      and re-run the whole pipeline (custom commands can emit builtins)

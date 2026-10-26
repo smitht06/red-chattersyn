@@ -35,7 +35,7 @@ from ..config.secrets import SecretsStore
 from ..config.settings import Settings
 from ..core.bus import bridge
 from ..core.text import TWITCH_MESSAGE_LIMIT, YOUTUBE_MESSAGE_LIMIT
-from ..models.message import Author, Message, MessageFlags, Platform, TextRun
+from ..models.message import Author, ImageRun, Message, MessageFlags, Platform, TextRun
 from ..services.autocomplete import build_candidates
 from ..services.chat_index import ChatIndex
 from ..services.commands import (
@@ -46,6 +46,7 @@ from ..services.commands import (
     load_user_commands,
 )
 from ..services.emojis import emoji_dataset
+from ..services.emotes.youtube_emoji import emote_runs
 from ..services.highlights import HighlightController
 from ..services.logger import ChatLogger
 from ..services.moderation import STACK_MAX_MESSAGES, STACK_WINDOW, ModerationState
@@ -558,12 +559,16 @@ class MainWindow(QMainWindow):
         if msg.platform is Platform.YOUTUBE:
             if self._send is not None and self._send.note_echo(msg):
                 return  # our own send echoing back — optimistic row already shown
+            emotified = False
             for tab in self._tabs:
-                if msg.channel_id and tab.youtube_live_chat_id == msg.channel_id:
-                    tab.add_message(msg)
-                    continue  # several tabs may share one live chat
-                if msg.extra.get("watch_key") == tab.tab_key:
-                    tab.add_message(msg)
+                if ((msg.channel_id and tab.youtube_live_chat_id == msg.channel_id)
+                        or msg.extra.get("watch_key") == tab.tab_key):
+                    if not emotified:
+                        # One shared Message per live chat: convert once,
+                        # scoped to the first matching tab's Twitch channel.
+                        self._render_youtube_emotes(msg, tab.twitch_channel)
+                        emotified = True
+                    tab.add_message(msg)  # several tabs may share one live chat
             return
         routed = False
         for tab in self._tabs:
@@ -579,6 +584,18 @@ class MainWindow(QMainWindow):
                 self._msgs_since_clearchat.get(msg.channel_id, 0) + 1)
             if msg.author is not None:
                 self._moderation.clear_stack(msg.channel_id, msg.author.login)
+
+    def _render_youtube_emotes(self, msg: Message, twitch_channel: str) -> None:
+        """Show known emote names in a YouTube chat row as images (ChatterSyn
+        only — youtube.com shows the text). Plain chat rows only: system
+        rows and already-structured runs are left as they are."""
+        if self._twitch is None:
+            return
+        if msg.is_system or msg.runs != [TextRun(msg.plain)]:
+            return
+        runs = emote_runs(msg.plain, self._twitch.registry, twitch_channel or None)
+        if any(isinstance(run, ImageRun) for run in runs):
+            msg.runs = runs
 
     def _on_bridge_event(self, event) -> None:
         if isinstance(event, ClearChat):

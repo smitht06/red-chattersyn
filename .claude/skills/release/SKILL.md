@@ -43,8 +43,10 @@ Run these, and stop with a clear explanation if one fails:
 - Otherwise ask "Which version?" with:
   - `vX.Y.(Z+1)` patch (Recommended);
   - `vX.(Y+1).0` minor;
-  - `pyproject.toml`'s version, if it's newer than the last tag and isn't
-    already one of the options above.
+  - `pyproject.toml`'s version, if it's newer than the last tag, isn't
+    already one of the options above, and isn't a release candidate. After
+    `/prerelease` it holds `X.Y.ZrcN`, whose final is the default patch
+    option anyway.
   - "Other" covers major or a custom version.
 - If the release adds features (not just fixes), mention that a minor bump
   may fit better, but default to patch as asked.

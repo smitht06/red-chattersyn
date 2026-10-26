@@ -312,3 +312,66 @@ async def test_twitch_live_poller_polls_before_first_sleep(win, monkeypatch):
     await asyncio.sleep(0.05)
     task.cancel()
     assert polled == ["redcyberdragon29"]
+
+
+# -- emotes on incoming YouTube rows ----------------------------------------------------
+
+
+def _yt_row(text, lcid="lc1", msg_id="y1"):
+    from chattersyn.models.message import Author, Message, TextRun
+
+    return Message(id=msg_id, platform=Platform.YOUTUBE, channel_id=lcid,
+                   ts=dt.datetime.now(), author=Author("viewer", login="uc_viewer"),
+                   runs=[TextRun(text)], plain=text)
+
+
+def _registry_with(names: dict[str, str], channel: str):
+    from chattersyn.services.emotes.emote_registry import EmoteRegistry
+
+    registry = EmoteRegistry(Settings())
+    registry.set_twitch_emotes(channel, names)
+    return registry
+
+
+async def test_incoming_youtube_row_renders_emotes_scoped_to_tab(win):
+    import types
+
+    from chattersyn.models.message import ImageRun
+
+    tab = win._tabs[0]
+    tab.youtube_live_chat_id = "lc1"
+    win._twitch = types.SimpleNamespace(
+        registry=_registry_with({"9": "forsenE"}, "redcyberdragon29"))
+    msg = _yt_row("gg forsenE")
+    win._on_bridge_message(msg)
+    assert [run.emote.name for run in msg.runs if isinstance(run, ImageRun)] == ["forsenE"]
+
+    # Another channel's scoped emote isn't rendered for this tab.
+    win._twitch = types.SimpleNamespace(registry=_registry_with({"9": "forsenE"}, "elsewhere"))
+    other = _yt_row("gg forsenE", msg_id="y2")
+    win._on_bridge_message(other)
+    assert not any(isinstance(run, ImageRun) for run in other.runs)
+
+
+async def test_youtube_emote_rendering_skips_system_rows(win):
+    import types
+
+    from chattersyn.models.message import Message, TextRun
+
+    tab = win._tabs[0]
+    tab.youtube_live_chat_id = "lc1"
+    win._twitch = types.SimpleNamespace(
+        registry=_registry_with({"9": "forsenE"}, "redcyberdragon29"))
+    system = Message.system(Platform.YOUTUBE, "lc1", "forsenE joined")
+    win._on_bridge_message(system)
+    assert system.runs == [TextRun("forsenE joined")]
+
+
+async def test_youtube_rows_plain_without_twitch_service(win):
+    from chattersyn.models.message import TextRun
+
+    win._tabs[0].youtube_live_chat_id = "lc1"
+    win._twitch = None  # demo mode
+    msg = _yt_row("gg Kappa")
+    win._on_bridge_message(msg)
+    assert msg.runs == [TextRun("gg Kappa")]

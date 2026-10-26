@@ -3,16 +3,19 @@
 
 Usage::
 
-    release_tools.py next-version [patch|minor|major]   # last v* tag, bumped
-    release_tools.py set-version X.Y.Z                  # pyproject [project].version
+    release_tools.py next-version [patch|minor|major]   # last stable v* tag, bumped
+    release_tools.py next-prerelease [patch|minor|major]  # next vX.Y.ZrcN
+    release_tools.py set-version X.Y.Z[rcN]             # pyproject [project].version
     release_tools.py watch vX.Y.Z [--interval S] [--timeout S]
     release_tools.py verify X.Y.Z
 
 ``watch`` follows the GitHub Actions run of a pushed tag (build → release →
 apt-repo + homebrew) until it finishes. It prints each job state change and
 exits 0 on success, 1 on failure, 3 on timeout. ``verify`` checks that the
-version actually landed everywhere users get it: the GitHub release assets,
-the APT index and the Homebrew cask. It exits 0 when all three match.
+version actually landed everywhere users get it: the GitHub release assets
+(and its pre-release flag), the APT index and the Homebrew cask. It exits 0
+when all three match. Release candidates (``X.Y.ZrcN``) are published to APT
+as ``X.Y.Z~rcN`` (see build_deb.debian_version).
 
 Everything reads public endpoints, so no ``gh`` CLI is needed. Unauthenticated
 GitHub API calls are capped at 60/hour, so ``watch`` polls slowly (default
@@ -33,6 +36,8 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 
+from build_deb import debian_version  # same directory: the .deb's own version mapping
+
 ROOT = Path(__file__).resolve().parent.parent
 REPO_API = "https://api.github.com/repos/smitht06/red-chattersyn"
 APT_PACKAGES = "https://chattersyn-apt.pages.dev/dists/stable/main/binary-amd64/Packages"
@@ -42,6 +47,7 @@ EXPECTED_ASSETS = (
     "linux-x86_64.deb", "linux-x86_64.tar.gz", "macos-arm64.zip", "windows-x86_64.zip")
 
 _VERSION_RE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
+_PRERELEASE_RE = re.compile(r"v?(\d+\.\d+\.\d+)rc(\d+)")
 
 
 # -- versions ------------------------------------------------------------------------
@@ -72,6 +78,19 @@ def latest_tag(tags: list[str]) -> str | None:
     return max(versions, key=parse_version, default=None)
 
 
+def is_prerelease(version: str) -> bool:
+    return _PRERELEASE_RE.fullmatch(version.strip()) is not None
+
+
+def next_prerelease(tags: list[str], part: str = "patch") -> str:
+    """'X.Y.ZrcN' for the next release (last stable bumped by `part`): rc1,
+    or one past the highest rc already tagged for that version."""
+    base = bump(latest_tag(tags) or "v0.0.0", part)
+    numbers = [int(m[2]) for tag in tags
+               if (m := _PRERELEASE_RE.fullmatch(tag)) and m[1] == base]
+    return f"{base}rc{max(numbers, default=0) + 1}"
+
+
 def git_tags() -> list[str]:
     out = subprocess.run(["git", "tag", "--list", "v*"], cwd=ROOT, check=True,
                          capture_output=True, text=True).stdout
@@ -80,8 +99,9 @@ def git_tags() -> list[str]:
 
 def set_pyproject_version(pyproject: str, version: str) -> str:
     """`pyproject` text with [project].version replaced (first `version =`
-    line inside the [project] table only)."""
-    parse_version(version)
+    line inside the [project] table only). Accepts X.Y.Z or X.Y.ZrcN."""
+    if not is_prerelease(version):
+        parse_version(version)
     match = re.search(r'(?ms)^\[project\]\s*$.*?^version\s*=\s*"([^"]*)"', pyproject)
     if match is None:
         raise ValueError("no [project] version in pyproject.toml")
@@ -184,22 +204,27 @@ def verify(version: str, *, fetch_json: Callable[[str], object] = get_json,
            fetch_text: Callable[[str], str] = lambda url: http_get(url).decode()) -> list[str]:
     """Problems found (empty = the release is fully published)."""
     problems: list[str] = []
+    prerelease = is_prerelease(version)
     try:
         release = fetch_json(f"{REPO_API}/releases/tags/v{version}")
         missing = missing_assets(release, version)
         if missing:
             problems.append(f"GitHub release v{version} is missing: {', '.join(missing)}")
+        if bool(release.get("prerelease")) != prerelease:
+            want = "marked" if prerelease else "not marked"
+            problems.append(f"GitHub release v{version} should be {want} as a pre-release")
     except (urllib.error.URLError, OSError, ValueError) as exc:
         problems.append(f"GitHub release v{version} not found ({exc})")
-    for label, url, parse in (("APT index", APT_PACKAGES, apt_version),
-                              ("Homebrew cask", CASK, cask_version)):
+    for label, url, parse, expected in (
+            ("APT index", APT_PACKAGES, apt_version, debian_version(version)),
+            ("Homebrew cask", CASK, cask_version, version)):
         try:
             found = parse(fetch_text(url))
         except (urllib.error.URLError, OSError, ValueError) as exc:
             problems.append(f"{label}: fetch failed ({exc})")
             continue
-        if found != version:
-            problems.append(f"{label} is at {found or 'unknown'}, expected {version}")
+        if found != expected:
+            problems.append(f"{label} is at {found or 'unknown'}, expected {expected}")
     return problems
 
 
@@ -211,6 +236,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     nv = sub.add_parser("next-version")
     nv.add_argument("part", nargs="?", default="patch", choices=("patch", "minor", "major"))
+    np = sub.add_parser("next-prerelease")
+    np.add_argument("part", nargs="?", default="patch", choices=("patch", "minor", "major"))
     sv = sub.add_parser("set-version")
     sv.add_argument("version")
     wa = sub.add_parser("watch")
@@ -225,6 +252,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "next-version":
             tag = latest_tag(git_tags())
             print("v" + bump(tag or "v0.0.0", args.part))
+            return 0
+        if args.cmd == "next-prerelease":
+            print("v" + next_prerelease(git_tags(), args.part))
             return 0
         if args.cmd == "set-version":
             path = ROOT / "pyproject.toml"

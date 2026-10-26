@@ -24,3 +24,13 @@ def test_entries_well_formed():
 
 def test_dataset_cached():
     assert emoji_dataset() is emoji_dataset()
+
+
+
+def test_expand_shortcodes_replaces_known_names_only():
+    from chattersyn.services.emojis import expand_shortcodes
+
+    assert expand_shortcodes("hi :grinning_face: :thumbs_up:") == "hi 😀 👍"
+    assert expand_shortcodes(":fire::fire:") == "🔥🔥"
+    assert expand_shortcodes("at 10:30:45 :not_an_emoji:") == "at 10:30:45 :not_an_emoji:"
+    assert expand_shortcodes("no colons") == "no colons"

@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QStackedWidget,
     QTableWidget,
@@ -37,8 +38,10 @@ from PySide6.QtWidgets import (
 )
 
 from ..config.settings import Settings
+from ..core.image_cache import image_cache
 from ..models.message import Author, Message, Platform
 from ..services.commands import UserCommand, load_user_commands, save_user_commands
+from ..services.emotes.youtube_emoji import DEFAULT_EMOJI, emoji_map
 from ..services.highlights import HighlightMatcher
 
 VERSION = "0.1.0"
@@ -270,6 +273,7 @@ class SettingsDialog(QDialog):
         self._add_page("Accounts", self._build_accounts(
             twitch_status, youtube_status, youtube_api_key))
         self._add_page("Commands", self._build_commands())
+        self._add_page("Emotes", self._build_emotes())
         self._add_page("Highlights", self._build_highlights())
         self._add_page("Moderation", self._build_moderation())
         self._add_page("Notifications", self._build_notifications())
@@ -426,6 +430,112 @@ class SettingsDialog(QDialog):
             self._commands[row] = UserCommand(
                 name, func, show_in_context_menu=command.show_in_context_menu)
             self._reload_commands_table()
+
+    def _build_emotes(self) -> QWidget:
+        """YouTube-side emotes (YouTube chat is plain text) + the image cache."""
+        page = QWidget(self)
+        layout = QVBoxLayout(page)
+        explain = QLabel(
+            "YouTube chat can't show Twitch, 7TV, BTTV or FFZ emotes, so emotes in "
+            "your messages are sent to Twitch only and left out of the YouTube "
+            "copy. A message that's only emotes isn't sent to YouTube at all.", page)
+        explain.setWordWrap(True)
+        layout.addWidget(explain)
+        self._yt_emoji = QCheckBox("On YouTube, replace emotes with a matching emoji", page)
+        self._yt_emoji.setToolTip(
+            "Uses the table below, e.g. KEKW → 🤣. Emotes without an emoji are "
+            "still left out. Twitch always gets the real emote.")
+        self._yt_emoji.setChecked(bool(self._settings.get("youtube_emotes.emoji", False)))
+        layout.addWidget(self._yt_emoji)
+
+        table_label = QLabel("Emote → emoji (names are case-sensitive):", page)
+        layout.addWidget(table_label)
+        self._emoji_table = QTableWidget(0, 2, page)
+        self._emoji_table.setHorizontalHeaderLabels(["Emote", "Emoji"])
+        self._emoji_table.horizontalHeader().setStretchLastSection(True)
+        self._emoji_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        for name, emoji in sorted(emoji_map(self._settings).items(), key=lambda kv: kv[0].lower()):
+            self._append_emoji_row(name, emoji)
+        self._emoji_table.setColumnWidth(0, 200)  # fits FeelsGoodMan, ResidentSleeper…
+        layout.addWidget(self._emoji_table, 1)
+        # Takes the table's space while it's hidden, so the page stays packed
+        # at the top instead of spreading out.
+        self._emoji_filler = QWidget(page)
+        self._emoji_filler.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                         QSizePolicy.Policy.Expanding)
+        layout.addWidget(self._emoji_filler, 1)
+
+        row = QHBoxLayout()
+        add = QPushButton("Add", page)
+        add.clicked.connect(self._add_emoji_row)
+        remove = QPushButton("Remove", page)
+        remove.clicked.connect(self._remove_emoji_row)
+        reset = QPushButton("Reset to defaults", page)
+        reset.clicked.connect(self._reset_emoji_rows)
+        for button in (add, remove, reset):
+            row.addWidget(button)
+        # The table only matters while emoji sending is on: hidden otherwise.
+        self._emoji_widgets = (table_label, self._emoji_table, add, remove, reset)
+        self._yt_emoji.toggled.connect(self._sync_emoji_enabled)
+        self._sync_emoji_enabled(self._yt_emoji.isChecked())
+        row.addStretch(1)
+        self._clear_cache = QPushButton("Clear emote cache", page)
+        self._clear_cache.setToolTip("Delete downloaded emote/badge images from disk")
+        self._clear_cache.setEnabled(image_cache.disk is not None)
+        self._clear_cache.clicked.connect(self._clear_image_cache)
+        row.addWidget(self._clear_cache)
+        layout.addLayout(row)
+        return page
+
+    def _sync_emoji_enabled(self, enabled: bool) -> None:
+        for widget in self._emoji_widgets:
+            widget.setVisible(enabled)
+        self._emoji_filler.setVisible(not enabled)
+
+    def _append_emoji_row(self, name: str = "", emoji: str = "") -> int:
+        table = self._emoji_table
+        row = table.rowCount()
+        table.insertRow(row)
+        table.setItem(row, 0, QTableWidgetItem(name))
+        table.setItem(row, 1, QTableWidgetItem(emoji))
+        return row
+
+    def _add_emoji_row(self) -> None:
+        row = self._append_emoji_row()
+        self._emoji_table.setCurrentCell(row, 0)
+        self._emoji_table.editItem(self._emoji_table.item(row, 0))
+
+    def _remove_emoji_row(self) -> None:
+        row = self._emoji_table.currentRow()
+        if row >= 0:
+            self._emoji_table.removeRow(row)
+
+    def _reset_emoji_rows(self) -> None:
+        self._emoji_table.setRowCount(0)
+        for name, emoji in sorted(DEFAULT_EMOJI.items(), key=lambda kv: kv[0].lower()):
+            self._append_emoji_row(name, emoji)
+
+    def _emoji_rows(self) -> dict[str, str]:
+        """Non-empty table rows (the saved table replaces the defaults)."""
+        table = self._emoji_table
+        rows: dict[str, str] = {}
+        for row in range(table.rowCount()):
+            name = (table.item(row, 0).text() if table.item(row, 0) else "").strip()
+            emoji = (table.item(row, 1).text() if table.item(row, 1) else "").strip()
+            if name and emoji:
+                rows[name] = emoji
+        return rows
+
+    def _clear_image_cache(self) -> None:
+        if image_cache.disk is None:
+            return
+        try:
+            image_cache.disk.clear()
+        except OSError as exc:
+            QMessageBox.warning(self, "Clear emote cache", f"Couldn't clear the cache: {exc}")
+            return
+        self._clear_cache.setText("Cache cleared")
+        self._clear_cache.setEnabled(False)
 
     def _build_highlights(self) -> QWidget:
         page = QWidget(self)
@@ -698,6 +808,11 @@ class SettingsDialog(QDialog):
             "timestamps.enabled": self._timestamps.isChecked(),
             "timestamps.format": self._timestamp_format.text().strip() or "HH:mm:ss",
             "badges.enabled": self._badges.isChecked(),
+            "youtube_emotes.emoji": self._yt_emoji.isChecked(),
+            # None = follow DEFAULT_EMOJI (picks up future additions); only
+            # an actually edited table is stored.
+            "youtube_emotes.map": (None if self._emoji_rows() == DEFAULT_EMOJI
+                                   else self._emoji_rows()),
             "general.restore_tabs": self._restore_tabs.isChecked(),
             "highlights": self._highlights,
             "moderation_actions": self._moderation_actions,

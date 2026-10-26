@@ -7,9 +7,10 @@ import pytest
 
 from chattersyn.config.settings import Settings
 from chattersyn.core.bus import bridge
-from chattersyn.models.message import ImageRun, MessageFlags, Platform
+from chattersyn.models.message import ImageRun, MessageFlags, Platform, TextRun
 from chattersyn.services.emotes.emote_registry import EmoteRegistry
 from chattersyn.services.send import (
+    EMOTES_ONLY_ERROR,
     MODE_BLOCK,
     MODE_HIGHLIGHT,
     MODE_SILENT,
@@ -143,10 +144,11 @@ async def test_optimistic_twitch_message_renders_emotes(coordinator):
     assert tw_msg.plain == "hi Kappa Kappa Kappa"
     image_names = [run.emote.name for run in tw_msg.runs if isinstance(run, ImageRun)]
     assert image_names == ["Kappa", "Kappa", "Kappa"]
-    # YouTube has no emote syntax — its copy stays exactly as typed.
+    # YouTube chat is plain text: every emote Twitch renders (including the
+    # respaced KappaKappa) is removed from its copy.
     yt_msg = optimistic[Platform.YOUTUBE]
-    assert len(yt_msg.runs) == 1
-    assert yt_msg.runs[0].text == "hi Kappa KappaKappa"
+    assert yt_msg.plain == "hi"
+    assert yt_msg.runs == [TextRun("hi")]
 
 
 async def test_optimistic_twitch_message_without_registry_is_plain(coordinator):
@@ -491,3 +493,91 @@ async def test_all_platforms_disabled_sends_nothing(coordinator, results):
     targets = SendTargets(twitch_channel="forsen", youtube_live_chat_id="Cg0KC2Zvbw",
                           twitch_enabled=False, youtube_enabled=False)
     assert send.send("tab-1", "hello", targets) == {}
+
+
+# -- YouTube-side emotes ---------------------------------------------------------------
+
+
+def _kekw_registry():
+    registry = EmoteRegistry(Settings())
+    registry.set_twitch_global_emotes({"1": "Kappa", "2": "KEKW"})
+    return registry
+
+
+async def test_youtube_copy_drops_emotes_twitch_copy_keeps_them(coordinator):
+    youtube, twitch = FakeYouTube(), FakeTwitch()
+    send = await coordinator(twitch, youtube, emote_registry=_kekw_registry())
+    optimistic = send.send("tab-1", "gg KEKW wp", DUAL)
+    await asyncio.sleep(0.05)
+    assert youtube.calls == [("Cg0KC2Zvbw", "gg wp")]
+    assert twitch.calls[0][1] == "gg KEKW wp"
+    assert optimistic[Platform.YOUTUBE].runs == [TextRun("gg wp")]
+
+
+async def test_emote_only_message_goes_to_twitch_only(coordinator, results):
+    youtube, twitch = FakeYouTube(), FakeTwitch()
+    send = await coordinator(twitch, youtube, emote_registry=_kekw_registry())
+    optimistic = send.send("tab-1", "KEKW Kappa", DUAL)
+    await asyncio.sleep(0.05)
+    assert list(optimistic) == [Platform.TWITCH]
+    assert youtube.calls == []
+    assert twitch.calls[0][1] == "KEKW Kappa"
+    assert not [r for r in results if r.state == "validation_failed"]
+
+
+async def test_twitch_only_fallback_uses_twitch_limit(coordinator, results):
+    send = await coordinator(settings=Settings({"send": {"truncate_mode": "block"}}),
+                             emote_registry=_kekw_registry())
+    # 300 chars of emotes: over the 200 dual limit, fine for Twitch alone.
+    text = " ".join(["KEKW"] * 60)
+    optimistic = send.send("tab-1", text, DUAL)
+    assert list(optimistic) == [Platform.TWITCH]
+    assert not [r for r in results if r.state == "validation_failed"]
+
+
+async def test_youtube_only_emote_message_is_refused(coordinator, results):
+    youtube = FakeYouTube()
+    send = await coordinator(youtube=youtube, emote_registry=_kekw_registry())
+    yt_only = SendTargets(youtube_live_chat_id="Cg0KC2Zvbw", twitch_enabled=False)
+    assert send.send("tab-1", "KEKW", yt_only) == {}
+    failed = [r for r in results if r.state == "validation_failed"]
+    assert [r.error for r in failed] == [EMOTES_ONLY_ERROR]
+    await asyncio.sleep(0.05)
+    assert youtube.calls == []
+
+
+async def test_emoji_option_sends_emoji_and_counts_toward_limit(coordinator):
+    settings = Settings({"send": {"truncate_mode": "block"}, "youtube_emotes": {"emoji": True}})
+    youtube = FakeYouTube()
+    send = await coordinator(youtube=youtube, settings=settings,
+                             emote_registry=_kekw_registry())
+    # 198 + " KEKW" (203) is too long as typed but fits once KEKW -> 🤣.
+    text = "a" * 198 + " KEKW"
+    optimistic = send.send("tab-1", text, SendTargets(
+        youtube_live_chat_id="Cg0KC2Zvbw", twitch_enabled=False))
+    assert optimistic[Platform.YOUTUBE].plain == "a" * 198 + " 🤣"
+
+
+async def test_glued_picker_emotes_skip_youtube(coordinator, results):
+    registry = EmoteRegistry(Settings())
+    registry.set_twitch_emotes("forsen", {"1": "forsenE"})
+    youtube, twitch = FakeYouTube(), FakeTwitch()
+    send = await coordinator(twitch, youtube, emote_registry=registry)
+    optimistic = send.send("tab-1", "forsenEforsenEforsenE", DUAL)
+    await asyncio.sleep(0.05)
+    assert list(optimistic) == [Platform.TWITCH]
+    assert youtube.calls == []
+    assert twitch.calls[0][1] == "forsenE forsenE forsenE"
+
+
+
+async def test_picker_shortcodes_become_emoji_on_both_platforms(coordinator):
+    """The picker/autocomplete insert `:shortcode:`; both chats must get the
+    character (they used to receive the literal text)."""
+    youtube, twitch = FakeYouTube(), FakeTwitch()
+    send = await coordinator(twitch, youtube)
+    optimistic = send.send("tab-1", "gg :fire: :thumbs_up:", DUAL)
+    await asyncio.sleep(0.05)
+    assert twitch.calls[0][1] == "gg 🔥 👍"
+    assert youtube.calls == [("Cg0KC2Zvbw", "gg 🔥 👍")]
+    assert optimistic[Platform.YOUTUBE].plain == "gg 🔥 👍"

@@ -51,3 +51,11 @@ def test_staging_requires_bundle(dist):
 
 def test_deb_path_naming(dist):
     assert deb_path(dist, "0.1.0") == dist / "chattersyn-0.1.0-linux-x86_64.deb"
+
+
+def test_debian_version_sorts_release_candidates_before_final():
+    from build_deb import debian_version
+
+    assert debian_version("0.7.1rc1") == "0.7.1~rc1"
+    assert debian_version("0.7.1") == "0.7.1"
+    assert debian_version("1.0.0b2") == "1.0.0~b2"

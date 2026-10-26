@@ -39,3 +39,41 @@ async def test_animated_request_plays_multi_frame_and_keeps_static_as_pixmap(qap
     assert isinstance(still, QPixmap) and not still.isNull()
     assert cache._movies == 1
     cache.clear()
+
+
+@respx.mock
+async def test_disk_cache_hit_skips_network_and_miss_writes(qapp, tmp_path):
+    from chattersyn.core.disk_cache import DiskCache
+
+    route = respx.get("https://cdn.example/still.gif").mock(
+        return_value=httpx.Response(200, content=ONE_FRAME_GIF))
+    disk = DiskCache(tmp_path)
+    first = ImageCache()
+    first.disk = disk
+    try:
+        assert isinstance(await _fetch(first, "https://cdn.example/still.gif", False), QPixmap)
+    finally:
+        await first._client.aclose()
+    assert route.call_count == 1
+    assert disk.get("https://cdn.example/still.gif") == ONE_FRAME_GIF  # miss -> written
+
+    second = ImageCache()  # a fresh run: memory cache empty, disk warm
+    second.disk = disk
+    pixmap = await _fetch(second, "https://cdn.example/still.gif", False)
+    assert isinstance(pixmap, QPixmap) and not pixmap.isNull()
+    assert route.call_count == 1  # served from disk, no request
+    assert second._client is None
+
+
+@respx.mock
+async def test_undecodable_bytes_never_hit_disk(qapp, tmp_path):
+    from chattersyn.core.disk_cache import DiskCache
+
+    respx.get("https://cdn.example/junk").mock(return_value=httpx.Response(200, content=b"nope"))
+    cache = ImageCache()
+    cache.disk = DiskCache(tmp_path)
+    try:
+        assert await _fetch(cache, "https://cdn.example/junk", False) is None
+    finally:
+        await cache._client.aclose()
+    assert cache.disk.get("https://cdn.example/junk") is None

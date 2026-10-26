@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -52,3 +53,23 @@ def emoji_dataset() -> tuple[EmojiEntry, ...]:
         for name, char, category in data
         if name and char
     )
+
+
+# `:name:` with no spaces or colons inside; only known names are replaced, so
+# times like 10:30:45 and unknown `:words:` stay as typed.
+_SHORTCODE_RE = re.compile(r":([^:\s]+):")
+
+
+@lru_cache(maxsize=1)
+def _chars_by_shortcode() -> dict[str, str]:
+    return {entry.shortcode: entry.char for entry in emoji_dataset()}
+
+
+def expand_shortcodes(text: str) -> str:
+    """`:grinning_face:` -> 😀 for every known shortcode in `text`. The emote
+    picker and autocomplete insert shortcodes; both chats need the real
+    character (Twitch and YouTube would otherwise show the literal text)."""
+    if ":" not in text:
+        return text
+    chars = _chars_by_shortcode()
+    return _SHORTCODE_RE.sub(lambda m: chars.get(m[1], m[0]), text)

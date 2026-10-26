@@ -15,8 +15,9 @@ import qasync
 from PySide6.QtCore import QCoreApplication, QStandardPaths
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from .config.paths import config_dir
+from .config.paths import cache_dir, config_dir
 from .config.settings import Settings
+from .core.disk_cache import DiskCache
 from .core.image_cache import image_cache
 from .ui import theme
 from .ui.main_window import MainWindow
@@ -64,10 +65,21 @@ def _loop_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> N
     log.error("Event loop error: %s (%r)", message, exc)
 
 
+def _prune_disk_cache(disk: DiskCache) -> None:
+    try:
+        disk.prune()
+    except OSError as exc:
+        logging.getLogger(__name__).debug("image disk cache prune failed: %s", exc)
+
+
 async def _main(app: QApplication, settings: Settings, demo: bool) -> None:
     loop = asyncio.get_running_loop()
     loop.set_exception_handler(_loop_exception_handler)
     image_cache.setParent(app)  # keep it owned by the application
+    # Downloaded emote/badge/avatar bytes persist between runs; trim the
+    # cache off the GUI thread once per start.
+    image_cache.disk = DiskCache(cache_dir() / "images")
+    loop.run_in_executor(None, _prune_disk_cache, image_cache.disk)
 
     window = MainWindow(settings, demo=demo)
     window.show()

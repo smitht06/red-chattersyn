@@ -19,6 +19,7 @@ Package layout::
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,17 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 HICOLOR_SIZES = (512, 256, 128, 64, 48)
+
+
+def debian_version(version: str) -> str:
+    """PEP 440 pre-release -> Debian form: ``0.7.1rc1`` -> ``0.7.1~rc1``.
+
+    dpkg sorts ``0.7.1rc1`` AFTER ``0.7.1`` (letters beat end-of-string), so
+    APT users on a release candidate would never be offered the final
+    release; ``~`` sorts before everything, so ``0.7.1~rc1`` < ``0.7.1``.
+    Only the control Version changes — file names keep the PEP 440 form
+    (CI derives the GitHub tag/URL from them)."""
+    return re.sub(r"(\d)(a|b|rc)(\d+)$", r"\1~\2\3", version)
 
 
 def deb_path(dist: Path, version: str) -> Path:
@@ -49,7 +61,7 @@ def build_staging(dist: Path, version: str, arch: str, staging: Path, *, icons: 
     debian.mkdir(parents=True)
     control = (ROOT / "packaging" / "linux" / "control").read_text()
     (debian / "control").write_text(
-        control.replace("__VERSION__", version).replace("__ARCH__", arch))
+        control.replace("__VERSION__", debian_version(version)).replace("__ARCH__", arch))
 
     shutil.copytree(bundle, staging / "opt" / "chattersyn")
 

@@ -41,8 +41,10 @@ from ..core.text import (
     prepare_twitch_send,
     truncate_codepoints,
 )
-from ..models.message import Author, ImageRun, Message, MessageFlags, Platform, TextRun
+from ..models.message import Author, Message, MessageFlags, Platform, TextRun
+from .emojis import expand_shortcodes
 from .emotes.emote_registry import EmoteRegistry
+from .emotes.youtube_emoji import emote_runs, has_youtube_text, youtube_emote_text
 from .twitch.irc import NotAuthenticated, NotConnected
 from .youtube.sender import YoutubeSendError
 
@@ -57,6 +59,10 @@ MODE_HIGHLIGHT = "highlight"  # truncate + "truncated" indicator (default)
 MODE_SILENT = "silent"        # truncate, no indicator
 MODE_BLOCK = "block"          # refuse over-limit messages
 
+
+# A YouTube copy left empty once emotes are removed (YouTube-only sends; a
+# dual send just skips YouTube instead).
+EMOTES_ONLY_ERROR = "only emotes — YouTube chat can't show them"
 
 @dataclass
 class SendTargets:
@@ -186,6 +192,9 @@ class SendCoordinator:
         """
         if not text.strip() or not (targets.twitch_enabled or targets.youtube_enabled):
             return {}
+        # Picker/autocomplete emoji arrive as `:shortcode:`; both chats need
+        # the character. Done once here so offers and echoes see it too.
+        text = expand_shortcodes(text)
         key = uuid.uuid4().hex
         request = _Request(
             key=key, tab_key=tab_key, text=text, targets=targets,
@@ -193,11 +202,19 @@ class SendCoordinator:
         )
         self._requests[key] = request
 
+        platforms = self._enabled_platforms(targets)
+        if (Platform.YOUTUBE in platforms and Platform.TWITCH in platforms
+                and not self._has_youtube_text(text, targets.twitch_channel)):
+            # Emote-only message: YouTube chat can't show emotes and its copy
+            # would be empty, so it quietly goes to Twitch only.
+            platforms.remove(Platform.YOUTUBE)
+        # Both copies share YouTube's limit only when both actually go out.
+        dual = Platform.TWITCH in platforms and Platform.YOUTUBE in platforms
         prepared: dict[Platform, tuple[str, bool, bool]] = {}  # text, truncated, action
         failures: dict[Platform, str] = {}
-        for platform in self._enabled_platforms(targets):
+        for platform in platforms:
             error, out, truncated, action = self._validate(
-                platform, text, targets.is_dual, twitch_channel=targets.twitch_channel)
+                platform, text, dual, twitch_channel=targets.twitch_channel)
             if error:
                 failures[platform] = error
             else:
@@ -462,9 +479,19 @@ class SendCoordinator:
         # YouTube: never gets the /me prefix (Twitch-only markup); the same
         # sanitizing (newline collapse) applies — the server rejects newlines.
         yt_text, _ = prepare_twitch_send(text)
+        # YouTube can't show emote images: mapped names become emoji
+        # (before the limit, since emoji count against it).
+        yt_text = youtube_emote_text(
+            yt_text, self._emote_registry, twitch_channel, self._settings)
+        if not yt_text.strip():
+            return (EMOTES_ONLY_ERROR, yt_text, False, False)
         if contains_url(yt_text):
             return ("contains a URL — YouTube rejects links in live chat", yt_text, False, False)
         return self._apply_limit(platform, yt_text, YOUTUBE_MESSAGE_LIMIT, False)
+
+    def _has_youtube_text(self, text: str, twitch_channel: str | None) -> bool:
+        yt_text, _ = prepare_twitch_send(text)
+        return has_youtube_text(yt_text, self._emote_registry, twitch_channel, self._settings)
 
     def _apply_limit(
         self, platform: Platform, text: str, limit: int, action: bool
@@ -509,15 +536,10 @@ class SendCoordinator:
         # Twitch never echoes our own PRIVMSG, so the optimistic row is the
         # only render of a self-sent message — parse its emotes by name from
         # the registry (no IRC tags exist for it), scoped to the channel the
-        # message was sent to. YouTube has no emote syntax; its optimistic
-        # rows stay plain text.
+        # message was sent to. The YouTube copy already had its emotes
+        # removed (youtube_emote_text), so its row stays plain text.
         if platform is Platform.TWITCH and self._emote_registry is not None:
-            runs = [
-                ImageRun(emote, emote.name) if emote is not None else TextRun(piece)
-                for piece, emote in self._emote_registry.split_emote_text(
-                    text, channel=targets.twitch_channel
-                )
-            ]
+            runs = emote_runs(text, self._emote_registry, targets.twitch_channel)
         else:
             runs = [TextRun(text)]
         return Message(

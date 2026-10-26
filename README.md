@@ -24,7 +24,11 @@ in Python with PySide6. One window, one input box — every message posts to
 - **One input, dual send** — Enter posts to both chats (per-platform send
   toggles, dual character counters, rate-limit queues, exactly-once echo).
 - **Full emotes** — Twitch + 7TV + BTTV + FFZ (animated WebP), per-provider
-  toggles and priority.
+  toggles and priority, cached on disk between runs. YouTube chat is plain
+  text, so emotes go to Twitch only: they're removed from the YouTube copy of
+  your message, and a message that's only emotes isn't sent to YouTube at
+  all (optionally send matching emoji instead, KEKW → 🤣, in Settings →
+  Emotes). ChatterSyn draws emote names in YouTube messages as images.
 - **Badges, usercards, replies** — Twitch badge sets, reply banners + `/reply`,
   hover usercards with recent messages and moderation actions.
 - **Highlights & mentions** — regex/plain rules, colors, sounds, `/mentions`.
@@ -140,6 +144,13 @@ release notes (via `/release-notes`), bumps the version, gets your final
 confirmation, runs `scripts/release.sh`, then tracks CI and checks that the
 GitHub release, APT repo and Homebrew cask all updated
 (`scripts/release_tools.py watch` / `verify`, no `gh` needed).
+
+Release candidates: `/prerelease` (skill in `.claude/skills/prerelease/`)
+cuts `vX.Y.ZrcN` (default: the next patch, `rc1`, `rc2`, …). CI marks it as a
+GitHub **pre-release**, so "Latest" stays on the stable release. APT and
+Homebrew users get it on their next upgrade. The `.deb` is versioned
+`X.Y.Z~rcN` so the final `vX.Y.Z` (cut with `/release`) upgrades them. The
+README's "Latest release" section stays on the latest stable release.
 
 To cut a release by hand:
 

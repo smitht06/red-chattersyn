@@ -18,6 +18,11 @@ DEFAULTS: dict[str, Any] = {
     "scrollback": 1000,
     "timestamps": {"enabled": True, "format": "HH:mm:ss"},
     "badges": {"enabled": True},
+    # YouTube chat is plain text: emote names are removed from the YouTube
+    # copy of a send (emote-only messages go to Twitch only), or become emoji
+    # when `emoji` is on (map None = built-in DEFAULT_EMOJI; an edited table
+    # replaces it wholesale). ChatterSyn always renders emotes on YouTube rows.
+    "youtube_emotes": {"emoji": False, "map": None},
     "tabs": [],
     "general": {"restore_tabs": True},
     "send": {"truncate_mode": "highlight", "block_urls_for_youtube": True},

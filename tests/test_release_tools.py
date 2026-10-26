@@ -133,3 +133,46 @@ def test_verify_all_published_and_stale_packages():
     problems = verify("0.6.1", fetch_json=json_ok, fetch_text=text("0.6.0"))
     assert problems == ["APT index is at 0.6.0, expected 0.6.1",
                         "Homebrew cask is at 0.6.0, expected 0.6.1"]
+
+
+# -- release candidates -------------------------------------------------------------------
+
+
+def test_next_prerelease_counts_up_per_version():
+    from release_tools import next_prerelease
+
+    assert next_prerelease(["v0.6.0", "v0.7.0"]) == "0.7.1rc1"
+    assert next_prerelease(["v0.7.0", "v0.7.1rc1", "v0.7.1rc2"]) == "0.7.1rc3"
+    assert next_prerelease(["v0.7.0", "v0.7.1rc4"], "minor") == "0.8.0rc1"
+    # A released rc'd version moves the base on: rc tags never count as stable.
+    assert next_prerelease(["v0.7.0", "v0.7.1rc1", "v0.7.1"]) == "0.7.2rc1"
+
+
+def test_latest_tag_and_next_version_ignore_release_candidates():
+    from release_tools import latest_tag
+
+    assert latest_tag(["v0.7.0", "v0.7.1rc2"]) == "v0.7.0"
+    assert bump(latest_tag(["v0.7.0", "v0.7.1rc2"])) == "0.7.1"  # rc -> final
+
+
+def test_set_version_accepts_release_candidates():
+    text = '[project]\nname = "chattersyn"\nversion = "0.7.0"\n'
+    assert 'version = "0.7.1rc1"' in set_pyproject_version(text, "0.7.1rc1")
+    with pytest.raises(ValueError):
+        set_pyproject_version(text, "0.7.1-beta")
+
+
+def test_verify_release_candidate_expects_debian_form_and_prerelease_flag():
+    version = "0.7.1rc1"
+    assets = {"assets": [{"name": f"chattersyn-{version}-{s}"} for s in (
+        "linux-x86_64.deb", "linux-x86_64.tar.gz", "macos-arm64.zip", "windows-x86_64.zip")]}
+
+    def text(url):
+        return ("Package: chattersyn\nVersion: 0.7.1~rc1\n" if "Packages" in url
+                else f'  version "{version}"\n')
+
+    assert verify(version, fetch_json=lambda url: {**assets, "prerelease": True},
+                  fetch_text=text) == []
+    problems = verify(version, fetch_json=lambda url: {**assets, "prerelease": False},
+                      fetch_text=text)
+    assert problems == ["GitHub release v0.7.1rc1 should be marked as a pre-release"]
