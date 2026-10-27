@@ -288,30 +288,33 @@ REST (send); Qt model/delegate chat rendering. See the plan in
 `~/.claude/plans/i-want-an-app-idempotent-pebble.md` for the full design.
 
 <!-- release-notes:start -->
-## Latest release: v0.7.0 (2026-10-26)
+## Latest release: v0.8.0 (2026-10-26)
 
 ### New
 
-- **Twitch chat badges.** Broadcaster, moderator, VIP, subscriber and other
-  badges now show in front of chatters' names, and hovering a badge shows its
-  name. Badges need a connected Twitch account. You can turn them off in
-  Settings → General → **Show Twitch chat badges**.
-- **Viewer counts on Stream tabs.** The Stream tab header always shows each
-  platform's logo with its live viewer count (for example 1,234 or 15.7K), or
-  a gray dash when that platform isn't live. Hover for the exact number.
+- **Emotes go to Twitch only.** YouTube chat can't show Twitch, 7TV, BTTV or
+  FFZ emotes, so they're now left out of the YouTube copy of your message. A
+  message that's only emotes isn't sent to YouTube at all. Twitch still gets
+  everything.
+- **Emoji instead of emotes (optional).** In Settings → Emotes, tick "On
+  YouTube, replace emotes with a matching emoji" to send, for example, 🤣 for
+  KEKW on YouTube. The emote → emoji table there can be edited.
+- **Emotes in YouTube messages.** Emote names in YouTube chat (for example a
+  viewer typing Kappa or one of your channel's 7TV emotes) now show as
+  images in ChatterSyn.
 
 ### Improved
 
-- **Platform logos in chat.** Each message now starts with the Twitch or
-  YouTube logo instead of the "Tw"/"Yt" text label.
-- **User card layout.** The card that opens when you click a username has
-  been rearranged. Ban and Unban, the timeout durations and your custom
-  actions each get their own group, so no button label is cut off any more.
-  The details line up, and the avatar is round, with the user's initial
-  showing until the picture loads.
-- **Live status appears right away.** The Twitch live indicator and viewer
-  count now appear as soon as the app starts or a Stream tab connects, rather
-  than after about a minute.
+- **Faster emotes on startup.** Emote, badge and avatar images are saved to
+  disk, so they show straight away the next time you start ChatterSyn
+  instead of downloading again. Settings → Emotes has a "Clear emote cache"
+  button.
+
+### Fixed
+
+- **Emojis sent as text.** Emojis picked from the emote picker or
+  autocomplete reached Twitch and YouTube as their name (`:fire:`). They're
+  now sent as the real emoji (🔥).
 
 Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
 <!-- release-notes:end -->
