@@ -290,15 +290,10 @@ REST (send); Qt model/delegate chat rendering. See the plan in
 `~/.claude/plans/i-want-an-app-idempotent-pebble.md` for the full design.
 
 <!-- release-notes:start -->
-## Latest release: v0.9.0 (2026-10-27)
-
-### New
-- **Moderation on the user card:** click a name to ban, unban or time out. Twitch has a timeout grid, YouTube has Ban, Unban, Timeout 5m and Delete. The buttons appear only in channels you can moderate.
-- **New app logo:** the window and taskbar now show it on Linux and Windows. It's also the icon on the installed app on macOS, Windows and Linux.
+## Latest release: v0.9.1 (2026-10-28)
 
 ### Improved
-- **Custom mod actions:** your actions from Settings → Moderation are now buttons on the user card. They fill in every placeholder, including `{msg.id}`, `{msg.text}` and `{channel.name}`. If you open a card from an @mention or with `/usercard`, actions that use `{msg.*}` are hidden, so they can't act on the wrong message.
-- **Simpler tab header:** the moderation mode shield button is gone, and chat rows no longer carry mod buttons on the right.
+- **Refreshed app icon:** the TV now has a separate base, and the icon sits on a rounded square like iOS and macOS app icons. The Dock, taskbar and app menus show its rounded shape instead of a square white tile, on macOS, Windows and Linux.
 
 Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
 <!-- release-notes:end -->
