@@ -25,14 +25,6 @@ _CHIP_OFF = """
 QPushButton { background: #232323; color: #6a6a6a; border: 1px solid #333333;
               border-radius: 8px; padding: 1px 8px; font-size: 9pt; }
 """
-_SHIELD_ON = """
-QPushButton { background: #1e3a1e; color: #7fd47f; border: 1px solid #2a5a2a;
-              border-radius: 8px; padding: 1px 8px; font-size: 10pt; }
-"""
-_SHIELD_DISABLED = """
-QPushButton { background: #232323; color: #4a4a4a; border: 1px solid #333333;
-              border-radius: 8px; padding: 1px 8px; font-size: 10pt; }
-"""
 
 
 class ShrinkableLabel(QLabel):
@@ -103,7 +95,6 @@ class ViewerCount(QWidget):
 
 class TabHeader(QWidget):
     send_toggle_changed = Signal(str, bool)  # platform, enabled
-    moderation_toggled = Signal(bool)  # shield on/off (per-tab moderation mode)
     side_by_side_toggled = Signal(bool)  # split Twitch | YouTube into two panes
 
     def __init__(self, settings: Settings, twitch_channel: str = "", youtube_title: str = "", parent=None):
@@ -147,17 +138,11 @@ class TabHeader(QWidget):
         self._status_label = ShrinkableLabel("", self)
         self._status_label.setStyleSheet("color: #8a8a8a; font-size: 9pt;")
 
-        # Chat-mode indicator (ROOMSTATE-driven; docs/m4.md moderation mode).
+        # Chat-mode indicator (ROOMSTATE-driven: slow/subs-only/…).
         self._modes_label = ShrinkableLabel("", self)
         self._modes_label.setStyleSheet("color: #a0a0c0; font-size: 8.5pt;")
         self._modes_label.hide()
 
-        self._shield = QPushButton("🛡", self)
-        self._shield.setCheckable(True)
-        self._shield.setToolTip("Moderation mode — show action buttons on messages")
-        self._shield.setEnabled(False)
-        self._shield.setStyleSheet(_SHIELD_DISABLED)
-        self._shield.toggled.connect(self._on_shield_toggled)
 
         self._sbs_button = QPushButton("⇶", self)
         self._sbs_button.setCheckable(True)
@@ -181,7 +166,6 @@ class TabHeader(QWidget):
         layout.addWidget(self._modes_label)
         layout.addStretch(1)
         layout.addWidget(self._viewers_box)
-        layout.addWidget(self._shield)
         layout.addWidget(self._sbs_button)
         layout.addWidget(self._twitch_chip)
         layout.addWidget(self._youtube_chip)
@@ -254,34 +238,11 @@ class TabHeader(QWidget):
     def youtube_send_blocked(self) -> bool:
         return self._youtube_blocked
 
-    # -- moderation -------------------------------------------------------------
-
-    def set_moderation_available(self, available: bool) -> None:
-        """Enable the shield when the account has mod rights on either
-        platform of the pair (or when rights are unknown)."""
-        self._shield.setEnabled(available)
-        if not available:
-            self._shield.setChecked(False)  # no rights -> mode off
-        self._update_shield_style()
-
-    def moderation_enabled(self) -> bool:
-        return self._shield.isChecked() and self._shield.isEnabled()
-
-    def _update_shield_style(self) -> None:
-        if not self._shield.isEnabled():
-            self._shield.setStyleSheet(_SHIELD_DISABLED)
-        else:
-            self._shield.setStyleSheet(_SHIELD_ON if self._shield.isChecked() else _CHIP_ON)
-
     def _on_chip(self, platform: str, checked: bool) -> None:
         chip = self._twitch_chip if platform == "twitch" else self._youtube_chip
         chip.setText(f"{'Tw' if platform == 'twitch' else 'Yt'} {'✓' if checked else '✗'}")
         chip.setStyleSheet(_CHIP_ON if checked else _CHIP_OFF)
         self.send_toggle_changed.emit(platform, checked)
-
-    def _on_shield_toggled(self, checked: bool) -> None:
-        self._update_shield_style()
-        self.moderation_toggled.emit(checked)
 
     def set_side_by_side(self, enabled: bool) -> None:
         """Reflect a programmatic side-by-side state (restore) without

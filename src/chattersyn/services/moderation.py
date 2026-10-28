@@ -1,7 +1,6 @@
 """ModerationState: per-channel mod rights and moderation bookkeeping.
 
-Drives the tab-header shield and per-row action buttons (docs/m4.md
-"Moderation mode"):
+Decides when the user card shows its moderation actions:
 
 - Twitch: hasModRights = the channel's USERSTATE mod flag, own USERSTATE
   badges (moderator/lead_moderator/staff/admin/global_mod), or being the
@@ -9,7 +8,7 @@ Drives the tab-header shield and per-row action buttons (docs/m4.md
   GLOBALUSERSTATE via ``set_self_identity``.
 - YouTube: moderation (server ban + local delete) is allowed when the
   connected account owns the stream's channel (``mine=true`` identity) —
-  while ownership is unknown the shield stays hidden.
+  while ownership is unknown the card's mod actions stay hidden.
 - ClearChat bookkeeping: timed-out/banned users are registered so their
   rows can be grayed (MessageFlags.DISABLED), and repeated timeouts on the
   same user within a short window fold into "(N times)".

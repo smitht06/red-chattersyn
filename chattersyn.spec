@@ -9,8 +9,8 @@ Hazards this spec exists to handle (see packaging notes):
   ping), google_auth_oauthlib.flow + google.auth.transport.requests (OAuth).
 - keyring discovers backends via entry points, which freezing loses ->
   per-platform backend hiddenimports.
-- Runtime data: chattersyn/assets/{ping.wav,emoji.json} are Path(__file__)
-  relative -> datas entries so they resolve inside the bundle.
+- Runtime data: chattersyn/assets/{ping.wav,emoji.json,icon.png} are
+  Path(__file__) relative -> datas entries so they resolve inside the bundle.
 """
 
 import re
@@ -28,6 +28,7 @@ SRC = ROOT / "src"
 datas = [
     (str(SRC / "chattersyn" / "assets" / "ping.wav"), "chattersyn/assets"),
     (str(SRC / "chattersyn" / "assets" / "emoji.json"), "chattersyn/assets"),
+    (str(SRC / "chattersyn" / "assets" / "icon.png"), "chattersyn/assets"),
 ]
 # TLS roots for grpc secure_channel (hooks-contrib does not bundle them).
 datas += collect_data_files("grpc", includes=["**/roots.pem"])

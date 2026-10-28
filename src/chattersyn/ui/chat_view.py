@@ -16,7 +16,6 @@ class ChatView(QListView):
     usercard_requested = Signal(object, str)  # Message, login
     reply_requested = Signal(object)          # Message
     search_requested = Signal(str, bool)      # selection, all_tabs
-    mod_action_requested = Signal(object, str)  # Message, action name
     delete_requested = Signal(object)           # Message ("Moderate" submenu)
     pin_requested = Signal(object)              # Message ("Moderate" submenu)
 
@@ -54,16 +53,6 @@ class ChatView(QListView):
     def refresh_visuals(self) -> None:
         self._delegate.clear_cache()
         self.viewport().update()
-
-    def set_moderation_enabled(self, enabled: bool) -> None:
-        """Moderation mode ON -> per-row action buttons appear (delegate)."""
-        self._delegate.set_moderation_enabled(enabled)
-
-    def set_moderation_actions(self, actions: list[str]) -> None:
-        self._delegate.set_moderation_actions(actions)
-
-    def set_youtube_actions(self, actions: list[str]) -> None:
-        self._delegate.set_youtube_actions(actions)
 
     # -- internal ------------------------------------------------------------------
 
@@ -139,11 +128,6 @@ class ChatView(QListView):
                     msg = self._model.message_at(index.row())
                     if msg is not None:
                         self.usercard_requested.emit(msg, hit[1])
-                    return
-                if hit and hit[0] == "mod":
-                    msg = self._model.message_at(index.row())
-                    if msg is not None:
-                        self.mod_action_requested.emit(msg, hit[1])
                     return
         super().mousePressEvent(event)
 

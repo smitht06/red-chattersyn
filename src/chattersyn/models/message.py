@@ -34,7 +34,7 @@ class MessageFlags(enum.IntFlag):
     SUPERCHAT = 1 << 9  # YouTube super chat
     MEMBERSHIP = 1 << 10  # YouTube membership events
     CENTERED = 1 << 11  # system-style centered row
-    DISABLED = 1 << 12  # moderation mode: grayed-out row (timed out / locally hidden)
+    DISABLED = 1 << 12  # grayed-out row (timed out / banned / locally hidden)
 
 
 @dataclass

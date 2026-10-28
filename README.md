@@ -8,7 +8,7 @@ in Python with PySide6. One window, one input box — every message posts to
 ┌────────────────────────────────────────────────────┐
 │ ● Twitch: redcyberdragon29 · ● YouTube: The Stream │
 │ [merged chat feed — Twitch + YouTube interleaved]  │
-│ [🛡] [Tw ✓] [Yt ✓]           Big Stream · 1,234…  │
+│ [Tw ✓] [Yt ✓]                Big Stream · 1,234…  │
 │ ▸ message goes here…                    [😀] [Send]│
 └────────────────────────────────────────────────────┘
 ```
@@ -30,12 +30,14 @@ in Python with PySide6. One window, one input box — every message posts to
   all (optionally send matching emoji instead, KEKW → 🤣, in Settings →
   Emotes). ChatterSyn draws emote names in YouTube messages as images.
 - **Badges, usercards, replies** — Twitch badge sets, reply banners + `/reply`,
-  hover usercards with recent messages and moderation actions.
+  usercards (click a name) with recent messages and moderation actions.
 - **Highlights & mentions** — regex/plain rules, colors, sounds, `/mentions`.
 - **Commands** — `/me /reply /clear /announce /timeout /ban /delete /mod /vip
   /slow /subscribers /emoteonly /followers` plus your own `commands.json`.
-- **Moderation mode** — per-tab shield; Twitch IRC commands, YouTube
-  owner/mod-only delete with server ban + local hide.
+- **Moderation** — click a name to open its user card: Ban/Unban, a timeout
+  grid and your own actions from Settings → Moderation (Twitch, via Helix),
+  or Ban/Unban/Timeout/Delete on YouTube (owner/mod only; Delete hides the
+  user's messages locally). Shown only where you have mod rights.
 - **Live awareness** — live dots, streamer bar (title · viewers · uptime),
   offline-since timestamps, live notifications.
 - **The rest** — Ctrl+F search popup (with predicates), text logging, emote
@@ -288,33 +290,15 @@ REST (send); Qt model/delegate chat rendering. See the plan in
 `~/.claude/plans/i-want-an-app-idempotent-pebble.md` for the full design.
 
 <!-- release-notes:start -->
-## Latest release: v0.8.0 (2026-10-26)
+## Latest release: v0.9.0 (2026-10-27)
 
 ### New
-
-- **Emotes go to Twitch only.** YouTube chat can't show Twitch, 7TV, BTTV or
-  FFZ emotes, so they're now left out of the YouTube copy of your message. A
-  message that's only emotes isn't sent to YouTube at all. Twitch still gets
-  everything.
-- **Emoji instead of emotes (optional).** In Settings → Emotes, tick "On
-  YouTube, replace emotes with a matching emoji" to send, for example, 🤣 for
-  KEKW on YouTube. The emote → emoji table there can be edited.
-- **Emotes in YouTube messages.** Emote names in YouTube chat (for example a
-  viewer typing Kappa or one of your channel's 7TV emotes) now show as
-  images in ChatterSyn.
+- **Moderation on the user card:** click a name to ban, unban or time out. Twitch has a timeout grid, YouTube has Ban, Unban, Timeout 5m and Delete. The buttons appear only in channels you can moderate.
+- **New app logo:** the window and taskbar now show it on Linux and Windows. It's also the icon on the installed app on macOS, Windows and Linux.
 
 ### Improved
-
-- **Faster emotes on startup.** Emote, badge and avatar images are saved to
-  disk, so they show straight away the next time you start ChatterSyn
-  instead of downloading again. Settings → Emotes has a "Clear emote cache"
-  button.
-
-### Fixed
-
-- **Emojis sent as text.** Emojis picked from the emote picker or
-  autocomplete reached Twitch and YouTube as their name (`:fire:`). They're
-  now sent as the real emoji (🔥).
+- **Custom mod actions:** your actions from Settings → Moderation are now buttons on the user card. They fill in every placeholder, including `{msg.id}`, `{msg.text}` and `{channel.name}`. If you open a card from an @mention or with `/usercard`, actions that use `{msg.*}` are hidden, so they can't act on the wrong message.
+- **Simpler tab header:** the moderation mode shield button is gone, and chat rows no longer carry mod buttons on the right.
 
 Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
 <!-- release-notes:end -->

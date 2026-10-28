@@ -63,17 +63,6 @@ SUPERCHAT_COLOR = QColor("#f6c344")
 MEMBERSHIP_COLOR = QColor("#2ba640")
 CHEER_COLOR = QColor("#9146ff")
 
-# Moderation-mode action buttons (right gutter of eligible rows).
-MOD_BUTTON_H = 16
-MOD_BUTTON_GAP = 3
-MOD_BUTTON_PAD_X = 6
-MOD_FONT_PT = 8.0
-
-# Author badges that exempt a row from moderation buttons (the broadcaster's
-# own rows and moderators').
-PROTECTED_TWITCH_BADGES = {"broadcaster", "moderator", "staff", "admin", "global_mod"}
-PROTECTED_YT_BADGES = {"owner", "moderator"}  # YouTube badges: set_id "yt"
-
 
 def _variant_value(fmt: QTextFormat, prop: int):
     """Read a custom format property; PySide6 may return a QVariant wrapper."""
@@ -142,9 +131,6 @@ class _RowLayout:
     urls: list[str] = field(default_factory=list)
     x_offset: int = 0  # where the document starts (after logo + margins)
     text_center: float = 0.0  # first-line text band center, document coords
-    gutter: int = 0  # right-side reserve for moderation buttons
-    # (x, y, w, h, label) relative to the row rect origin
-    buttons: list[tuple[float, float, float, float, str]] = field(default_factory=list)
     # (resource name "emote://e/N", url) for animated (GIF) emotes — these are
     # re-resolved each frame so the movie keeps playing.
     animated: list[tuple[str, str]] = field(default_factory=list)
@@ -163,14 +149,9 @@ class MessageDelegate(QStyledItemDelegate):
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
         self._settings = settings
-        self._layouts: OrderedDict[tuple[str, int, str, int, int, str], _RowLayout] = OrderedDict()
+        self._layouts: OrderedDict[tuple[str, int, str, int, str], _RowLayout] = OrderedDict()
         self._url_index: dict[str, set[str]] = {}
         self._max_layouts = 2048
-        # Moderation mode (set by ChatView/MainWindow): part of the layout key.
-        self._moderation_enabled = False
-        self._moderation_actions: list[str] = []
-        self._youtube_actions: list[str] = []  # fixed per-row actions on YouTube rows
-        self._mod_version = 0
         theme.theme_notifier.changed.connect(self.clear_cache)
         image_cache.image_ready.connect(self._on_image_ready)
         image_cache.frame_changed.connect(self._on_frame_changed)
@@ -182,49 +163,10 @@ class MessageDelegate(QStyledItemDelegate):
         self._frame_timer.setSingleShot(True)
         self._frame_timer.timeout.connect(self._flush_frames)
 
-    # -- moderation mode ---------------------------------------------------------
-
-    def set_moderation_enabled(self, enabled: bool) -> None:
-        if enabled != self._moderation_enabled:
-            self._moderation_enabled = enabled
-            self._mod_version += 1
-            self._refresh()
-
-    def set_moderation_actions(self, actions: list[str]) -> None:
-        if actions != self._moderation_actions:
-            self._moderation_actions = list(actions)
-            self._mod_version += 1
-
-    def set_youtube_actions(self, actions: list[str]) -> None:
-        """Per-row actions on YouTube rows (Ban/Timeout/Hide — docs/m4.md)."""
-        if actions != self._youtube_actions:
-            self._youtube_actions = list(actions)
-            self._mod_version += 1
-            self._refresh()
-
     def _refresh(self) -> None:
         view = self.parent()
         if view is not None:
             view.viewport().update()
-
-    def _mod_buttons_for(self, msg: Message) -> list[str]:
-        """Action labels for one row: moderation mode ON, regular messages
-        only, skipping the broadcaster's own and moderators' rows. Twitch
-        rows use the configured templates; YouTube rows the fixed set."""
-        if not self._moderation_enabled:
-            return []
-        if msg.is_system or msg.extra.get("self"):
-            return []
-        if msg.author is None:
-            return []
-        for badge in msg.author.badges:
-            if badge.set_id in PROTECTED_TWITCH_BADGES:
-                return []
-            if badge.set_id == "yt" and badge.version_id in PROTECTED_YT_BADGES:
-                return []
-        if msg.platform is Platform.YOUTUBE:
-            return list(self._youtube_actions)
-        return list(self._moderation_actions)
 
     # -- cache management --------------------------------------------------------
 
@@ -279,7 +221,7 @@ class MessageDelegate(QStyledItemDelegate):
                         QTextDocument.ResourceType.ImageResource, QUrl(name), frames[url])
         self._refresh()
 
-    def _cache(self, key: tuple[str, int, str, int, int, str], layout: _RowLayout) -> None:
+    def _cache(self, key: tuple[str, int, str, int, str], layout: _RowLayout) -> None:
         self._layouts[key] = layout
         self._layouts.move_to_end(key)
         for url in layout.urls:
@@ -296,12 +238,12 @@ class MessageDelegate(QStyledItemDelegate):
     # -- layout building ---------------------------------------------------------
 
     def _layout_for(self, msg: Message, width: int, dpr: float) -> _RowLayout:
-        # Flags, the moderation version AND the plain text are part of the
-        # key: DELETED/REPLY/DISABLED change the document, and the "(N times)"
+        # Flags AND the plain text are part of the key: DELETED/REPLY/DISABLED
+        # change the document, and the "(N times)"
         # restack mutates msg.plain in place — a stale cached layout would
         # never repaint the row (dataChanged re-runs paint but _layout_for
         # would hand back the old document).
-        key = (msg.id, width, f"{dpr:.1f}", int(msg.flags), self._mod_version, msg.plain)
+        key = (msg.id, width, f"{dpr:.1f}", int(msg.flags), msg.plain)
         cached = self._layouts.get(key)
         if cached is not None:
             self._layouts.move_to_end(key)
@@ -325,23 +267,6 @@ class MessageDelegate(QStyledItemDelegate):
 
         chip = msg.platform if not msg.is_system else None
         chip_w = LOGO_SIZE + LOGO_GAP if chip is not None else 0
-
-        # Moderation buttons reserve a right gutter.
-        buttons = self._mod_buttons_for(msg)
-        gutter = 0
-        button_rects: list[tuple[float, float, float, float, str]] = []
-        if buttons:
-            mod_font = QFont(app_font)
-            mod_font.setPointSizeF(MOD_FONT_PT)
-            metrics = QFontMetricsF(mod_font)
-            label_w = int(max(metrics.horizontalAdvance(label) for label in buttons))
-            gutter = label_w + 2 * MOD_BUTTON_PAD_X + 2
-            bx = width - gutter + MOD_BUTTON_PAD_X
-            by = ROW_MARGIN_Y + 3
-            for label in buttons:
-                bw = int(metrics.horizontalAdvance(label)) + 2 * MOD_BUTTON_PAD_X
-                button_rects.append((float(bx), float(by), float(bw), float(MOD_BUTTON_H), label))
-                by += MOD_BUTTON_H + MOD_BUTTON_GAP
 
         doc = _EmoteDocument()
         doc.setDocumentMargin(0)
@@ -456,13 +381,10 @@ class MessageDelegate(QStyledItemDelegate):
                     if url:
                         urls.append(url)
 
-        reserved = ROW_MARGIN_X * 2 + chip_w + (ts_width + 8 if ts_width else 0) + gutter
+        reserved = ROW_MARGIN_X * 2 + chip_w + (ts_width + 8 if ts_width else 0)
         text_width = max(10, width - reserved)
         doc.setTextWidth(text_width)
-        buttons_h = (len(buttons) * (MOD_BUTTON_H + MOD_BUTTON_GAP) - MOD_BUTTON_GAP
-                     if buttons else 0)
-        height = max(int(doc.size().height()) + ROW_MARGIN_Y * 2 + 4,
-                     buttons_h + ROW_MARGIN_Y * 2 + 8)
+        height = max(int(doc.size().height()) + ROW_MARGIN_Y * 2 + 4, ROW_MARGIN_Y * 2 + 8)
         # Center of the first line's text band (document coords): the body
         # font's em box centered on the baseline. The chip and timestamp ride
         # on this so they stay on the text line even when a tall emote
@@ -486,8 +408,6 @@ class MessageDelegate(QStyledItemDelegate):
             urls=urls,
             x_offset=ROW_MARGIN_X + chip_w,
             text_center=text_center,
-            gutter=gutter,
-            buttons=button_rects,
             animated=animated,
         )
 
@@ -554,37 +474,23 @@ class MessageDelegate(QStyledItemDelegate):
         painter.translate(rect.x() + layout.x_offset, rect.y() + ROW_MARGIN_Y + 2)
         layout.doc.drawContents(painter)
 
-        # Timestamp right-aligned on the first line (left of the mod gutter)
+        # Timestamp right-aligned on the first line
         if layout.ts_text:
             ts_font = QFont(QApplication.instance().font())
             ts_font.setPointSizeF(max(8.0, ts_font.pointSizeF() - 2.0))
             painter.resetTransform()
             painter.setFont(ts_font)
             painter.setPen(QColor("#8a8a8a"))
-            ts_rect = QRectF(rect.right() - layout.gutter - layout.ts_width - ROW_MARGIN_X - 2,
+            ts_rect = QRectF(rect.right() - layout.ts_width - ROW_MARGIN_X - 2,
                              rect.y() + ROW_MARGIN_Y + 2 + layout.text_center - 8,
                              layout.ts_width, 16)
             painter.drawText(ts_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, layout.ts_text)
 
-        # Moderation action buttons in the right gutter
-        if layout.buttons:
-            mod_font = QFont(QApplication.instance().font())
-            mod_font.setPointSizeF(MOD_FONT_PT)
-            painter.resetTransform()
-            painter.setFont(mod_font)
-            for bx, by, bw, bh, label in layout.buttons:
-                brect = QRectF(rect.x() + bx, rect.y() + by, bw, bh)
-                painter.setPen(QColor("#555555"))
-                painter.setBrush(QColor("#2d2d2d"))
-                painter.drawRoundedRect(brect, 3.0, 3.0)
-                painter.setPen(QColor("#dddddd"))
-                painter.drawText(brect, Qt.AlignmentFlag.AlignCenter, label)
-
         if disabled:
             painter.setOpacity(1.0)
             # The veil must cover the row rect itself: reset the body
-            # translation even when neither the timestamp nor the mod buttons
-            # ran (no timestamps + no buttons leaves the transform active).
+            # translation even when the timestamp didn't (timestamps off
+            # leaves the transform active).
             painter.resetTransform()
             veil = QColor("#141414")
             veil.setAlpha(40)
@@ -602,7 +508,7 @@ class MessageDelegate(QStyledItemDelegate):
             or self._settings.get("highlight_color", "#7a5cff"))
 
     def hit_test(self, index, pos: QPointF, visual_rect) -> tuple[str, str] | None:
-        """Map a viewport click to ("link"|"user"|"emote"|"badge"|"mod", payload) or None."""
+        """Map a viewport click to ("link"|"user"|"emote"|"badge", payload) or None."""
         if not index.isValid():
             return None
         model = index.model()
@@ -611,11 +517,6 @@ class MessageDelegate(QStyledItemDelegate):
             return None
         dpr = self.parent().devicePixelRatioF() if self.parent() else 1.0
         layout = self._layout_for(msg, max(60, visual_rect.width()), dpr)
-        # Moderation buttons sit in the gutter, outside the document.
-        rel = QPointF(pos.x() - visual_rect.x(), pos.y() - visual_rect.y())
-        for bx, by, bw, bh, label in layout.buttons:
-            if bx <= rel.x() <= bx + bw and by <= rel.y() <= by + bh:
-                return ("mod", label)
         local = QPointF(pos.x() - visual_rect.x() - layout.x_offset,
                         pos.y() - visual_rect.y() - ROW_MARGIN_Y - 2)
         if local.x() < 0:

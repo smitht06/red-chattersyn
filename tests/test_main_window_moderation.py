@@ -103,56 +103,29 @@ async def test_clearchat_full_clear_grays_all_rows(win):
     assert "cleared by a moderator" in rows[-1].plain
 
 
-# -- shield gating ------------------------------------------------------------------
+# -- mod rights (gate the user card's moderation actions) ----------------------------
 
 
-async def test_userstate_mod_enables_shield(win):
-    tab = win._tabs[0]
-    assert not tab.header._shield.isEnabled()
+async def test_userstate_mod_grants_rights(win):
+    assert not win._moderation.has_twitch_rights("redcyberdragon29")
     win._on_user_state(UserState(channel="#redcyberdragon29", mod=True, badges=[]))
-    assert tab.header._shield.isEnabled()
+    assert win._moderation.has_twitch_rights("redcyberdragon29")
 
 
-async def test_self_badges_enable_shield(win):
-    tab = win._tabs[0]
+async def test_self_badges_grant_rights(win):
     win._on_user_state(UserState(channel="#redcyberdragon29", mod=False,
                                  badges=[Badge("moderator", "1")]))
-    assert tab.header._shield.isEnabled()
+    assert win._moderation.has_twitch_rights("redcyberdragon29")
 
 
-async def test_youtube_owner_enables_shield(win):
-    tab = win._tabs[0]
-    tab.youtube_live_chat_id = "lc1"
-    win._moderation.set_youtube_owner("lc1", True)
-    win._update_moderation_available(tab)
-    assert tab.header._shield.isEnabled()
-    win._moderation.set_youtube_owner("lc1", False)
-    win._update_moderation_available(tab)
-    assert not tab.header._shield.isEnabled()
-
-
-async def test_shield_toggle_switches_delegate(win):
-    tab = win._tabs[0]
-    win._on_user_state(UserState(channel="#redcyberdragon29", mod=True, badges=[]))
-    tab.header._shield.setChecked(True)  # toggled -> moderation_toggled fires
-    assert tab.view._delegate._moderation_enabled
+async def test_header_has_no_moderation_mode_button(win):
+    """Moderation lives on the user card now; the per-tab shield is gone."""
+    header = win._tabs[0].header
+    assert not hasattr(header, "_shield")
+    assert not hasattr(header, "moderation_toggled")
 
 
 # -- row actions --------------------------------------------------------------------
-
-
-async def test_mod_action_expands_placeholders_and_runs(win, monkeypatch):
-    tab = win._tabs[0]
-    ran = []
-    monkeypatch.setattr(win, "_run_command", lambda t, text: ran.append(text))
-    monkeypatch.setattr(
-        win._settings, "get",
-        lambda key, default=None: ([{"name": "Ban", "template": "/ban {user.name}"}]
-                                   if key == "moderation_actions" else default))
-    tab.view.set_moderation_actions(win._mod_action_names())
-    msg = _tw_msg()
-    win._on_mod_action(tab, msg, "Ban")
-    assert ran == ["/ban Bob"]
 
 
 async def test_delete_requested_youtube_hides_one_row(win):
@@ -177,20 +150,6 @@ async def test_pin_requested_shows_banner(win):
     assert not tab._pin_banner.isHidden()
     tab.unpin()
     assert tab._pin_banner.isHidden()
-
-
-async def test_hide_action_disables_users_rows(win):
-    tab = win._tabs[0]
-    tab.youtube_live_chat_id = "lc1"
-    author = Author("bad", login="bad", user_id="UCbad")
-    tab.add_message(Message.text(Platform.YOUTUBE, "lc1", author, "spam"))
-    tab.add_message(Message.text(Platform.YOUTUBE, "lc1", author, "more"))
-    tab._flush()
-    msg = Message.text(Platform.YOUTUBE, "lc1", author, "spam")
-    win._on_youtube_mod_action(tab, msg, "Hide")
-    tab._flush()
-    rows = [m for m in tab.view.message_model.all_messages() if m.author is not None]
-    assert len(rows) == 2 and all(m.flags & MessageFlags.DISABLED for m in rows)
 
 
 class _FakeYtApi:
@@ -219,7 +178,7 @@ async def win_yt(win):
 async def test_youtube_ban_records_ban_id(win_yt):
     win, tab, api = win_yt
     msg = Message.text(Platform.YOUTUBE, "lc1", Author("bad", login="bad", user_id="UCbad"), "hi")
-    win._on_youtube_mod_action(tab, msg, "Ban")
+    win._on_usercard_action(tab, _yt_target(msg), "/ban bad")
     await asyncio.sleep(0)
     assert api.bans == [("lc1", "UCbad", 0)]
     assert win._moderation.youtube_ban_id("lc1", "UCbad") == "ban-1"
@@ -228,7 +187,7 @@ async def test_youtube_ban_records_ban_id(win_yt):
 async def test_youtube_timeout_is_300s(win_yt):
     win, tab, api = win_yt
     msg = Message.text(Platform.YOUTUBE, "lc1", Author("bad", login="bad", user_id="UCbad"), "hi")
-    win._on_youtube_mod_action(tab, msg, "Timeout")
+    win._on_usercard_action(tab, _yt_target(msg), "/timeout bad 300")
     await asyncio.sleep(0)
     assert api.bans == [("lc1", "UCbad", 300)]
 
@@ -341,25 +300,22 @@ async def test_timeout_expiry_skipped_when_newer_ban_active(win, monkeypatch):
     assert all(m.flags & MessageFlags.DISABLED for m in rows)
 
 
-# -- shield re-evaluation -------------------------------------------------------------
+# -- rights re-evaluation -------------------------------------------------------------
 
 
-async def test_userstate_demotion_disables_shield(win):
-    tab = win._tabs[0]
+async def test_userstate_demotion_revokes_rights(win):
     win._on_user_state(UserState(channel="#redcyberdragon29", mod=True, badges=[]))
-    assert tab.header._shield.isEnabled()
-    tab.header._shield.setChecked(True)
+    assert win._moderation.has_twitch_rights("redcyberdragon29")
     win._on_user_state(UserState(channel="#redcyberdragon29", mod=False, badges=[]))
-    assert not tab.header._shield.isEnabled()
-    assert not tab.header._shield.isChecked()
+    assert not win._moderation.has_twitch_rights("redcyberdragon29")
 
 
-async def test_tab_readd_reevaluates_shield(win):
+async def test_tab_readd_keeps_cached_rights(win):
     win._on_user_state(UserState(channel="#redcyberdragon29", mod=True, badges=[]))
     win._close_tab(0)
-    tab = win.add_tab("redcyberdragon29", None)
+    win.add_tab("redcyberdragon29", None)
     win._feeds[-1].stop()
-    assert tab.header._shield.isEnabled()  # cached ModerationState still grants rights
+    assert win._moderation.has_twitch_rights("redcyberdragon29")
 
 
 # -- YouTube ownership / lifecycle ----------------------------------------------------
@@ -376,7 +332,6 @@ async def test_youtube_live_event_records_ownership(win):
         watch_key=tab.tab_key, state=WatchState.LIVE,
         live_chat_id="lc1", channel_id="UCme", title="own stream"))
     assert win._moderation.has_youtube_rights("lc1") is True
-    assert tab.header._shield.isEnabled()
 
 
 async def test_youtube_ended_clears_stale_live_chat_id(win):
@@ -384,12 +339,9 @@ async def test_youtube_ended_clears_stale_live_chat_id(win):
     tab.youtube_live_chat_id = "lc1"
     win._moderation.set_youtube_owner("lc1", True)
     win._moderation.remember_youtube_ban("lc1", "UCbad", "ban-1")
-    win._update_moderation_available(tab)
-    assert tab.header._shield.isEnabled()
     win._on_youtube_state(YoutubeState(
         watch_key=tab.tab_key, state=WatchState.ENDED))
     assert tab.youtube_live_chat_id == ""
-    assert not tab.header._shield.isEnabled()
     assert not win._moderation.has_youtube_rights("lc1")
     assert win._moderation.youtube_ban_id("lc1", "UCbad") is None
 
@@ -400,7 +352,7 @@ async def test_youtube_ban_success_adds_no_rows(win_yt):
     win, tab, api = win_yt
     msg = Message.text(Platform.YOUTUBE, "lc1", Author("bad", login="bad", user_id="UCbad"), "hi")
     before = len(tab.view.message_model.all_messages())
-    win._on_youtube_mod_action(tab, msg, "Ban")
+    win._on_usercard_action(tab, _yt_target(msg), "/ban bad")
     await asyncio.sleep(0)
     assert api.bans == [("lc1", "UCbad", 0)]
     assert len(tab.view.message_model.all_messages()) == before
@@ -631,12 +583,9 @@ async def test_youtube_unavailable_forgets_live_chat(win):
     tab.youtube_live_chat_id = "lc1"
     win._moderation.set_youtube_owner("lc1", True)
     win._moderation.remember_youtube_ban("lc1", "UCbad", "ban-1")
-    win._update_moderation_available(tab)
-    assert tab.header._shield.isEnabled()
     win._on_youtube_state(YoutubeState(
         watch_key=tab.tab_key, state=WatchState.UNAVAILABLE, detail="ended"))
     assert tab.youtube_live_chat_id == ""
-    assert not tab.header._shield.isEnabled()
     assert not win._moderation.has_youtube_rights("lc1")
     assert win._moderation.youtube_ban_id("lc1", "UCbad") is None
 
@@ -644,16 +593,13 @@ async def test_youtube_unavailable_forgets_live_chat(win):
 async def test_youtube_not_found_forgets_stale_live_chat(win):
     """Hardening: a NOT_FOUND re-resolve that skipped ENDED (exception
     bypass in the watch loop) must still drop the dead chat id instead of
-    keeping the shield on for a chat that no longer exists."""
+    offering mod actions for a chat that no longer exists."""
     tab = win._tabs[0]
     tab.youtube_live_chat_id = "lc1"
     win._moderation.set_youtube_owner("lc1", True)
-    win._update_moderation_available(tab)
-    assert tab.header._shield.isEnabled()
     win._on_youtube_state(YoutubeState(
         watch_key=tab.tab_key, state=WatchState.NOT_FOUND))
     assert tab.youtube_live_chat_id == ""
-    assert not tab.header._shield.isEnabled()
     assert not win._moderation.has_youtube_rights("lc1")
 
 
@@ -701,24 +647,6 @@ async def test_usercard_delete_uses_rows_chat_id_after_clear(win):
     tab._flush()
     rows = [m for m in tab.view.message_model.all_messages() if m.author is not None]
     assert rows and all(m.flags & MessageFlags.DISABLED for m in rows)
-    assert "hid Bad" in _system_rows(win)[-1].plain
-
-
-async def test_hide_button_uses_rows_chat_id_after_clear(win):
-    """Per-row Hide targets the chat the row came from: rows survive a
-    UNAVAILABLE/ENDED that clears the tab id, and the local hide must keep
-    working (before, it matched 0 rows and claimed success anyway)."""
-    tab = win._tabs[0]
-    tab.youtube_live_chat_id = "lc1"
-    author = Author("Bad", login="bad", user_id="UCbad")
-    tab.add_message(Message.text(Platform.YOUTUBE, "lc1", author, "spam"))
-    tab._flush()
-    msg = Message.text(Platform.YOUTUBE, "lc1", author, "spam")
-    tab.youtube_live_chat_id = ""
-    win._on_youtube_mod_action(tab, msg, "Hide")
-    tab._flush()
-    rows = [m for m in tab.view.message_model.all_messages() if m.author is not None]
-    assert len(rows) == 1 and all(m.flags & MessageFlags.DISABLED for m in rows)
     assert "hid Bad" in _system_rows(win)[-1].plain
 
 
@@ -889,3 +817,54 @@ async def test_twitch_ban_failure_and_unknown_user_reported(win):
     assert [m.plain for m in _system_rows(win)[-2:]] == [
         "Twitch ban failed: already banned",
         "No Twitch user named ghost — timeout not sent."]
+
+
+
+def _yt_target(msg):
+    return UsercardTarget(Platform.YOUTUBE, msg.author.login, msg.author.name,
+                          user_id=msg.author.user_id, channel_id=msg.channel_id)
+
+
+# -- user card custom actions -------------------------------------------------------
+
+
+def _with_actions(win, monkeypatch, actions):
+    real_get = win._settings.get
+    monkeypatch.setattr(win._settings, "get", lambda key, default=None: (
+        actions if key == "moderation_actions" else real_get(key, default)))
+
+
+async def test_usercard_custom_actions_expand_message_placeholders(win, monkeypatch):
+    """The card took over the old per-row buttons: templates get the full
+    placeholder set, {msg.*} from the row the card was opened from."""
+    _with_actions(win, monkeypatch, [
+        {"name": "Purge", "template": "/timeout {user.login} 1"},
+        {"name": "Delete msg", "template": "/delete {msg.id}"},
+        {"name": "Quote", "template": "/announce {user.name} said: {msg.text} in {channel.name}"},
+    ])
+    tab = win._tabs[0]
+    msg = _tw_msg()
+    target = UsercardTarget(Platform.TWITCH, "bob", "Bob")
+    actions = win._usercard_custom_actions(tab, msg, target)
+    assert actions == [
+        {"name": "Purge", "template": "/timeout bob 1"},
+        {"name": "Delete msg", "template": f"/delete {msg.id}"},
+        {"name": "Quote", "template": "/announce Bob said: hello in redcyberdragon29"},
+    ]
+
+
+async def test_usercard_drops_message_actions_without_targets_message(win, monkeypatch):
+    """Opened from an @mention in someone else's message (or a /usercard with
+    no rows): {msg.*} would point at the wrong message, so those are left out."""
+    _with_actions(win, monkeypatch, [
+        {"name": "Purge", "template": "/timeout {user.login} 1"},
+        {"name": "Delete msg", "template": "/delete {msg.id}"},
+    ])
+    tab = win._tabs[0]
+    target = UsercardTarget(Platform.TWITCH, "bob", "Bob")
+    mention_row = _tw_msg(login="alice", name="Alice")  # Alice's row mentioning Bob
+    assert win._usercard_custom_actions(tab, mention_row, target) == [
+        {"name": "Purge", "template": "/timeout bob 1"}]
+    synthetic = _tw_msg()
+    synthetic.extra["synthetic"] = True
+    assert [a["name"] for a in win._usercard_custom_actions(tab, synthetic, target)] == ["Purge"]

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import qasync
 from PySide6.QtCore import QCoreApplication, QStandardPaths
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .config.paths import cache_dir, config_dir
@@ -28,6 +29,17 @@ log = logging.getLogger("chattersyn")
 # the user's files over once. Keyring entries are unaffected (service name
 # "red-chattersyn" did not change).
 _LEGACY_ORG = "ChatterSync"
+
+# Rendered from packaging/icon.svg by scripts/replace_logo.py (/replace-logo).
+ICON_PATH = Path(__file__).resolve().parent / "assets" / "icon.png"
+
+
+def _apply_window_icon(app: QApplication) -> None:
+    # A frozen macOS .app already shows its bundle icon (icon.icns, every size
+    # up to 1024 px) in the Dock, and setting one here would replace it.
+    if sys.platform == "darwin" and getattr(sys, "frozen", False):
+        return
+    app.setWindowIcon(QIcon(str(ICON_PATH)))
 
 
 def _migrate_legacy_config(old_dir: Path, new_dir: Path) -> None:
@@ -117,6 +129,7 @@ def run(argv: list[str] | None = None) -> int:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     app = QApplication.instance() or QApplication(sys.argv[:1] if argv else sys.argv)
+    _apply_window_icon(app)
     new_dir = Path(QStandardPaths.writableLocation(
         QStandardPaths.StandardLocation.AppConfigLocation))
     QCoreApplication.setOrganizationName(_LEGACY_ORG)  # resolve the old dir…

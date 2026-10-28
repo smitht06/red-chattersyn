@@ -33,7 +33,6 @@ class Tab(QWidget):
     reply_cancelled = Signal()
     offer_accept = Signal()  # user clicked "Send to X only"
     offer_edit = Signal()    # user clicked "Edit" on a blocked send
-    mod_action_requested = Signal(object, str)  # Message, action name
     delete_requested = Signal(object)           # Message
     pin_requested = Signal(object)              # Message
 
@@ -207,18 +206,6 @@ class Tab(QWidget):
         for view in self._all_views():
             view.refresh_visuals()
 
-    def set_moderation_enabled(self, enabled: bool) -> None:
-        for view in self._all_views():
-            view.set_moderation_enabled(enabled)
-
-    def set_moderation_actions(self, actions: list[str]) -> None:
-        for view in self._all_views():
-            view.set_moderation_actions(actions)
-
-    def set_youtube_actions(self, actions: list[str]) -> None:
-        for view in self._all_views():
-            view.set_youtube_actions(actions)
-
     def scroll_to_message(self, msg_id: str) -> None:
         """Center a message in whichever pane holds it (search "Go to message")."""
         for view in self._all_views():
@@ -233,7 +220,6 @@ class Tab(QWidget):
         view.usercard_requested.connect(self.usercard_requested)
         view.reply_requested.connect(self.reply_requested)
         view.search_requested.connect(self.search_requested)
-        view.mod_action_requested.connect(self.mod_action_requested)
         view.delete_requested.connect(self.delete_requested)
         view.pin_requested.connect(self.pin_requested)
 

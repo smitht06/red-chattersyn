@@ -8,8 +8,8 @@ Endpoints used (verified against the discovery document, 2026-10-15):
   search.list              1 unit      100 calls/day separate bucket
   liveChatMessages.list    5 units     REST fallback reader
   liveChatMessages.insert  20 units    send
-  liveChatBans.insert      50 units    ban (moderation mode)
-  liveChatBans.delete      50 units    unban (moderation mode)
+  liveChatBans.insert      50 units    ban (user card)
+  liveChatBans.delete      50 units    unban (user card)
 
 All live chat methods are OAuth-only (API keys are rejected). The default
 project quota is 10,000 units/day; the tracker below is approximate (a single

@@ -137,12 +137,6 @@ async def test_apply_settings_propagates_scrollback_and_scale(win):
     assert win._tabs[0].view.message_model.max_messages == 500
 
 
-async def test_apply_settings_updates_moderation_action_names(win):
-    win._settings.set("moderation_actions", [{"name": "Ban", "template": "/ban {user.name}"}])
-    win._apply_settings()
-    assert win._mod_action_names() == ["Ban"]
-
-
 # -- open settings dialog plumbing ---------------------------------------------------------
 
 

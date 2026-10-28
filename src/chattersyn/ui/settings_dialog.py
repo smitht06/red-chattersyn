@@ -614,9 +614,14 @@ class SettingsDialog(QDialog):
         layout.addLayout(self._table_buttons(
             self._moderation_table, self._add_moderation_action,
             self._edit_moderation_action))
-        layout.addWidget(QLabel(
-            "Placeholders: {user.name}, {user.login}, {msg.id}, {msg.text}, "
-            "{channel.name}", page))
+        hint = QLabel(
+            "These appear as buttons on a user's card (click their name) when "
+            "you can moderate the channel. Placeholders: {user.name}, "
+            "{user.login}, {channel.name}, {msg.id}, {msg.text}. Actions using "
+            "{msg.*} only show when the card was opened from that user's "
+            "message.", page)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
         self._reload_moderation_table()
         return page
 

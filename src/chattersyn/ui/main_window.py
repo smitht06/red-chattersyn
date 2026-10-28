@@ -390,7 +390,6 @@ class MainWindow(QMainWindow):
             # Existing models trim to the new cap on their next flush; new
             # tabs read the setting at construction.
             tab.view.message_model.max_messages = scrollback
-            tab.set_moderation_actions(self._mod_action_names())
         self._rebind_hotkeys()
         if self._demo:
             return
@@ -738,9 +737,6 @@ class MainWindow(QMainWindow):
         author = self._twitch.self_author() if self._twitch is not None else None
         if author is not None:
             self._moderation.set_self_identity(author.name)
-        for tab in self._tabs:
-            if tab.twitch_channel == channel:
-                self._update_moderation_available(tab)
 
     def _on_youtube_state(self, event: YoutubeState) -> None:
         tab = self._tab_by_key(event.watch_key)
@@ -756,7 +752,7 @@ class MainWindow(QMainWindow):
         if state is WatchState.LIVE:
             if self._youtube is not None and event.live_chat_id and event.channel_id:
                 if self._youtube.self_channel_id():
-                    # Ownership known: record it (shield/usercard gating).
+                    # Ownership known: record it (user card mod actions).
                     self._moderation.set_youtube_owner(
                         event.live_chat_id,
                         self._youtube.owns_channel(event.channel_id))
@@ -826,26 +822,16 @@ class MainWindow(QMainWindow):
                 and tab.youtube_live_chat_id):
             # Every non-live resolution state means the old live chat is
             # gone: drop the dead id, its ownership entry and the ban-id
-            # memory so Ban/Unban/Hide stop targeting it (and the shield
-            # switches off during the re-resolve gap). NOT_FOUND/OFFLINE/
+            # memory so Ban/Unban/Hide stop targeting it (and user cards
+            # stop offering them during the re-resolve gap). NOT_FOUND/OFFLINE/
             # UPCOMING are normally unreachable with a live id (ENDED/
             # UNAVAILABLE always precede them) but guard the exception
             # bypass in the watch loop. QUOTA_EXHAUSTED/AUTH_REQUIRED keep
             # the id — the chat is still alive, just unwatchable.
             self._moderation.forget_youtube_chat(tab.youtube_live_chat_id)
             tab.youtube_live_chat_id = ""
-        self._update_moderation_available(tab)
 
-    # -- moderation mode ---------------------------------------------------------------
-
-    def _update_moderation_available(self, tab: Tab) -> None:
-        """Shield available when the connected account has rights on either
-        platform of the pair (docs/m4.md: YT ownership unknown -> hidden)."""
-        twitch = bool(tab.twitch_channel) and self._moderation.has_twitch_rights(
-            tab.twitch_channel)
-        youtube = bool(tab.youtube_live_chat_id) and self._moderation.has_youtube_rights(
-            tab.youtube_live_chat_id)
-        tab.header.set_moderation_available(twitch or youtube)
+    # -- moderation rights (user card mod actions) ------------------------------------
 
     def _refresh_youtube_ownership(self) -> None:
         """Re-run the owner check once the connected identity is known
@@ -857,7 +843,6 @@ class MainWindow(QMainWindow):
                 self._moderation.set_youtube_owner(
                     tab.youtube_live_chat_id,
                     self._youtube.owns_channel(tab.youtube_channel_id))
-                self._update_moderation_available(tab)
 
     async def _retry_identity(self) -> None:
         """Identity fetch failed at startup: retry until it resolves (or the
@@ -873,67 +858,9 @@ class MainWindow(QMainWindow):
                 return
             await asyncio.sleep(IDENTITY_RETRY_SECONDS)
 
-    def _on_moderation_toggled(self, tab: Tab, enabled: bool) -> None:
-        tab.set_moderation_enabled(enabled)
-
     def _on_side_by_side_toggled(self, tab: Tab, enabled: bool) -> None:
         tab.set_side_by_side(enabled)
         self._save_tabs()
-
-    def _mod_action_names(self) -> list[str]:
-        """Configured moderation-action labels (settings moderation_actions)."""
-        names: list[str] = []
-        for entry in self._settings.get("moderation_actions", []) or []:
-            if isinstance(entry, dict) and entry.get("name"):
-                names.append(str(entry["name"]))
-        return names
-
-    def _mod_template(self, action: str) -> str | None:
-        for entry in self._settings.get("moderation_actions", []) or []:
-            if isinstance(entry, dict) and entry.get("name") == action:
-                return str(entry.get("template") or "")
-        return None
-
-    def _on_mod_action(self, tab: Tab, msg: Message, action: str) -> None:
-        """Per-row button: Twitch expands the configured template and runs it
-        through the command controller; YouTube uses its fixed action set."""
-        if msg.platform is Platform.YOUTUBE:
-            self._on_youtube_mod_action(tab, msg, action)
-            return
-        template = self._mod_template(action)
-        if template is None or msg.author is None:
-            return
-        try:
-            text = expand_placeholders(template, [], {
-                "user.name": msg.author.name,
-                "user.login": msg.author.login,
-                "msg.id": msg.id,
-                "msg.text": msg.plain,
-                "channel.name": tab.twitch_channel,
-            })
-        except Exception:
-            return
-        if text.strip():
-            self._run_command(tab, text)
-
-    def _on_youtube_mod_action(self, tab: Tab, msg: Message, action: str) -> None:
-        """Per-row YouTube buttons: server Ban / fixed 300s Timeout / local Hide."""
-        if msg.author is None or msg.is_system:
-            return
-        channel_id = msg.author.user_id
-        if not channel_id:
-            self._yt_note(tab, f"no channel id recorded for {msg.author.name} — action skipped")
-            return
-        if action == "Ban":
-            asyncio.ensure_future(self._yt_ban(tab, channel_id))
-        elif action == "Timeout":
-            asyncio.ensure_future(self._yt_ban(tab, channel_id, duration=300))
-        elif action == "Hide":
-            # The chat the row came from, not the tab's current id: rows
-            # survive a UNAVAILABLE/ENDED that clears the tab id, and hiding
-            # them locally must keep working.
-            self._yt_hide_user(tab, msg.channel_id or tab.youtube_live_chat_id,
-                               msg.author.login, msg.author.name)
 
     async def _yt_ban(self, tab: Tab, channel_id: str, duration: int = 0) -> None:
         """liveChatBans.insert (permanent, or `duration` seconds). The ban id
@@ -1013,10 +940,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{platform}: {detail}")
         if platform == "youtube":
             # The service cleared the identity — drop every recorded
-            # ownership entry or the shield would keep stale mine=True rows.
+            # ownership entry or user cards would keep offering mod actions.
             self._moderation.clear_youtube_ownership()
             for tab in self._tabs:
-                self._update_moderation_available(tab)
                 tab.header.set_youtube_send_enabled(False, detail)
         for tab in self._tabs:
             tab.add_message(Message.system(
@@ -1268,6 +1194,7 @@ class MainWindow(QMainWindow):
             else:
                 msg = Message.text(Platform.TWITCH, tab.twitch_channel,
                                    Author(name=login, login=login), "")
+            msg.extra["synthetic"] = True  # no real row: no {msg.*} actions
         self._show_usercard(msg, login)
 
     def _find_last_from(self, tab: Tab, login: str) -> Message | None:
@@ -1477,17 +1404,11 @@ class MainWindow(QMainWindow):
         tab.offer_edit.connect(tab.input.focus_input)
         tab.header.send_toggle_changed.connect(
             functools.partial(self._on_send_toggle, tab))
-        tab.header.moderation_toggled.connect(
-            functools.partial(self._on_moderation_toggled, tab))
         tab.header.side_by_side_toggled.connect(
             functools.partial(self._on_side_by_side_toggled, tab))
-        tab.mod_action_requested.connect(functools.partial(self._on_mod_action, tab))
         tab.delete_requested.connect(functools.partial(self._on_delete_requested, tab))
         tab.pin_requested.connect(functools.partial(self._on_pin_requested, tab))
-        tab.set_moderation_actions(self._mod_action_names())
-        tab.set_youtube_actions(["Ban", "Timeout", "Hide"])
         tab.set_side_by_side(side_by_side)
-        self._update_moderation_available(tab)
         # Replay the cached chat-mode label: an already-joined channel gets
         # no fresh ROOMSTATE (the join is a no-op), but the header must
         # still show the current modes.
@@ -1705,7 +1626,7 @@ class MainWindow(QMainWindow):
         popup = UsercardPopup(
             self._settings, target, recent, parent=self,
             self_is_mod=self_is_mod,
-            custom_actions=self._settings.get("moderation_actions", []),
+            custom_actions=self._usercard_custom_actions(tab, msg, target),
         )
         popup.action_requested.connect(
             functools.partial(self._on_usercard_action, tab, target))
@@ -1713,6 +1634,39 @@ class MainWindow(QMainWindow):
         self._usercard_popup = popup
         popup.show_at_cursor()
         asyncio.ensure_future(self._enrich_usercard(popup, target))
+
+    def _usercard_custom_actions(self, tab: Tab, msg: Message,
+                                 target: UsercardTarget) -> list[dict]:
+        """Settings → Moderation templates, fully expanded for this card
+        ({user.*}, {channel.name}, and {msg.id}/{msg.text} from the row the
+        card was opened from). Templates that need a message are left out
+        when there is no real message from the target (an @mention click, or
+        a /usercard with nothing in the scrollback) — they'd act on the wrong
+        message or an empty id."""
+        own_message = (msg.author is not None and not msg.is_system
+                       and not msg.extra.get("synthetic")
+                       and (msg.author.login or "").lower() == target.login)
+        variables = {
+            "user.name": target.display_name,
+            "user.login": target.login,
+            "msg.id": msg.id if own_message else "",
+            "msg.text": msg.plain if own_message else "",
+            "channel.name": tab.twitch_channel,
+        }
+        actions: list[dict] = []
+        for entry in self._settings.get("moderation_actions", []) or []:
+            if not isinstance(entry, dict) or not entry.get("name"):
+                continue
+            template = str(entry.get("template") or "")
+            if "{msg." in template and not own_message:
+                continue
+            try:
+                text = expand_placeholders(template, [], variables)
+            except Exception:
+                continue
+            if text.strip():
+                actions.append({"name": str(entry["name"]), "template": text})
+        return actions
 
     def _on_usercard_action(self, tab: Tab, target: UsercardTarget, text: str) -> None:
         if target.platform is Platform.TWITCH:
