@@ -271,10 +271,16 @@ shows the "YouTube auth required" placeholder until you authorize.
 ## Settings
 
 **Settings → Accounts** and the other pages — General (theme, UI scale,
-scrollback, timestamps, tab restore), Commands, Highlights, Moderation,
-Notifications, Hotkeys, About — persist to `settings.json`
+scrollback, timestamps, tab restore, chat logs), Commands, Highlights,
+Moderation, Notifications, Hotkeys, About — persist to `settings.json`
 (macOS: `~/Library/Preferences/ChatterSyn/chattersyn/`). Secrets live in the
 OS keychain. Unhandled errors append to `crash.log` in the same directory.
+
+Chat logs (on by default; Settings → General) are one text file per channel
+per day in `logs/` next to `settings.json`. YouTube chat logs are deleted after
+30 days, as YouTube's API policies require; Twitch logs are kept. The app's own
+diagnostic log, with tokens and keys redacted, is under Settings → About →
+Open Diagnostic Log Folder.
 
 ## Development
 

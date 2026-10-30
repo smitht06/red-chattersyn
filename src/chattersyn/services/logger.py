@@ -57,6 +57,35 @@ def format_timestamp(ts: dt.datetime, fmt: str) -> str:
     return out
 
 
+# YouTube API Services policy: YouTube data may not be kept for more than 30
+# days, so YouTube chat logs are deleted at that age; Twitch logs are kept.
+YOUTUBE_LOG_DAYS = 30
+
+
+def logs_root(settings: Settings) -> Path:
+    """The chat log folder: Settings' logging.path, else config_dir()/logs."""
+    configured = str(settings.get("logging.path", "") or "").strip()
+    return Path(configured) if configured else config_dir() / "logs"
+
+
+def prune_youtube_logs(root: Path, today: dt.date, keep_days: int = YOUTUBE_LOG_DAYS) -> int:
+    """Delete YouTube chat log files more than ``keep_days`` old (by the date in
+    their name). Returns how many were removed."""
+    cutoff = today - dt.timedelta(days=keep_days)
+    removed = 0
+    for path in root.glob("youtube-*/*.log"):
+        try:
+            day = dt.date.fromisoformat(path.stem)
+        except ValueError:
+            continue  # not one of the logger's daily files
+        if day < cutoff:
+            with contextlib.suppress(OSError):
+                path.unlink()
+                removed += 1
+                path.parent.rmdir()  # only succeeds once the folder is empty
+    return removed
+
+
 class ChatLogger:
     """Writes every bridge message to its channel's daily log file."""
 
@@ -70,12 +99,13 @@ class ChatLogger:
 
     @property
     def logs_root(self) -> Path:
-        configured = str(self._settings.get("logging.path", "") or "").strip()
-        if configured:
-            return Path(configured)
-        return config_dir() / "logs"
+        return logs_root(self._settings)
 
     def start(self) -> None:
+        removed = prune_youtube_logs(self.logs_root, dt.date.fromisoformat(self._today()))
+        if removed:
+            log.info("deleted %d YouTube chat log files older than %d days",
+                     removed, YOUTUBE_LOG_DAYS)
         self._conn = bridge.message.connect(self._on_message)
         self._writer_task = asyncio.ensure_future(self._writer())
 

@@ -71,6 +71,14 @@ def test_files_that_are_not_svg_are_refused(tmp_path):
     assert data is None and report.errors[0].startswith("not valid SVG")
 
 
+def test_svg_tag_after_256_bytes_is_refused(tmp_path):
+    # A long leading comment hid <svg from MIME sniffing: appstream then
+    # failed the Flatpak build with "Unrecognized image file format".
+    late = '<?xml version="1.0" encoding="UTF-8"?>\n<!-- ' + "x" * 300 + " -->\n" + CIRCLE
+    report, _ = check(_write(tmp_path, late))
+    assert "first 256 bytes" in report.errors[0]
+
+
 def test_text_outside_files_and_scripts_are_errors(tmp_path):
     svg = ('<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" '
            'viewBox="0 0 100 100"><text x="10" y="50">Hi</text>'

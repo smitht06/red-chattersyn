@@ -8,7 +8,24 @@ import pytest
 from chattersyn.config.settings import Settings
 from chattersyn.core.bus import bridge
 from chattersyn.models.message import Author, Message, Platform
-from chattersyn.services.logger import ChatLogger, log_channel_key
+from chattersyn.services.logger import ChatLogger, log_channel_key, prune_youtube_logs
+
+
+def test_youtube_logs_older_than_30_days_are_deleted_twitch_logs_kept(tmp_path):
+    for rel in ("youtube-vid1/2026-09-28.log",   # 31 days old: deleted
+                "youtube-vid1/2026-09-29.log",   # exactly 30 days: kept
+                "youtube-vid2/2026-08-01.log",   # deleted, then its empty folder
+                "twitch-forsen/2026-01-01.log",  # Twitch: never pruned
+                "youtube-vid1/notes.txt"):        # not a daily log: left alone
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x")
+    assert prune_youtube_logs(tmp_path, dt.date(2026, 10, 29)) == 2
+    assert not (tmp_path / "youtube-vid1/2026-09-28.log").exists()
+    assert (tmp_path / "youtube-vid1/2026-09-29.log").exists()
+    assert not (tmp_path / "youtube-vid2").exists()
+    assert (tmp_path / "twitch-forsen/2026-01-01.log").exists()
+    assert (tmp_path / "youtube-vid1/notes.txt").exists()
 
 
 def _msg(**kwargs):

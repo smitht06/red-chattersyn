@@ -5,8 +5,10 @@ import json
 import pytest
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QKeyEvent
-from PySide6.QtWidgets import QDialog, QLineEdit, QTableWidgetItem
+from PySide6.QtWidgets import QDialog, QLabel, QLineEdit, QPushButton, QTableWidgetItem
 
+from chattersyn import version
+from chattersyn.config import links
 from chattersyn.config.settings import Settings
 from chattersyn.ui.settings_dialog import (
     HOTKEY_DEFAULTS,
@@ -35,6 +37,16 @@ def test_dialog_builds_all_pages(qapp, tmp_path):
     assert dialog._nav.item(0).text() == "General"
     assert dialog._nav.item(3).text() == "Emotes"
     assert dialog._nav.item(8).text() == "About"
+
+
+def test_about_page_shows_the_running_version_and_required_links(qapp, tmp_path):
+    page = _dialog(Settings({}), tmp_path)._stack.widget(8)
+    text = " ".join(label.text() for label in page.findChildren(QLabel))
+    assert f"ChatterSyn {version()}" in text  # was a stale hard-coded 0.1.0
+    for url in (links.PRIVACY_POLICY, links.TERMS, links.YOUTUBE_TERMS,
+                links.GOOGLE_PRIVACY, links.GOOGLE_CONNECTIONS):
+        assert url in text
+    assert "Open Diagnostic Log Folder" in [b.text() for b in page.findChildren(QPushButton)]
 
 
 def test_nav_row_switches_stack_page(qapp, tmp_path):
@@ -149,6 +161,8 @@ def test_accept_writes_general_and_accounts(qapp, tmp_path, settings_path):
     dialog._restore_tabs.setChecked(False)
     assert dialog._badges.isChecked()  # badges default on
     dialog._badges.setChecked(False)
+    assert dialog._chat_logs.isChecked()  # chat logs default on
+    dialog._chat_logs.setChecked(False)
     dialog._api_key.setText("new-key")
     dialog.accept()
     data = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -157,6 +171,7 @@ def test_accept_writes_general_and_accounts(qapp, tmp_path, settings_path):
     assert data["scrollback"] == 500
     assert data["general"]["restore_tabs"] is False
     assert data["badges"]["enabled"] is False
+    assert data["logging"]["enabled"] is False
     # Twitch has no credential fields anymore: sign-in is the browser flow
     # with the baked-in client ID, so the dialog writes nothing for Twitch
     # (the file only carries the default, an advanced manual override slot).

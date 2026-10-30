@@ -12,6 +12,9 @@ scope covers read + send. REST live chat endpoints do NOT accept API keys.
 Google Cloud projects in "Testing" publishing status issue refresh tokens
 that expire after 7 days -> RefreshError (invalid_grant) means the user must
 re-consent; we clear the stored token and surface an auth_state event.
+
+The client is ChatterSyn's own built-in one unless the user loaded their own
+client_secrets.json (Settings → Accounts → Use Own Google Client…), which wins.
 """
 
 from __future__ import annotations
@@ -33,6 +36,27 @@ log = logging.getLogger(__name__)
 SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"
 CLIENT_SECRETS_KEY = "youtube_client_secrets"  # dict(installed: {...}) JSON
 TOKEN_KEY = "youtube_token"  # Credentials.to_json() blob
+
+# ChatterSyn's own Google OAuth client ("Desktop app" type), the counterpart of
+# DEFAULT_TWITCH_CLIENT_ID. Google does not treat an installed app's client
+# secret as confidential (every copy of the app carries it), so it is committed
+# here on purpose: the one exception to the repo's no-secrets rule. While these
+# are empty, users bring their own client_secrets.json as before.
+BUILTIN_CLIENT_ID = ""
+BUILTIN_CLIENT_SECRET = ""
+
+
+def builtin_client_config() -> dict | None:
+    """The built-in client in client_secrets.json shape, or None if unset."""
+    if not (BUILTIN_CLIENT_ID and BUILTIN_CLIENT_SECRET):
+        return None
+    return {"installed": {
+        "client_id": BUILTIN_CLIENT_ID,
+        "client_secret": BUILTIN_CLIENT_SECRET,
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "redirect_uris": ["http://localhost"],
+    }}
 
 # Shown in the browser after a successful exchange.
 OK_PAGE = (
@@ -62,7 +86,14 @@ class YouTubeAuth:
     # -- setup ----------------------------------------------------------------------
 
     def configured(self) -> bool:
+        """A client is available: the user's own, or the built-in one."""
         return self._load_client_secrets()
+
+    def uses_builtin_client(self) -> bool:
+        # Compares the already-loaded client: no second keyring read (on an
+        # ad-hoc-signed macOS build each read can mean a Keychain prompt).
+        builtin = builtin_client_config()
+        return builtin is not None and self._load_client_secrets() and self._client_secrets == builtin
 
     def set_client_secrets(self, client_secrets: dict) -> None:
         """Persist a client_secrets.json dict (from the GCloud console download)."""
@@ -77,20 +108,23 @@ class YouTubeAuth:
         log.info("YouTube client secrets stored")
 
     def _load_client_secrets(self) -> bool:
-        if self._client_secrets is not None:
-            return True
+        if self._client_secrets is None:
+            self._client_secrets = self._own_client_secrets() or builtin_client_config()
+        return self._client_secrets is not None
+
+    def _own_client_secrets(self) -> dict | None:
+        """The user's stored client_secrets.json, if any (and valid)."""
         blob = self._secrets.get(CLIENT_SECRETS_KEY)
         if not blob:
-            return False
+            return None
         try:
             data = json.loads(blob)
             if "installed" not in data and "web" not in data:
                 raise ValueError("missing installed/web section")
         except (json.JSONDecodeError, ValueError) as exc:
             log.warning("stored client_secrets invalid: %s", exc)
-            return False
-        self._client_secrets = data
-        return True
+            return None
+        return data
 
     # -- token lifecycle --------------------------------------------------------------
 

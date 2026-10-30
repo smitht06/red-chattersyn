@@ -5,7 +5,14 @@ import sys
 
 from PySide6.QtGui import QIcon
 
-from chattersyn.app import _apply_window_icon, _migrate_legacy_config
+from chattersyn.app import _apply_window_icon, _desktop_file_name, _migrate_legacy_config
+
+
+def test_desktop_file_name_matches_the_installed_desktop_entry(monkeypatch):
+    monkeypatch.delenv("FLATPAK_ID", raising=False)
+    assert _desktop_file_name() == "chattersyn"  # the .deb's chattersyn.desktop
+    monkeypatch.setenv("FLATPAK_ID", "net.redcyberdragon.ChatterSyn")
+    assert _desktop_file_name() == "net.redcyberdragon.ChatterSyn"
 
 
 def test_migrate_copies_settings_and_secrets(tmp_path):

@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata, read by Flathub, GNOME Software and KDE Discover.
+     Installed by the Flatpak (packaging/flatpak/); the app ID is permanent. -->
+<component type="desktop-application">
+  <id>net.redcyberdragon.ChatterSyn</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>BSD-3-Clause</project_license>
+
+  <name>ChatterSyn</name>
+  <summary>Twitch and YouTube live chat in one window</summary>
+  <developer id="net.redcyberdragon">
+    <name>RedCyberDragon</name>
+  </developer>
+
+  <description>
+    <p>
+      ChatterSyn is a Chatterino-style chat client that shows Twitch and
+      YouTube live chat in one merged feed, and posts to both chats from a
+      single input.
+    </p>
+    <ul>
+      <li>One tab per stream: a Twitch channel and a YouTube live chat side by side</li>
+      <li>A Stream tab that follows your own channel and connects when you go live</li>
+      <li>One message box that sends to Twitch, YouTube or both</li>
+      <li>Twitch, 7TV, BTTV and FFZ emotes, animated, with an emote picker</li>
+      <li>Twitch badges, replies and user cards with recent messages</li>
+      <li>Moderation from the user card on both platforms, where you have mod rights</li>
+      <li>Highlights, mentions, search, chat logs, hotkeys and dark or light themes</li>
+    </ul>
+    <p>
+      Reading Twitch chat needs no account. Sending messages, YouTube chat
+      and moderation need you to sign in with Twitch or Google.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">net.redcyberdragon.ChatterSyn.desktop</launchable>
+  <provides>
+    <binary>chattersyn</binary>
+  </provides>
+
+  <url type="homepage">https://chattersyn.redcyberdragon.net</url>
+  <url type="bugtracker">https://github.com/smitht06/red-chattersyn/issues</url>
+  <url type="vcs-browser">https://github.com/smitht06/red-chattersyn</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/smitht06/red-chattersyn/main/packaging/flatpak/screenshots/main.png</image>
+      <caption>Twitch and YouTube chat in one feed</caption>
+    </screenshot>
+  </screenshots>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#f6d6d1</color>
+    <color type="primary" scheme_preference="dark">#7a1a10</color>
+  </branding>
+
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+  </content_rating>
+
+  <releases>
+    <release version="0.9.1" date="2026-10-28">
+      <description>
+        <p>Refreshed app icon on a rounded tile.</p>
+      </description>
+    </release>
+  </releases>
+</component>

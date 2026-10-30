@@ -11,8 +11,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
@@ -37,14 +37,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import version
+from ..config import links
+from ..config.paths import diagnostics_dir
 from ..config.settings import Settings
 from ..core.image_cache import image_cache
 from ..models.message import Author, Message, Platform
 from ..services.commands import UserCommand, load_user_commands, save_user_commands
 from ..services.emotes.youtube_emoji import DEFAULT_EMOJI, emoji_map
 from ..services.highlights import HighlightMatcher
-
-VERSION = "0.1.0"
+from ..services.logger import YOUTUBE_LOG_DAYS, logs_root
 
 HOTKEY_DEFAULTS = {
     "open_settings": "Ctrl+,",
@@ -228,6 +230,7 @@ class SettingsDialog(QDialog):
         disconnect_twitch: Callable[[], None] | None = None,
         connect_youtube: Callable[[], None] | None = None,
         disconnect_youtube: Callable[[], None] | None = None,
+        use_own_youtube_client: Callable[[], None] | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -239,6 +242,7 @@ class SettingsDialog(QDialog):
         self._disconnect_twitch = disconnect_twitch
         self._connect_youtube = connect_youtube
         self._disconnect_youtube = disconnect_youtube
+        self._use_own_youtube_client = use_own_youtube_client
         # The YouTube API key lives in the keyring (SecretsStore), not
         # settings.json — MainWindow hands it in and receives it back.
         # Twitch needs no credentials: sign-in is the PKCE browser flow with
@@ -336,7 +340,25 @@ class SettingsDialog(QDialog):
         self._restore_tabs.setChecked(
             bool(self._settings.get("general.restore_tabs", True)))
         form.addRow("", self._restore_tabs)
+
+        self._chat_logs = QCheckBox("Save chat logs to files", page)
+        self._chat_logs.setChecked(bool(self._settings.get("logging.enabled", True)))
+        self._chat_logs.setToolTip(
+            f"One text file per channel per day. YouTube chat logs are deleted "
+            f"after {YOUTUBE_LOG_DAYS} days.")
+        open_chat_logs = QPushButton("Open Chat Log Folder", page)
+        open_chat_logs.clicked.connect(self._open_chat_logs)
+        logs_row = QHBoxLayout()
+        logs_row.addWidget(self._chat_logs)
+        logs_row.addWidget(open_chat_logs)
+        logs_row.addStretch(1)
+        form.addRow("", logs_row)
         return page
+
+    def _open_chat_logs(self) -> None:
+        folder = logs_root(self._settings)
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _build_accounts(self, twitch_status: str, youtube_status: str,
                         youtube_api_key: str = "") -> QWidget:
@@ -360,24 +382,38 @@ class SettingsDialog(QDialog):
         layout.addSpacing(12)
         layout.addWidget(QLabel("<b>YouTube</b>", page))
         youtube_form = QFormLayout()
-        self._api_key = QLineEdit(youtube_api_key, page)
-        self._api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        youtube_form.addRow("Data API key:", self._api_key)
         self._youtube_status_label = QLabel(youtube_status or "Not connected", page)
         youtube_form.addRow("Status:", self._youtube_status_label)
         row = QHBoxLayout()
-        authorize = QPushButton("Authorize…", page)
-        authorize.clicked.connect(self._on_connect_youtube)
+        connect_youtube = QPushButton("Connect Account…", page)
+        connect_youtube.clicked.connect(self._on_connect_youtube)
         disconnect = QPushButton("Disconnect", page)
         disconnect.clicked.connect(self._on_disconnect_youtube)
-        row.addWidget(authorize)
+        row.addWidget(connect_youtube)
         row.addWidget(disconnect)
         row.addStretch(1)
         youtube_form.addRow("", row)
         layout.addLayout(youtube_form)
+
+        # Power users: read without signing in, or use their own Google project.
+        layout.addSpacing(8)
+        layout.addWidget(QLabel("<b>YouTube: advanced</b>", page))
+        advanced = QFormLayout()
+        self._api_key = QLineEdit(youtube_api_key, page)
+        self._api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self._api_key.setPlaceholderText("Optional: read chat without signing in")
+        advanced.addRow("Data API key:", self._api_key)
+        own_client = QPushButton("Use Own Google Client…", page)
+        own_client.setToolTip("Sign in through your own Google Cloud project's client_secrets.json")
+        own_client.clicked.connect(self._on_use_own_youtube_client)
+        own_row = QHBoxLayout()
+        own_row.addWidget(own_client)
+        own_row.addStretch(1)
+        advanced.addRow("", own_row)
+        layout.addLayout(advanced)
         note = QLabel(
-            "Note: Google projects in Testing mode expire refresh tokens after "
-            "7 days — you will be asked to authorize again.", page)
+            "Note: Google projects in Testing mode expire sign-ins after 7 days, "
+            "so you'll be asked to connect again.", page)
         note.setWordWrap(True)
         note.setStyleSheet("color: #8a8a8a; font-size: 9pt;")
         layout.addWidget(note)
@@ -758,15 +794,41 @@ class SettingsDialog(QDialog):
         page = QWidget(self)
         layout = QVBoxLayout(page)
         layout.addWidget(QLabel(
-            f"<h2>ChatterSyn {VERSION}</h2>"
+            f"<h2>ChatterSyn {version()}</h2>"
             "A Chatterino-style chat client for Twitch and YouTube live chat "
             "in one merged feed.", page))
+        about_links = QLabel(
+            "Free software under the BSD 3-Clause License, built with Python, "
+            "PySide6 (Qt, LGPLv3) and qasync.<br><br>"
+            f'<a href="{links.SITE}">Homepage</a> · '
+            f'<a href="{links.PRIVACY_POLICY}">Privacy policy</a> · '
+            f'<a href="{links.TERMS}">Terms</a> · '
+            f'<a href="{links.SOURCE}">Source code</a><br>'
+            "YouTube features use YouTube API Services: "
+            f'<a href="{links.YOUTUBE_TERMS}">YouTube Terms of Service</a> · '
+            f'<a href="{links.GOOGLE_PRIVACY}">Google Privacy Policy</a><br>'
+            "Revoke ChatterSyn's access at any time: "
+            f'<a href="{links.GOOGLE_CONNECTIONS}">Google account</a> · '
+            f'<a href="{links.TWITCH_CONNECTIONS}">Twitch connections</a>', page)
+        about_links.setOpenExternalLinks(True)
+        about_links.setWordWrap(True)
+        layout.addWidget(about_links)
         layout.addWidget(QLabel(
-            "Built with Python, PySide6 and qasync. Settings live in "
-            "settings.json and commands.json next to the app data directory.",
-            page))
+            "Settings live in settings.json and commands.json next to the app "
+            "data directory.", page))
+        open_logs = QPushButton("Open Diagnostic Log Folder", page)
+        open_logs.clicked.connect(self._open_diagnostics)
+        row = QHBoxLayout()
+        row.addWidget(open_logs)
+        row.addStretch(1)
+        layout.addLayout(row)
         layout.addStretch(1)
         return page
+
+    def _open_diagnostics(self) -> None:
+        folder = diagnostics_dir()
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     # -- account callbacks ------------------------------------------------------------
 
@@ -783,7 +845,11 @@ class SettingsDialog(QDialog):
     def _on_connect_youtube(self) -> None:
         if self._connect_youtube is not None:
             self._connect_youtube()
-            self.set_youtube_status("Authorization started — complete it in your browser…")
+            self.set_youtube_status("Sign-in started — complete it in your browser…")
+
+    def _on_use_own_youtube_client(self) -> None:
+        if self._use_own_youtube_client is not None:
+            self._use_own_youtube_client()
 
     def _on_disconnect_youtube(self) -> None:
         if self._disconnect_youtube is not None:
@@ -819,6 +885,7 @@ class SettingsDialog(QDialog):
             "youtube_emotes.map": (None if self._emoji_rows() == DEFAULT_EMOJI
                                    else self._emoji_rows()),
             "general.restore_tabs": self._restore_tabs.isChecked(),
+            "logging.enabled": self._chat_logs.isChecked(),
             "highlights": self._highlights,
             "moderation_actions": self._moderation_actions,
             "notifications.mentions": self._notify_mentions.isChecked(),

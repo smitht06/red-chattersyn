@@ -1,0 +1,65 @@
+# Flatpak manifest for ChatterSyn (app ID net.redcyberdragon.ChatterSyn).
+#
+# Build and install from this checkout:
+#   flatpak-builder --user --install --force-clean build-dir \
+#       packaging/flatpak/net.redcyberdragon.ChatterSyn.yml
+#
+# The Flathub copy (repo flathub/net.redcyberdragon.ChatterSyn) is this file
+# with the `chattersyn` module's source switched from this directory to the
+# release tag; see packaging/flatpak/README.md.
+#
+# PySide6 comes from io.qt.PySide.BaseApp (Flathub refuses PySide6 wheels from
+# PyPI); keep base-version equal to runtime-version. The other Python packages
+# are python3-*.json, generated from uv.lock by scripts/gen_flatpak_deps.py.
+app-id: net.redcyberdragon.ChatterSyn
+runtime: org.kde.Platform
+runtime-version: '6.11'
+sdk: org.kde.Sdk
+base: io.qt.PySide.BaseApp
+base-version: '6.11'
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable  # maturin and cryptography are Rust
+command: chattersyn
+finish-args:
+  - --share=network   # Twitch, YouTube and emote CDNs; OAuth sign-in on localhost
+  - --share=ipc       # X11 shared memory
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri      # OpenGL
+  - --socket=pulseaudio  # the highlight ping sound
+  - --talk-name=org.freedesktop.secrets  # sign-in tokens in the desktop keyring
+build-options:
+  env:
+    BASEAPP_REMOVE_WEBENGINE: '1'
+    BASEAPP_DISABLE_NUMPY: '1'
+cleanup-commands:
+  - /app/cleanup-BaseApp.sh
+modules:
+  - python3-build-tools.json
+  - python3-deps.json
+
+  - name: chattersyn
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --prefix=${FLATPAK_DEST}
+        --no-index --no-build-isolation --no-deps .
+      - install -Dm644 packaging/flatpak/${FLATPAK_ID}.desktop -t ${FLATPAK_DEST}/share/applications
+      - install -Dm644 packaging/linux/${FLATPAK_ID}.metainfo.xml -t ${FLATPAK_DEST}/share/metainfo
+      - install -Dm644 packaging/icon.svg
+        ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/${FLATPAK_ID}.svg
+      - install -Dm644 src/chattersyn/assets/icon.png
+        ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/${FLATPAK_ID}.png
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .venv
+          - .git
+          - build
+          - dist
+          - build-dir
+          - .flatpak-builder
+          - flatpak_app
+          - repo
+          - .pytest_cache
+          - .ruff_cache

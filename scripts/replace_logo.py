@@ -172,6 +172,13 @@ def check(path: Path) -> tuple[Report, bytes | None]:
     if _local(root.tag) != "svg":
         report.errors.append(f"the root element is <{_local(root.tag)}>, not <svg>")
         return report, None
+    if b"<svg" not in data[:256]:
+        # shared-mime-info recognises SVG by "<svg" within the first 256
+        # bytes; appstream (the Flatpak build, Linux app stores) goes by that.
+        report.errors.append(
+            "the <svg> tag starts after the first 256 bytes, so Linux tools (app stores, "
+            "the Flatpak build, file managers) don't recognize the file as an SVG; move "
+            "comments and other leading content inside the <svg> element")
 
     names = {_local(element.tag) for element in root.iter()}
     for name in sorted(names & _FORBIDDEN.keys()):

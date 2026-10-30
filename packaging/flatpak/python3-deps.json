@@ -1,0 +1,640 @@
+{
+  "name": "python3-deps",
+  "buildsystem": "simple",
+  "build-commands": [
+    "pip3 install --verbose --prefix=${FLATPAK_DEST} --no-index --find-links=\"file://${PWD}\" --no-build-isolation --no-deps anyio certifi charset-normalizer google-api-core google-api-python-client google-auth google-auth-httplib2 google-auth-oauthlib googleapis-common-protos h11 httpcore httplib2 httpx idna jaraco-classes jaraco-context jaraco-functools jeepney keyring more-itertools oauthlib proto-plus protobuf pyasn1 pyasn1-modules pycparser pyparsing qasync requests requests-oauthlib secretstorage typing-extensions uritemplate urllib3 websockets",
+    "pip3 install --verbose --prefix=${FLATPAK_DEST} --no-index --find-links=\"file://${PWD}\" --no-build-isolation --no-deps cffi",
+    "GRPC_PYTHON_BUILD_EXT_COMPILER_JOBS=$(( FLATPAK_BUILDER_N_JOBS < 4 ? FLATPAK_BUILDER_N_JOBS : 4 )) pip3 install --verbose --prefix=${FLATPAK_DEST} --no-index --find-links=\"file://${PWD}\" --no-build-isolation --no-deps grpcio",
+    "pip3 install --verbose --prefix=${FLATPAK_DEST} --no-index --find-links=\"file://${PWD}\" --no-build-isolation --no-deps regex",
+    "pip3 install --verbose --prefix=${FLATPAK_DEST} --no-index --find-links=\"file://${PWD}\" --no-build-isolation --no-deps cryptography"
+  ],
+  "build-options": {
+    "cflags": "-g0",
+    "cxxflags": "-g0",
+    "no-debuginfo": true,
+    "append-path": "/usr/lib/sdk/rust-stable/bin",
+    "env": {
+      "CARGO_HOME": "/run/build/python3-deps/cargo",
+      "CARGO_NET_OFFLINE": "true"
+    }
+  },
+  "sources": [
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/12/b8/4bd346e22b28902df4d651910f5242c28d84e4a5c2435ca5c3f797ed7e2e/anyio-4.15.1-py3-none-any.whl",
+      "sha256": "6152fdbbf9a77fdec97731721bebf7c4c44f7c29b424b0065826173efc7ed101"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/32/d1/a3652fe2c19134d0d15922177821d863cbd7e842d53a21bbe7e8e3a1b5ac/certifi-2026.10.23-py3-none-any.whl",
+      "sha256": "e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/9e/ef/008a1939e372c06329a3fce4279c02f328488f3526744906eeec3da7ad5f/cffi-2.1.1.tar.gz",
+      "sha256": "dd31f52ea1086513bb9df30f8fcee9b8918323ae067a3d5b78bc826a000712be"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/fc/ad/d07d7862a62ffa6d79d68074d14823243dd235a77c45262acbf6adeb28bf/charset_normalizer-3.5.2-py3-none-any.whl",
+      "sha256": "b6b751274acb69d77b3323d6b7dbaa3c7fdfc1eb829b7eb61d262f32e1af9685"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/9d/af/182eb91b0df3fe75c4d9f26fe70684569566745f6ba7e5c9c73a862c5252/cryptography-50.0.2.tar.gz",
+      "sha256": "7b46165bb56eb4704e2eaaf86f3c940d19154535d9b0ca7d6d590b04060e00d5"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/89/31/5056a347bb934ea04583c8b27916ef1501729c72638629545bce26ff4223/google_api_core-2.33.0-py3-none-any.whl",
+      "sha256": "a2e22a0c1d0f03eafff1858b38cf46f832d5902b0c052235bf0ab8402929fbdc"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/8b/c0/221313acdee33b8e5d3fe8a06ba398fc18cfd14627816764bb00318a6065/google_api_python_client-2.201.0-py3-none-any.whl",
+      "sha256": "2d9bf1ba3f12eee8ed3d0f1791ce0605d163432f496baa72d3677faa2cf097d6"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/eb/a3/87fe9b7203ec2e56ea6a57c75e6d632eaf9487c7f7978cdad1d801bee0af/google_auth-2.62.0-py3-none-any.whl",
+      "sha256": "4ff4319aeb4ad128409759d397a9fcafad126d0031d241cc0dd6b9a00b43e3f3"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/de/ea/27cf5d623efdc1cdb2632b4c872ac5092cd3895671ba1d5004e73c3f1a7c/google_auth_httplib2-0.4.4-py3-none-any.whl",
+      "sha256": "bbe5d7b2401bb3a4017f4720e1e91bd273ab9a2bb60b84e65edbc0de127852da"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/5a/bb/b5cc0757ad2f8068e7eb7180c37f82eb488627624c1b1214aa47ddbc032c/google_auth_oauthlib-1.5.0-py3-none-any.whl",
+      "sha256": "71625fdea21c6c03217eb9ff13741c3096e6d257ebca0ad084dbd6e9f4aa4ef4"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/e7/c8/e2645aa8ed02fd4c7a2f59d68783b65b1f3cbdfe39a6308e156509d1fee8/googleapis_common_protos-1.75.0-py3-none-any.whl",
+      "sha256": "961ed60399c457ceb0ee8f285a84c870aabc9c6a832b9d37bb281b5bebde43ed"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/5b/34/60907c03ef43039c1e91ed5bdfae41ada5648264f013cabc3f186600e571/grpcio-1.85.0.tar.gz",
+      "sha256": "8aa2647afcbe5a87783e9626a2ece6277db33c6604c21690d19b5bd15609e36d"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/04/4b/29cac41a4d98d144bf5f6d33995617b185d14b22401f75ca86f384e87ff1/h11-0.16.0-py3-none-any.whl",
+      "sha256": "63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/7e/f5/f66802a942d491edb555dd61e3a9961140fd64c90bce1eafd741609d334d/httpcore-1.0.9-py3-none-any.whl",
+      "sha256": "2d400746a40668fc9dec9810239072b40b4484b640a8c38fd654a024c7a1bf55"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/33/a0/550eec327e5f5c7b732531c489f5307efec41f047b0d703bd4ca1e5ad2db/httplib2-0.32.0-py3-none-any.whl",
+      "sha256": "dc6705cacdf3fb0a2aba7629fa33c90fd93e30035db0c157325826be177e4816"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/2a/39/e50c7c3a983047577ee07d2a9e53faf5a69493943ec3f6a384bdc792deb2/httpx-0.28.1-py3-none-any.whl",
+      "sha256": "d909fcccc110f8c7faf814ca82a9a4d816bc5a6dbfea25d6591d6985b8ba59ad"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/58/a2/bb081bab032533a855d44de1d56f8e8426114ff1ba5d1f07a438a0a654f8/idna-3.20-py3-none-any.whl",
+      "sha256": "ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/7f/66/b15ce62552d84bbfcec9a4873ab79d993a1dd4edb922cbfccae192bd5b5f/jaraco.classes-3.4.0-py3-none-any.whl",
+      "sha256": "f662826b6bed8cace05e7ff873ce0f9283b5c924470fe664fff1c2f00f581790"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/f2/58/bc8954bda5fcda97bd7c19be11b85f91973d67a706ed4a3aec33e7de22db/jaraco_context-6.1.2-py3-none-any.whl",
+      "sha256": "bf8150b79a2d5d91ae48629d8b427a8f7ba0e1097dd6202a9059f29a36379535"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/02/36/ecc85bc96c273dc8a11273ed4782272975e6338d4a3e9228621175edf0e3/jaraco_functools-4.6.0-py3-none-any.whl",
+      "sha256": "99e3dc0060c5cbe8fcd1cdb36258e2a65ca40f1566b2033b12abb1bb44dd3c30"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/b2/a3/e137168c9c44d18eff0376253da9f1e9234d0239e0ee230d2fee6cea8e55/jeepney-0.9.0-py3-none-any.whl",
+      "sha256": "97e5714520c16fc0a45695e5365a2e11b81ea79bba796e26f9f1d178cb182683"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/81/db/e655086b7f3a705df045bf0933bdd9c2f79bb3c97bfef1384598bb79a217/keyring-25.7.0-py3-none-any.whl",
+      "sha256": "be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/5d/57/3c4b1c6f2e0cc29ba023802458ea3d2a996f87085559e4a5f2192d549532/more_itertools-11.2.1-py3-none-any.whl",
+      "sha256": "35a7377edd1dd6608dcb2cdf534ded55ea32d49448875ad042cd3f879fb1ded0"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/d9/f4/78229a1066068ca14fc60fb26cf7381cabe4382261392b90e5f9552722d4/oauthlib-4.0.0-py3-none-any.whl",
+      "sha256": "624c28c13a0a59cabf9747dfa52af63be3e512a7f2714df16e91b5b3a145e6cd"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/9d/84/4e9a53a062d4073c74897a6bd20fff74d55307341b3e85c081002462b3ef/proto_plus-1.28.2-py3-none-any.whl",
+      "sha256": "b874236fcac2358f601e4330bcb76cb8b89c851303ccf4078408b3d4774d1c52"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/5a/cb/e3065b447186cb70aa65acc70c86baf482d82bf75625bf5a2c4f6919c6a3/protobuf-5.29.6-py3-none-any.whl",
+      "sha256": "6b9edb641441b2da9fa8f428760fc136a49cf97a52076010cf22a2ff73438a86"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/9a/3b/6163796d69c3977d1e4287bea4a6979161cbbdd170ebb430511e8e1999ce/pyasn1-0.6.4-py3-none-any.whl",
+      "sha256": "deda9277cfd454080ec40b207fb6df82206a3a2688735233cdcd8d3d565f088b"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/47/8d/d529b5d697919ba8c11ad626e835d4039be708a35b0d22de83a269a6682c/pyasn1_modules-0.4.2-py3-none-any.whl",
+      "sha256": "29253a9207ce32b64c3ac6600edc75368f98473906e8fd1043bd6b5b1de2c14a"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/b6/ae/315bbeee126a769cbde43cf4908acb4b40408d8bf8bbf334dd7368d8dadf/pycparser-3.12-py3-none-any.whl",
+      "sha256": "a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/38/bb/d215ee7c73b61497b28a5503f9f53523f294fcc936762b7caf90e0c1c2b5/pyparsing-3.3.3-py3-none-any.whl",
+      "sha256": "ece8c00a69cf01b45d0b1dedabb469c90d8caf996d4fda40f147627a122849a4"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/e5/84/0ce4cd946f6e958428c87d5accac35df70f81607e45ba4919947d0762d63/qasync-0.28.0-py3-none-any.whl",
+      "sha256": "21faba8d047c717008378f5ac29ea58c32a8128528629e4afd57c59b768dba0f"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/fc/f2/af1da9d3ceed77bfcdce40427d49ba0be94e4fe84245e3bfef68c10e75b6/regex-2026.9.29.tar.gz",
+      "sha256": "8b5fcc4771732191b2b7d1dd68d8f0353f47f8d90b6150f6dce58bf1112442cb"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/a0/f4/c67b0b3f1b9245e8d266f0f112c500d50e5b4e83cb6f3b71b6528104182a/requests-2.34.2-py3-none-any.whl",
+      "sha256": "2a0d60c172f83ac6ab31e4554906c0f3b3588d37b5cb939b1c061f4907e278e0"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/3b/5d/63d4ae3b9daea098d5d6f5da83984853c1bbacd5dc826764b249fe119d24/requests_oauthlib-2.0.0-py2.py3-none-any.whl",
+      "sha256": "7dd8a5c40426b779b0868c404bdef9768deccf22749cde15852df527e6269b36"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/b7/46/f5af3402b579fd5e11573ce652019a67074317e18c1935cc0b4ba9b35552/secretstorage-3.5.0-py3-none-any.whl",
+      "sha256": "0ce65888c0725fcb2c5bc0fdb8e5438eece02c523557ea40ce0703c266248137"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+      "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/a9/99/3ae339466c9183ea5b8ae87b34c0b897eda475d2aec2307cae60e5cd4f29/uritemplate-4.2.0-py3-none-any.whl",
+      "sha256": "962201ba1c4edcab02e60f9a0d3821e82dfc5d2d6662a21abd533879bdb8a686"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/92/9d/c4e665119135114480843e7ab388fa94d8480650450e6f8e26b70d323a4c/urllib3-2.8.0-py3-none-any.whl",
+      "sha256": "0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3"
+    },
+    {
+      "type": "file",
+      "url": "https://files.pythonhosted.org/packages/d7/b0/3f01fcb3406662f6deb1e3e72b34dd0979e993991c0b7435a9e12bc14f02/websockets-17.3-py3-none-any.whl",
+      "sha256": "dc2b495a92b3971966bf102e73589f950db3ec1ca6713265355ce7771d97b199"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/asn1/asn1-0.24.1.crate",
+      "sha256": "c9795210620c0cb3f9a7ce4f882808c38e1ef7b347c90591dceae0886e031fb1",
+      "dest": "cargo/vendor/asn1-0.24.1"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"c9795210620c0cb3f9a7ce4f882808c38e1ef7b347c90591dceae0886e031fb1\", \"files\": {}}",
+      "dest": "cargo/vendor/asn1-0.24.1",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/asn1_derive/asn1_derive-0.24.1.crate",
+      "sha256": "909e307f1cc32bb8bccbd98f446e6d1bf03fa30f7b53a4337da7181ad30fa11a",
+      "dest": "cargo/vendor/asn1_derive-0.24.1"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"909e307f1cc32bb8bccbd98f446e6d1bf03fa30f7b53a4337da7181ad30fa11a\", \"files\": {}}",
+      "dest": "cargo/vendor/asn1_derive-0.24.1",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/base64/base64-0.23.0.crate",
+      "sha256": "b25655df2c3cdd83c5e5b293b88acd880332b2ddadd7c30ac43144fdc0033da9",
+      "dest": "cargo/vendor/base64-0.23.0"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"b25655df2c3cdd83c5e5b293b88acd880332b2ddadd7c30ac43144fdc0033da9\", \"files\": {}}",
+      "dest": "cargo/vendor/base64-0.23.0",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/bitflags/bitflags-2.13.1.crate",
+      "sha256": "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da",
+      "dest": "cargo/vendor/bitflags-2.13.1"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da\", \"files\": {}}",
+      "dest": "cargo/vendor/bitflags-2.13.1",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/cc/cc-1.4.0.crate",
+      "sha256": "5add81bb678e6cb321aff7fa0dc7689ad82b112dbc032cea19f91d6b8e3582b9",
+      "dest": "cargo/vendor/cc-1.4.0"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"5add81bb678e6cb321aff7fa0dc7689ad82b112dbc032cea19f91d6b8e3582b9\", \"files\": {}}",
+      "dest": "cargo/vendor/cc-1.4.0",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/cfg-if/cfg-if-1.0.4.crate",
+      "sha256": "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801",
+      "dest": "cargo/vendor/cfg-if-1.0.4"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801\", \"files\": {}}",
+      "dest": "cargo/vendor/cfg-if-1.0.4",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/find-msvc-tools/find-msvc-tools-0.1.9.crate",
+      "sha256": "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582",
+      "dest": "cargo/vendor/find-msvc-tools-0.1.9"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582\", \"files\": {}}",
+      "dest": "cargo/vendor/find-msvc-tools-0.1.9",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/foreign-types/foreign-types-0.3.2.crate",
+      "sha256": "f6f339eb8adc052cd2ca78910fda869aefa38d22d5cb648e6485e4d3fc06f3b1",
+      "dest": "cargo/vendor/foreign-types-0.3.2"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"f6f339eb8adc052cd2ca78910fda869aefa38d22d5cb648e6485e4d3fc06f3b1\", \"files\": {}}",
+      "dest": "cargo/vendor/foreign-types-0.3.2",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/foreign-types-shared/foreign-types-shared-0.1.1.crate",
+      "sha256": "00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b",
+      "dest": "cargo/vendor/foreign-types-shared-0.1.1"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"00b0228411908ca8685dba7fc2cdd70ec9990a6e753e89b6ac91a84c40fbaf4b\", \"files\": {}}",
+      "dest": "cargo/vendor/foreign-types-shared-0.1.1",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/heck/heck-0.5.0.crate",
+      "sha256": "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea",
+      "dest": "cargo/vendor/heck-0.5.0"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea\", \"files\": {}}",
+      "dest": "cargo/vendor/heck-0.5.0",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/itoa/itoa-1.0.18.crate",
+      "sha256": "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682",
+      "dest": "cargo/vendor/itoa-1.0.18"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682\", \"files\": {}}",
+      "dest": "cargo/vendor/itoa-1.0.18",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/libc/libc-0.2.189.crate",
+      "sha256": "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2",
+      "dest": "cargo/vendor/libc-0.2.189"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2\", \"files\": {}}",
+      "dest": "cargo/vendor/libc-0.2.189",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/once_cell/once_cell-1.21.4.crate",
+      "sha256": "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50",
+      "dest": "cargo/vendor/once_cell-1.21.4"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50\", \"files\": {}}",
+      "dest": "cargo/vendor/once_cell-1.21.4",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/openssl/openssl-0.10.81.crate",
+      "sha256": "77823a27f0babb03091cb9ed9ef80af3b39dbc82f97e8fa530374b7dafd87a45",
+      "dest": "cargo/vendor/openssl-0.10.81"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"77823a27f0babb03091cb9ed9ef80af3b39dbc82f97e8fa530374b7dafd87a45\", \"files\": {}}",
+      "dest": "cargo/vendor/openssl-0.10.81",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/openssl-macros/openssl-macros-0.1.1.crate",
+      "sha256": "a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c",
+      "dest": "cargo/vendor/openssl-macros-0.1.1"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"a948666b637a0f465e8564c73e89d4dde00d72d4d473cc972f390fc3dcee7d9c\", \"files\": {}}",
+      "dest": "cargo/vendor/openssl-macros-0.1.1",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/openssl-sys/openssl-sys-0.9.117.crate",
+      "sha256": "b47e7e6bb2c38cd930d25a23b40fa52e068c10e85f3e03a7f5ba5aaca5713695",
+      "dest": "cargo/vendor/openssl-sys-0.9.117"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"b47e7e6bb2c38cd930d25a23b40fa52e068c10e85f3e03a7f5ba5aaca5713695\", \"files\": {}}",
+      "dest": "cargo/vendor/openssl-sys-0.9.117",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/pem/pem-4.0.0.crate",
+      "sha256": "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120",
+      "dest": "cargo/vendor/pem-4.0.0"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120\", \"files\": {}}",
+      "dest": "cargo/vendor/pem-4.0.0",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/pkg-config/pkg-config-0.3.33.crate",
+      "sha256": "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e",
+      "dest": "cargo/vendor/pkg-config-0.3.33"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e\", \"files\": {}}",
+      "dest": "cargo/vendor/pkg-config-0.3.33",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/portable-atomic/portable-atomic-1.14.0.crate",
+      "sha256": "3d20d5497ef88037a52ff98267d066e7f11fcc5e99bbfbd58a42336193aacec3",
+      "dest": "cargo/vendor/portable-atomic-1.14.0"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"3d20d5497ef88037a52ff98267d066e7f11fcc5e99bbfbd58a42336193aacec3\", \"files\": {}}",
+      "dest": "cargo/vendor/portable-atomic-1.14.0",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/proc-macro2/proc-macro2-1.0.107.crate",
+      "sha256": "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9",
+      "dest": "cargo/vendor/proc-macro2-1.0.107"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9\", \"files\": {}}",
+      "dest": "cargo/vendor/proc-macro2-1.0.107",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/pyo3/pyo3-0.29.2.crate",
+      "sha256": "4688ddedf473e32662b9b067670129a8afb8c18e351482c70d62ba4a88171e8b",
+      "dest": "cargo/vendor/pyo3-0.29.2"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"4688ddedf473e32662b9b067670129a8afb8c18e351482c70d62ba4a88171e8b\", \"files\": {}}",
+      "dest": "cargo/vendor/pyo3-0.29.2",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/pyo3-build-config/pyo3-build-config-0.29.2.crate",
+      "sha256": "f41027e41b4bd03f6e60f9f417fe24a6341a6bb744edd62b6f709f2a52ea30e9",
+      "dest": "cargo/vendor/pyo3-build-config-0.29.2"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"f41027e41b4bd03f6e60f9f417fe24a6341a6bb744edd62b6f709f2a52ea30e9\", \"files\": {}}",
+      "dest": "cargo/vendor/pyo3-build-config-0.29.2",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/pyo3-ffi/pyo3-ffi-0.29.2.crate",
+      "sha256": "e591a95526fead067432c3b3a33fc74770b87b1e04e73671090d9c2055a2b327",
+      "dest": "cargo/vendor/pyo3-ffi-0.29.2"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"e591a95526fead067432c3b3a33fc74770b87b1e04e73671090d9c2055a2b327\", \"files\": {}}",
+      "dest": "cargo/vendor/pyo3-ffi-0.29.2",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/pyo3-macros/pyo3-macros-0.29.2.crate",
+      "sha256": "73225868fc1cd84eef2c3c230ddb91273bf1de46aeb8a4248da76d32a0924a1c",
+      "dest": "cargo/vendor/pyo3-macros-0.29.2"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"73225868fc1cd84eef2c3c230ddb91273bf1de46aeb8a4248da76d32a0924a1c\", \"files\": {}}",
+      "dest": "cargo/vendor/pyo3-macros-0.29.2",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/pyo3-macros-backend/pyo3-macros-backend-0.29.2.crate",
+      "sha256": "571575aa3749fa6216757dd47d2a3e7ef360f329a40f0666a9fbd14889024952",
+      "dest": "cargo/vendor/pyo3-macros-backend-0.29.2"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"571575aa3749fa6216757dd47d2a3e7ef360f329a40f0666a9fbd14889024952\", \"files\": {}}",
+      "dest": "cargo/vendor/pyo3-macros-backend-0.29.2",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/quote/quote-1.0.47.crate",
+      "sha256": "1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001",
+      "dest": "cargo/vendor/quote-1.0.47"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"1fbf4db142a473a8d80c26bbf18454ed458bf8d26c8219c331daecfdbd079001\", \"files\": {}}",
+      "dest": "cargo/vendor/quote-1.0.47",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/self_cell/self_cell-1.3.0.crate",
+      "sha256": "2ab42ca02749e120097e328d91d415325bdf43b1c72c4c8badf37375fe40a813",
+      "dest": "cargo/vendor/self_cell-1.3.0"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"2ab42ca02749e120097e328d91d415325bdf43b1c72c4c8badf37375fe40a813\", \"files\": {}}",
+      "dest": "cargo/vendor/self_cell-1.3.0",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/shlex/shlex-2.0.1.crate",
+      "sha256": "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba",
+      "dest": "cargo/vendor/shlex-2.0.1"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba\", \"files\": {}}",
+      "dest": "cargo/vendor/shlex-2.0.1",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/syn/syn-2.0.119.crate",
+      "sha256": "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297",
+      "dest": "cargo/vendor/syn-2.0.119"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297\", \"files\": {}}",
+      "dest": "cargo/vendor/syn-2.0.119",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/target-lexicon/target-lexicon-0.13.5.crate",
+      "sha256": "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca",
+      "dest": "cargo/vendor/target-lexicon-0.13.5"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca\", \"files\": {}}",
+      "dest": "cargo/vendor/target-lexicon-0.13.5",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/unicode-ident/unicode-ident-1.0.24.crate",
+      "sha256": "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75",
+      "dest": "cargo/vendor/unicode-ident-1.0.24"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75\", \"files\": {}}",
+      "dest": "cargo/vendor/unicode-ident-1.0.24",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "archive",
+      "archive-type": "tar-gzip",
+      "url": "https://static.crates.io/crates/vcpkg/vcpkg-0.2.15.crate",
+      "sha256": "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426",
+      "dest": "cargo/vendor/vcpkg-0.2.15"
+    },
+    {
+      "type": "inline",
+      "contents": "{\"package\": \"accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426\", \"files\": {}}",
+      "dest": "cargo/vendor/vcpkg-0.2.15",
+      "dest-filename": ".cargo-checksum.json"
+    },
+    {
+      "type": "inline",
+      "contents": "[source.vendored-sources]\ndirectory = \"cargo/vendor\"\n\n[source.crates-io]\nreplace-with = \"vendored-sources\"\n",
+      "dest": "cargo",
+      "dest-filename": "config.toml"
+    }
+  ]
+}

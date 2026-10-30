@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- ChatterSyn app icon. The artwork is the Pixelmator Pro 3.8 export (500 x 500);
-     it sits on an iOS-style rounded tile laid out on Apple's macOS icon grid: an
-     824 px tile centred on the 1024 px canvas, corner radius 185.4, continuous
-     ("squircle") corners at 60% smoothing. The tile is a <mask> because
-     QtSvg ignores <clipPath>. -->
 <svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+    <!-- ChatterSyn app icon. The artwork is the Pixelmator Pro 3.8 export (500 x 500);
+    it sits on an iOS-style rounded tile laid out on Apple's macOS icon grid: an
+    824 px tile centred on the 1024 px canvas, corner radius 185.4, continuous
+    ("squircle") corners at 60% smoothing. The tile is a <mask> because
+    QtSvg ignores <clipPath>. -->
     <mask id="tile" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
         <path fill="#ffffff" d="M 627.36 100 C 731.194 100 783.111 100 822.77 120.207 A 185.4 185.4 0 0 1 903.793 201.23 C 924 240.889 924 292.806 924 396.64 L 924 627.36 C 924 731.194 924 783.111 903.793 822.77 A 185.4 185.4 0 0 1 822.77 903.793 C 783.111 924 731.194 924 627.36 924 L 396.64 924 C 292.806 924 240.889 924 201.23 903.793 A 185.4 185.4 0 0 1 120.207 822.77 C 100 783.111 100 731.194 100 627.36 L 100 396.64 C 100 292.806 100 240.889 120.207 201.23 A 185.4 185.4 0 0 1 201.23 120.207 C 240.889 100 292.806 100 396.64 100 Z"/>
     </mask>

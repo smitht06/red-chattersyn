@@ -13,12 +13,19 @@ import uuid
 
 from ..models.emote import Emote
 from ..models.message import Author, Badge, ImageRun, Message, MessageFlags, Platform, TextRun
+from ..services.twitch.mapper import twitch_emote_urls
 
 NAMES = ["alice", "bob_the_builder", "charlieTV", "dana_kappa", "eveLUL", "frank_", "gwen7",
          "hank_watchin", "iris_uwu", "james_pog", "katePlays", "leo_streams"]
 COLORS = ["#ff0000", "#1e90ff", "#2ba640", "#b22222", "#ff8c1a", "#a970ff", "#5f9ea0",
           "#ff69b4", "#8a2be2", "#d2691e", "#3cb371", "#c71585"]
-TWITCH_EMOTES = ["Kappa", "PogChamp", "LUL", "OMEGALUL", "monkaS", "KEKW", "PepeLaugh", "4Head", "EZ"]
+# Twitch global emotes under their real, public and stable IDs, so --demo
+# shows emote art (and store screenshots do too) instead of placeholder boxes.
+TWITCH_EMOTES = [
+    Emote(emote_id, name, "twitch", urls=twitch_emote_urls(emote_id), height_px=28)
+    for emote_id, name in (("25", "Kappa"), ("305954156", "PogChamp"),
+                           ("425618", "LUL"), ("354", "4Head"))
+]
 
 # A real animated 7TV emote (PETPET) so --demo visibly plays a moving emote
 # instead of only showing placeholder boxes. The CDN URL is public and stable.
@@ -110,9 +117,8 @@ class FakeFeed:
         else:
             runs.append(TextRun(text))
         if random.random() < 0.4:
-            runs.append(ImageRun(Emote(random.choice(["2", "3", "4"]),
-                                      random.choice(TWITCH_EMOTES), "twitch", height_px=28),
-                                 random.choice(TWITCH_EMOTES)))
+            emote = random.choice(TWITCH_EMOTES)
+            runs.append(ImageRun(emote, emote.name))
         plain = text
         return Message(
             id=uuid.uuid4().hex,

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ChatterSyn: Twitch and YouTube live chat in one window</title>
+  <meta name="description" content="ChatterSyn shows Twitch and YouTube live chat in one merged feed and posts to both from a single input.">
+  <link rel="icon" href="icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="/"><img src="icon.png" alt="" width="64" height="64"><h1>ChatterSyn</h1></a>
+  <p class="tagline">Twitch and YouTube live chat in one window. One input, two chats.</p>
+  <nav><a href="#install">Install</a><a href="privacy">Privacy</a><a href="terms">Terms</a><a href="https://github.com/smitht06/red-chattersyn">Source code</a></nav>
+</header>
+
+<main>
+  <p><img class="shot" src="screenshot.png" alt="ChatterSyn showing a Twitch and YouTube chat in one feed, with emotes and badges" width="1080" height="720"></p>
+
+  <p>ChatterSyn is a Chatterino-style chat client for streamers, moderators and viewers who follow a stream on both Twitch and YouTube. It shows both live chats in one merged feed and sends what you type to either chat, or both.</p>
+
+  <ul>
+    <li>One tab per stream: a Twitch channel and a YouTube live chat side by side</li>
+    <li>A Stream tab that follows your own channel and connects when you go live</li>
+    <li>Twitch, 7TV, BTTV and FFZ emotes, animated, with an emote picker</li>
+    <li>Twitch badges, replies, and user cards with recent messages</li>
+    <li>Moderation from the user card on both platforms, where you have mod rights</li>
+    <li>Highlights, mentions, search, chat logs, hotkeys, and dark or light themes</li>
+  </ul>
+
+  <p>Reading Twitch chat needs no account. To send messages, read YouTube chat or moderate, sign in with Twitch or Google from Settings → Accounts.</p>
+
+  <h2 id="install">Install</h2>
+  <div class="card">
+    <p><strong>macOS</strong> (Apple Silicon, macOS 14.4 or later), with Homebrew:</p>
+    <pre>brew tap smitht06/chattersyn
+brew trust smitht06/chattersyn
+brew install --cask chattersyn</pre>
+    <p><strong>Linux</strong> (Ubuntu, Debian, Mint), from the APT repository:</p>
+    <pre>curl -fsSL https://chattersyn-apt.pages.dev/chattersyn.gpg \
+  | sudo gpg --dearmor -o /usr/share/keyrings/chattersyn.gpg
+echo "deb [signed-by=/usr/share/keyrings/chattersyn.gpg] https://chattersyn-apt.pages.dev stable main" \
+  | sudo tee /etc/apt/sources.list.d/chattersyn.list
+sudo apt update &amp;&amp; sudo apt install chattersyn</pre>
+    <p><strong>Windows</strong> and every other download: the <a href="https://github.com/smitht06/red-chattersyn/releases/latest">latest release</a> on GitHub.</p>
+  </div>
+</main>
+
+<footer>
+  <p>ChatterSyn is free software under the <a href="https://github.com/smitht06/red-chattersyn/blob/main/LICENSE">BSD 3-Clause License</a>, made by RedCyberDragon. <a href="privacy">Privacy policy</a> · <a href="terms">Terms of use</a> · <a href="https://github.com/smitht06/red-chattersyn/issues">Report a problem</a></p>
+  <p>Twitch is a trademark of Twitch Interactive, Inc. YouTube is a trademark of Google LLC. ChatterSyn is not affiliated with or endorsed by either.</p>
+</footer>
+</body>
+</html>

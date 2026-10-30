@@ -15,6 +15,7 @@ import json
 import logging
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 from PySide6.QtCore import QEvent, QSettings, Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import version
+from ..config import links
 from ..config.paths import config_dir
 from ..config.secrets import SecretsStore
 from ..config.settings import Settings
@@ -139,7 +141,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("ChatterSyn")
         self.resize(1080, 720)
 
-        self._secrets = SecretsStore(config_dir())
+        self._secrets = SecretsStore(config_dir(), on_fallback=self._warn_secrets_fallback)
         if not demo:
             self._twitch = TwitchService(settings, self._secrets)
             self._youtube = YouTubeService(settings, self._secrets)
@@ -181,7 +183,7 @@ class MainWindow(QMainWindow):
         QApplication.instance().installEventFilter(self)
         self._restore_geometry()
         self.statusBar().showMessage(
-            "Demo feed (M1) — M2/M3 wire Twitch IRC + YouTube live chat"
+            "Demo mode: sample chat, nothing is sent"
             if demo
             else "Connecting to Twitch…"
         )
@@ -356,8 +358,9 @@ class MainWindow(QMainWindow):
                 twitch_status = f"Connected as {login}" if login else "Connected"
             if self._youtube is not None and self._youtube.tokens is not None:
                 youtube_status = "Connected"
-            elif self._youtube is not None and self._youtube.auth.configured():
-                youtube_status = "Credentials configured — not connected"
+            elif (self._youtube is not None and self._youtube.auth.configured()
+                  and not self._youtube.auth.uses_builtin_client()):
+                youtube_status = "Own Google client loaded — not connected"
         dialog = SettingsDialog(
             self._settings, config_dir(),
             twitch_status=twitch_status,
@@ -368,6 +371,7 @@ class MainWindow(QMainWindow):
             disconnect_twitch=None if self._demo else self._disconnect_twitch_account,
             connect_youtube=None if self._demo else self._connect_youtube,
             disconnect_youtube=None if self._demo else self._disconnect_youtube_account,
+            use_own_youtube_client=None if self._demo else self._use_own_youtube_client,
             parent=self,
         )
         if dialog.exec() == QDialog.DialogCode.Accepted:
@@ -1307,20 +1311,32 @@ class MainWindow(QMainWindow):
     def _connect_youtube(self) -> None:
         if self._youtube is None:
             return
+        if not self._youtube.auth.configured():
+            # A build without the built-in Google client: bring your own.
+            self._use_own_youtube_client()
+            return
+        asyncio.ensure_future(self._run_youtube_auth(None))
+
+    def _use_own_youtube_client(self) -> None:
+        if self._youtube is None:
+            return
         path, _ = QFileDialog.getOpenFileName(
             self, "Select client_secrets.json", "", "JSON files (*.json)")
-        if not path:
-            return
-        asyncio.ensure_future(self._run_youtube_auth(path))
+        if path:
+            asyncio.ensure_future(self._run_youtube_auth(path))
 
-    async def _run_youtube_auth(self, path: str) -> None:
+    async def _run_youtube_auth(self, path: str | None) -> None:
+        """Google sign-in in the browser; ``path`` first loads the user's own
+        client_secrets.json, None uses the configured (usually built-in) client."""
         assert self._youtube is not None
         try:
-            with open(path, encoding="utf-8") as fh:
-                self._youtube.auth.set_client_secrets(json.load(fh))
+            if path is not None:
+                with open(path, encoding="utf-8") as fh:
+                    self._youtube.auth.set_client_secrets(json.load(fh))
             auth_url = await self._youtube.auth.begin_flow()
         except (YouTubeAuthError, OSError, json.JSONDecodeError) as exc:
-            QMessageBox.warning(self, "YouTube", f"Could not load client_secrets.json:\n{exc}")
+            what = "load client_secrets.json" if path is not None else "start Google sign-in"
+            QMessageBox.warning(self, "YouTube", f"Could not {what}:\n{exc}")
             return
         QDesktopServices.openUrl(QUrl(auth_url))
         self.statusBar().showMessage("Complete sign-in in your browser…")
@@ -1761,12 +1777,26 @@ class MainWindow(QMainWindow):
             followers=int(subscribers) if subscribers.isdigit() else None,
         )
 
+    def _warn_secrets_fallback(self, path: Path) -> None:
+        # Deferred: this fires from inside a sign-in or token-refresh call.
+        QTimer.singleShot(0, lambda: QMessageBox.warning(
+            self, "ChatterSyn",
+            "No system keyring is available, so your sign-in tokens are stored "
+            f"unencrypted in:\n{path}\n\n"
+            "On Linux, install and unlock gnome-keyring or KWallet, sign in "
+            "again, then delete that file."))
+
     def _show_about(self) -> None:
         QMessageBox.about(
             self,
             "About ChatterSyn",
-            "ChatterSyn — a Chatterino-style chat client for Twitch + YouTube live chat.\n\n"
-            "One input, two chats. Built with Python + PySide6.",
+            f"<b>ChatterSyn {version()}</b><br>"
+            "A Chatterino-style chat client for Twitch + YouTube live chat. "
+            "One input, two chats.<br><br>"
+            f'<a href="{links.SITE}">Homepage</a> · '
+            f'<a href="{links.PRIVACY_POLICY}">Privacy policy</a> · '
+            f'<a href="{links.TERMS}">Terms</a><br><br>'
+            "Licenses, YouTube terms and the diagnostic log: Settings → About.",
         )
 
     def closeEvent(self, event) -> None:

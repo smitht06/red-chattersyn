@@ -13,6 +13,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  test:
+    # Lint and the test suite (Qt offscreen). The pyside6-6.11 leg is the
+    # PySide6 the Flatpak gets from io.qt.PySide.BaseApp; the app supports
+    # both. Not yet a gate for `build`.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: lock
+            pyside: ""
+          - leg: pyside6-6.11
+            pyside: "PySide6==6.11.*"
+    name: test (${{ matrix.leg }})
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install (ubuntu GUI libs for Qt)
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libfontconfig1 libxkbcommon-x11-0
+
+      - run: uv sync --locked
+
+      - name: Swap in the Flatpak's PySide6
+        if: matrix.pyside != ''
+        run: uv pip install "${{ matrix.pyside }}"
+
+      # --no-sync: keep the swapped PySide6 instead of re-syncing to uv.lock.
+      - run: uv run --no-sync ruff check src/ tests/ scripts/
+      - run: uv run --no-sync pytest -q
+
   build:
     strategy:
       fail-fast: false
@@ -377,3 +419,71 @@ jobs:
           name: homebrew-cask
           path: ${{ env.tap }}/Casks
           if-no-files-found: ignore
+
+  site:
+    # The homepage, privacy policy and terms at
+    # https://chattersyn.redcyberdragon.net (Cloudflare Pages project
+    # chattersyn-site; the custom domain is attached once in the Cloudflare
+    # dashboard). Google's OAuth consent screen links to the privacy policy,
+    # so the site deploys from main and must stay true to what the app does.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble site
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/site"
+          cp -R site "$out"
+          # The same pictures as the app and its Flathub listing.
+          cp packaging/flatpak/screenshots/main.png "$out/screenshot.png"
+          cp src/chattersyn/assets/icon.png "$out/icon.png"
+          echo "site=$out" >> "$GITHUB_ENV"
+
+      - name: Create the Pages project (first deploy only)
+        # Fails harmlessly once the project exists.
+        continue-on-error: true
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages project create chattersyn-site --production-branch=main
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          # --branch=main: production, as for the APT repo.
+          command: pages deploy ${{ env.site }} --project-name=chattersyn-site --branch=main
+
+  flatpak:
+    # Builds the Flathub package from this checkout and lints it the way
+    # Flathub does (packaging/flatpak/README.md). The x86_64 bundle is a CI
+    # artifact for testing: flatpak install --user chattersyn-x86_64.flatpak
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.11
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: chattersyn-x86_64.flatpak
+          manifest-path: packaging/flatpak/net.redcyberdragon.ChatterSyn.yml
+          cache-key: flatpak-builder-${{ hashFiles('packaging/flatpak/python3-*.json') }}
+          # Like Flathub's builders: copy the store screenshots into the build,
+          # which the repo lint below requires.
+          mirror-screenshots-url: https://dl.flathub.org/media
+
+      - name: Lint the way Flathub does
+        run: |
+          flatpak install -y --noninteractive flathub org.flatpak.Builder
+          # --filesystem: the linter runs sandboxed and can't see the checkout otherwise.
+          flatpak run --filesystem="$PWD" --command=flatpak-builder-lint org.flatpak.Builder \
+              manifest packaging/flatpak/net.redcyberdragon.ChatterSyn.yml
+          flatpak run --filesystem="$PWD" --command=flatpak-builder-lint org.flatpak.Builder repo repo

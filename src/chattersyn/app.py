@@ -6,18 +6,22 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import os
+import platform
 import shutil
 import sys
 import traceback
 from pathlib import Path
 
 import qasync
-from PySide6.QtCore import QCoreApplication, QStandardPaths
+from PySide6.QtCore import QCoreApplication, QStandardPaths, qVersion
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
-from .config.paths import cache_dir, config_dir
+from . import version
+from .config.paths import cache_dir, config_dir, diagnostics_dir
 from .config.settings import Settings
+from .core.applog import setup_logging
 from .core.disk_cache import DiskCache
 from .core.image_cache import image_cache
 from .ui import theme
@@ -32,6 +36,12 @@ _LEGACY_ORG = "ChatterSync"
 
 # Rendered from packaging/icon.svg by scripts/replace_logo.py (/replace-logo).
 ICON_PATH = Path(__file__).resolve().parent / "assets" / "icon.png"
+
+
+def _desktop_file_name() -> str:
+    """Wayland shells match windows to their .desktop file by app id. The
+    Flatpak sets FLATPAK_ID to its app ID; the .deb installs chattersyn.desktop."""
+    return os.environ.get("FLATPAK_ID") or "chattersyn"
 
 
 def _apply_window_icon(app: QApplication) -> None:
@@ -74,7 +84,9 @@ def _install_excepthook() -> None:
 def _loop_exception_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
     exc = context.get("exception")
     message = context.get("message", "asyncio task error")
-    log.error("Event loop error: %s (%r)", message, exc)
+    # The traceback goes into the diagnostic log; a bare repr says little.
+    log.error("Event loop error: %s", message,
+              exc_info=exc if isinstance(exc, BaseException) else None)
 
 
 def _prune_disk_cache(disk: DiskCache) -> None:
@@ -125,10 +137,12 @@ def run(argv: list[str] | None = None) -> int:
     QCoreApplication.setOrganizationName("ChatterSyn")
     QCoreApplication.setApplicationName("chattersyn")
 
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-
     app = QApplication.instance() or QApplication(sys.argv[:1] if argv else sys.argv)
+    QApplication.setDesktopFileName(_desktop_file_name())
+    # After QApplication: the log directory comes from QStandardPaths.
+    log_file = setup_logging(diagnostics_dir())
+    log.info("ChatterSyn %s on %s (Python %s, Qt %s); diagnostic log: %s", version(),
+             platform.platform(), platform.python_version(), qVersion(), log_file)
     _apply_window_icon(app)
     new_dir = Path(QStandardPaths.writableLocation(
         QStandardPaths.StandardLocation.AppConfigLocation))

@@ -31,6 +31,12 @@ dev = [
     "ruff>=0.6",
 ]
 build = ["pyinstaller>=6.12,<7", "pillow>=10.2"]
+# Build-only tools the Flatpak needs on top of the KDE SDK (which ships pip,
+# setuptools, wheel and Cython): maturin builds cryptography (and itself needs
+# setuptools-rust), hatchling builds chattersyn itself. Locked here so
+# scripts/gen_flatpak_deps.py takes their exact versions and hashes from
+# uv.lock; never installed by `uv sync`.
+flatpak-build = ["maturin>=1.14.1,<2", "setuptools-rust>=1.11.0", "hatchling"]
 
 [build-system]
 requires = ["hatchling"]

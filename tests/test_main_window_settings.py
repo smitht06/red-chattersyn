@@ -1,6 +1,9 @@
 """MainWindow settings wiring: hotkey registry, geometry persistence,
 restore-tabs gate, apply-on-accept plumbing, account disconnect helpers."""
 
+import asyncio
+import types
+
 import pytest
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QDialog, QWidget
@@ -193,3 +196,39 @@ async def test_save_youtube_api_key_routes_to_secrets_store(win):
 async def test_disconnect_helpers_noop_in_demo(win):
     win._disconnect_twitch_account()  # no services: must not raise
     win._disconnect_youtube_account()
+
+
+# -- YouTube connect routing ---------------------------------------------------------------
+
+
+class _FakeYouTubeAuth:
+    def __init__(self, configured: bool):
+        self._configured = configured
+
+    def configured(self):
+        return self._configured
+
+
+def _route(win, monkeypatch, configured: bool) -> list:
+    calls: list = []
+    win._youtube = types.SimpleNamespace(auth=_FakeYouTubeAuth(configured))
+    monkeypatch.setattr(win, "_use_own_youtube_client", lambda: calls.append("file dialog"))
+
+    async def fake_run(path):
+        calls.append(("sign in", path))
+
+    monkeypatch.setattr(win, "_run_youtube_auth", fake_run)
+    win._connect_youtube()
+    return calls
+
+
+async def test_connect_youtube_signs_in_straight_away_with_a_client(win, monkeypatch):
+    calls = _route(win, monkeypatch, configured=True)
+    await asyncio.sleep(0)
+    assert calls == [("sign in", None)]  # no client_secrets.json picker
+
+
+async def test_connect_youtube_without_any_client_asks_for_client_secrets(win, monkeypatch):
+    calls = _route(win, monkeypatch, configured=False)
+    await asyncio.sleep(0)
+    assert calls == ["file dialog"]

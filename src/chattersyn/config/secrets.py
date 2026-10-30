@@ -7,6 +7,7 @@ import contextlib
 import json
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -15,9 +16,13 @@ SERVICE = "red-chattersyn"
 
 
 class SecretsStore:
-    def __init__(self, config_dir: Path):
+    def __init__(self, config_dir: Path, on_fallback: Callable[[Path], None] | None = None):
+        """``on_fallback`` is called once, with the file's path, the first time
+        a credential has to go into the plaintext file instead of the keyring."""
         self._config_dir = config_dir
         self._fallback: Path | None = None
+        self._on_fallback = on_fallback
+        self._fallback_reported = False
         try:
             import keyring  # noqa: F401
 
@@ -45,6 +50,16 @@ class SecretsStore:
             else:
                 return
         self._file_set(key, value)
+        self._report_fallback()
+
+    def _report_fallback(self) -> None:
+        if self._fallback_reported:
+            return
+        self._fallback_reported = True
+        path = self._fallback_path()
+        log.warning("no usable system keyring — credentials are stored unencrypted in %s", path)
+        if self._on_fallback is not None:
+            self._on_fallback(path)
 
     def delete(self, key: str) -> None:
         if self._keyring is not None:
@@ -73,7 +88,13 @@ class SecretsStore:
         path = self._fallback_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data), encoding="utf-8")
+        # Owner-only from the first byte: writing first and chmod-ing after
+        # left the tokens readable by other users for a moment.
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        if hasattr(os, "fchmod"):  # a leftover tmp keeps its old mode
+            os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(data))
         tmp.replace(path)
         os.chmod(path, 0o600)
 

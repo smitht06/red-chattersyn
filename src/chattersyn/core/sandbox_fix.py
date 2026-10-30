@@ -9,8 +9,10 @@ when those files are touched. Consequences:
   first decode — QImageReader then reports canRead=False for webp etc.).
 
 Because the flag can come back between process start and the *lazy* first
-image decode, ImageCache calls this again right before decoding. Users running
-from a normal terminal never hit this; it is a harmless no-op otherwise.
+image decode, ImageCache heals again right before decoding — but only after a
+dev launcher opted in (scripts/_venv_fix.py calls enable_lazy_heal()).
+Installed and frozen builds never run it: under `uv tool install` on macOS it
+would spawn a chflags subprocess for every image.
 """
 
 import glob
@@ -18,6 +20,19 @@ import os
 import shutil
 import subprocess
 import sys
+
+_lazy_heal = False
+
+
+def enable_lazy_heal() -> None:
+    """Dev launchers opt in to healing again before each lazy image decode."""
+    global _lazy_heal
+    _lazy_heal = True
+
+
+def heal_before_decode() -> None:
+    if _lazy_heal:
+        unhide_venv_files()
 
 
 def unhide_venv_files() -> None:

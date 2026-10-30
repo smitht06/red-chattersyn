@@ -8,6 +8,7 @@ import pytest
 from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 
+from chattersyn.services.youtube import auth as auth_module
 from chattersyn.services.youtube.auth import TOKEN_KEY, YouTubeAuth, YouTubeAuthError
 
 
@@ -126,6 +127,49 @@ def test_configured_loads_stored_blob():
     assert YouTubeAuth(None, store).configured()
 
 
+@pytest.fixture
+def builtin_client(monkeypatch):
+    monkeypatch.setattr(auth_module, "BUILTIN_CLIENT_ID", "builtin.apps.googleusercontent.com")
+    monkeypatch.setattr(auth_module, "BUILTIN_CLIENT_SECRET", "builtin-secret")
+
+
+@pytest.fixture
+def no_builtin_client(monkeypatch):
+    monkeypatch.setattr(auth_module, "BUILTIN_CLIENT_ID", "")
+    monkeypatch.setattr(auth_module, "BUILTIN_CLIENT_SECRET", "")
+
+
+async def test_builtin_client_needs_no_setup(fake_flow, builtin_client):
+    auth = YouTubeAuth(None, DictStore())
+    assert auth.configured() and auth.uses_builtin_client()
+    await auth.begin_flow()
+    installed = fake_flow.last_config["config"]["installed"]
+    assert installed["client_id"] == "builtin.apps.googleusercontent.com"
+    assert installed["client_secret"] == "builtin-secret"
+    await auth.close()
+
+
+async def test_own_client_secrets_win_over_the_builtin_client(fake_flow, builtin_client):
+    auth = YouTubeAuth(None, DictStore())
+    auth.set_client_secrets(CLIENT_SECRETS)
+    assert not auth.uses_builtin_client()
+    await auth.begin_flow()
+    assert fake_flow.last_config["config"] == CLIENT_SECRETS
+    await auth.close()
+
+
+def test_stored_own_client_wins_after_restart(builtin_client):
+    store = DictStore({"youtube_client_secrets": json.dumps(CLIENT_SECRETS)})
+    auth = YouTubeAuth(None, store)
+    assert auth.configured() and not auth.uses_builtin_client()
+
+
+def test_nothing_configured_without_any_client(no_builtin_client):
+    auth = YouTubeAuth(None, DictStore())
+    assert not auth.configured()
+    assert not auth.uses_builtin_client()
+
+
 # -- loopback flow ----------------------------------------------------------------------
 
 
@@ -182,7 +226,7 @@ async def test_wait_for_code_times_out(fake_flow):
     assert auth._server is None  # server closed in finally
 
 
-async def test_begin_flow_without_secrets_raises():
+async def test_begin_flow_without_secrets_raises(no_builtin_client):
     with pytest.raises(YouTubeAuthError):
         await YouTubeAuth(None, DictStore()).begin_flow()
 

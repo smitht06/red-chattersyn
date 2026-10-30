@@ -13,7 +13,7 @@ from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QObject, Signal
 from PySide6.QtGui import QImage, QImageReader, QMovie, QPixmap
 
 from .disk_cache import DiskCache
-from .sandbox_fix import unhide_venv_files
+from .sandbox_fix import heal_before_decode
 
 log = logging.getLogger(__name__)
 
@@ -107,8 +107,9 @@ class ImageCache(QObject):
                 return
 
         # Imageformat plugins load lazily at first decode; the sandbox may have
-        # re-hidden them since startup, so heal right before decoding.
-        unhide_venv_files()
+        # re-hidden them since startup, so dev launchers heal right before
+        # decoding (a no-op in installed builds).
+        heal_before_decode()
         try:
             image, multi_frame = await loop.run_in_executor(None, _decode_image, data)
         except Exception as exc:

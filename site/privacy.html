@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy policy · ChatterSyn</title>
+  <link rel="icon" href="icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <a class="brand" href="/"><img src="icon.png" alt="" width="64" height="64"><h1>ChatterSyn</h1></a>
+  <nav><a href="/">Home</a><a href="terms">Terms</a><a href="https://github.com/smitht06/red-chattersyn">Source code</a></nav>
+</header>
+
+<main>
+  <h1>Privacy policy</h1>
+  <p class="updated">Last updated: 29 October 2026</p>
+
+  <p>ChatterSyn is a desktop app that runs on your computer. It has no servers and no user accounts of its own, and it sends no analytics, telemetry or advertising data. The developer of ChatterSyn never receives your data.</p>
+
+  <h2>YouTube API Services</h2>
+  <p>ChatterSyn uses YouTube API Services to read and send YouTube live chat messages and to moderate live chats. By using ChatterSyn's YouTube features you also agree to the <a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a>, and Google's handling of your data is covered by the <a href="https://policies.google.com/privacy">Google Privacy Policy</a>.</p>
+  <p>ChatterSyn's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+
+  <h2>What ChatterSyn accesses, and why</h2>
+  <ul>
+    <li><strong>Your Twitch and Google sign-in.</strong> When you connect an account in Settings → Accounts, ChatterSyn receives sign-in tokens so it can act for you: read chat, send the messages you type, and carry out the moderation actions you choose (for example bans, timeouts and deleting messages).</li>
+    <li><strong>Your channel and streams.</strong> Your Twitch and YouTube channel name and ID, whether you're live, your current live stream and its viewer count, so the Stream tab can follow your own stream.</li>
+    <li><strong>Live chat.</strong> The messages, display names, badges and emotes of the chats you open, so ChatterSyn can show them. YouTube display names are looked up through YouTube API Services and kept in memory until you quit.</li>
+    <li><strong>Images.</strong> Emotes, badges and profile pictures, downloaded from Twitch, YouTube, 7TV, BetterTTV and FrankerFaceZ to draw the chat.</li>
+  </ul>
+  <p>ChatterSyn uses this information only to provide these features to you. It does not use it for advertising, does not sell it, and does not share it with anyone. The only services it sends anything to are the platforms that provide the features: Twitch, Google/YouTube and the emote services above, each covered by its own privacy policy. Like any app on the internet, those services see your IP address when ChatterSyn talks to them.</p>
+
+  <h2>What ChatterSyn stores on your computer</h2>
+  <ul>
+    <li><strong>Sign-in tokens</strong> are kept in your system's credential store: the macOS Keychain, Windows Credential Manager, or the Secret Service on Linux (GNOME Keyring or KWallet). If no credential store is available, ChatterSyn tells you and keeps them in a file in its settings folder that only your user account can read.</li>
+    <li><strong>Chat logs.</strong> ChatterSyn saves the chats you open to text files, one file per channel per day, so you can look back at them. Turn this off in Settings → General. Logs of YouTube chats are deleted automatically after 30 days.</li>
+    <li><strong>An image cache</strong> of emotes, badges and profile pictures, so chats load faster next time. Images older than 30 days are removed, and the cache never grows past 256 MB.</li>
+    <li><strong>Your settings</strong>, open tabs and window size.</li>
+    <li><strong>A diagnostic log</strong> of technical events, with sign-in tokens and keys removed, for troubleshooting. It never leaves your computer unless you choose to share it (Settings → About → Open Diagnostic Log Folder).</li>
+  </ul>
+
+  <h2>Removing your data and revoking access</h2>
+  <ul>
+    <li>Settings → Accounts → <strong>Disconnect</strong> deletes that account's sign-in tokens from your computer.</li>
+    <li>You can revoke ChatterSyn's access at any time in your <a href="https://myaccount.google.com/connections">Google Account security settings</a> or your <a href="https://www.twitch.tv/settings/connections">Twitch connections</a>.</li>
+    <li>To remove everything else, delete ChatterSyn's folders: on macOS, the <code>ChatterSyn</code> folders in <code>~/Library/Application Support</code>, <code>~/Library/Preferences</code> and <code>~/Library/Caches</code>; on Windows, <code>%LOCALAPPDATA%\ChatterSyn</code>; on Linux, the <code>ChatterSyn</code> folders in <code>~/.config</code>, <code>~/.local/share</code> and <code>~/.cache</code> (for the Flatpak, <code>~/.var/app/net.redcyberdragon.ChatterSyn</code>).</li>
+  </ul>
+
+  <h2>Children</h2>
+  <p>ChatterSyn is not directed at children under 13. Twitch's and YouTube's own age requirements apply to their accounts.</p>
+
+  <h2>Changes</h2>
+  <p>If this policy changes, the new version is posted on this page with a new date.</p>
+
+  <h2>Contact</h2>
+  <p>Questions about privacy: open an issue on <a href="https://github.com/smitht06/red-chattersyn/issues">GitHub</a>.</p>
+</main>
+
+<footer>
+  <p><a href="/">ChatterSyn</a> · <a href="terms">Terms of use</a> · <a href="https://github.com/smitht06/red-chattersyn">Source code</a></p>
+</footer>
+</body>
+</html>

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=ChatterSyn
+GenericName=Live Chat Client
+Comment=Twitch and YouTube live chat in one window
+Exec=chattersyn
+Icon=net.redcyberdragon.ChatterSyn
+Terminal=false
+Categories=Network;Chat;InstantMessaging;
+Keywords=twitch;youtube;livestream;stream;chat;emotes;
+StartupNotify=true
+StartupWMClass=chattersyn
