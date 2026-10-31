@@ -95,14 +95,16 @@ async def test_focus_input_no_crash(win):
 
 async def test_close_saves_geometry_and_second_window_restores(qapp, qsettings):
     w1 = MainWindow(Settings({}), demo=True, qsettings=qsettings)
-    w1.resize(912, 608)
+    # Smaller than Qt's offscreen screen (800x600 on Linux): restoreGeometry
+    # shrinks a window that doesn't fit, which made CI see 798 wide.
+    w1.resize(712, 508)
     assert w1._qsettings.value("main_window/geometry") is None  # not saved yet
     w1.close()
     assert w1._qsettings.value("main_window/geometry") is not None
 
     w2 = MainWindow(Settings({}), demo=True, qsettings=qsettings)
     try:
-        assert (w2.width(), w2.height()) == (912, 608)
+        assert (w2.width(), w2.height()) == (712, 508)
     finally:
         w2.close()
 
