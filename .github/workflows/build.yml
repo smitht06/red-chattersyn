@@ -63,7 +63,7 @@ jobs:
           # ubuntu-22.04 (glibc 2.35): runs on Linux Mint 21+, our Linux target.
           - os: ubuntu-22.04
             artifact: linux-x86_64
-          - os: macos-14
+          - os: macos-15  # macos-14 images retire 2026-11-02 (runner-images#13518)
             artifact: macos-arm64
           - os: windows-latest
             artifact: windows-x86_64
