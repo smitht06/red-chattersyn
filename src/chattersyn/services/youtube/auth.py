@@ -37,24 +37,28 @@ SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"
 CLIENT_SECRETS_KEY = "youtube_client_secrets"  # dict(installed: {...}) JSON
 TOKEN_KEY = "youtube_token"  # Credentials.to_json() blob
 
-# ChatterSyn's own Google OAuth client ("Desktop app" type), the counterpart of
-# DEFAULT_TWITCH_CLIENT_ID. Google does not treat an installed app's client
-# secret as confidential (every copy of the app carries it), so it is committed
-# here on purpose: the one exception to the repo's no-secrets rule. While these
-# are empty, users bring their own client_secrets.json as before.
-BUILTIN_CLIENT_ID = ""
-BUILTIN_CLIENT_SECRET = ""
+# ChatterSyn's own Google OAuth client ("Desktop app" type, Google Cloud project
+# "ChatterSyn"), the counterpart of DEFAULT_TWITCH_CLIENT_ID. The client ID is
+# public: it's in every sign-in URL. The client secret is NOT in this repository
+# (GitHub push protection blocks it and Google says to keep it out of public
+# source): token requests go to ChatterSyn's sign-in relay, which adds the
+# secret. The relay is site/functions/api/google/token.js on Cloudflare Pages;
+# the secret is the chattersyn-site project's GOOGLE_CLIENT_SECRET.
+BUILTIN_CLIENT_ID = "449926753228-i28f73kahf4hv37vg3th7oep7fsn7l02.apps.googleusercontent.com"
+RELAY_TOKEN_URI = "https://chattersyn.redcyberdragon.net/api/google/token"
+# The relay replaces this; google-auth won't refresh without some secret.
+RELAY_CLIENT_SECRET = "added-by-relay"
 
 
 def builtin_client_config() -> dict | None:
     """The built-in client in client_secrets.json shape, or None if unset."""
-    if not (BUILTIN_CLIENT_ID and BUILTIN_CLIENT_SECRET):
+    if not BUILTIN_CLIENT_ID:
         return None
     return {"installed": {
         "client_id": BUILTIN_CLIENT_ID,
-        "client_secret": BUILTIN_CLIENT_SECRET,
+        "client_secret": RELAY_CLIENT_SECRET,
         "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
+        "token_uri": RELAY_TOKEN_URI,
         "redirect_uris": ["http://localhost"],
     }}
 

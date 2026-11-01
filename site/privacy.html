@@ -15,9 +15,9 @@
 
 <main>
   <h1>Privacy policy</h1>
-  <p class="updated">Last updated: 29 October 2026</p>
+  <p class="updated">Last updated: 1 November 2026</p>
 
-  <p>ChatterSyn is a desktop app that runs on your computer. It has no servers and no user accounts of its own, and it sends no analytics, telemetry or advertising data. The developer of ChatterSyn never receives your data.</p>
+  <p>ChatterSyn is a desktop app that runs on your computer. It has no user accounts of its own, and it sends no analytics, telemetry or advertising data. Its only server is a sign-in relay for Google, described below, which stores nothing. The developer of ChatterSyn never receives your data.</p>
 
   <h2>YouTube API Services</h2>
   <p>ChatterSyn uses YouTube API Services to read and send YouTube live chat messages and to moderate live chats. By using ChatterSyn's YouTube features you also agree to the <a href="https://www.youtube.com/t/terms">YouTube Terms of Service</a>, and Google's handling of your data is covered by the <a href="https://policies.google.com/privacy">Google Privacy Policy</a>.</p>
@@ -30,7 +30,10 @@
     <li><strong>Live chat.</strong> The messages, display names, badges and emotes of the chats you open, so ChatterSyn can show them. YouTube display names are looked up through YouTube API Services and kept in memory until you quit.</li>
     <li><strong>Images.</strong> Emotes, badges and profile pictures, downloaded from Twitch, YouTube, 7TV, BetterTTV and FrankerFaceZ to draw the chat.</li>
   </ul>
-  <p>ChatterSyn uses this information only to provide these features to you. It does not use it for advertising, does not sell it, and does not share it with anyone. The only services it sends anything to are the platforms that provide the features: Twitch, Google/YouTube and the emote services above, each covered by its own privacy policy. Like any app on the internet, those services see your IP address when ChatterSyn talks to them.</p>
+  <p>ChatterSyn uses this information only to provide these features to you. It does not use it for advertising, does not sell it, and does not share it with anyone. The only services it sends anything to are the platforms that provide the features (Twitch, Google/YouTube and the emote services above, each covered by its own privacy policy) and, for Google sign-in, ChatterSyn's sign-in relay. Like any app on the internet, those services see your IP address when ChatterSyn talks to them.</p>
+
+  <h2>The Google sign-in relay</h2>
+  <p>When you connect YouTube through ChatterSyn's built-in Google app, two steps go through ChatterSyn's sign-in relay at <code>chattersyn.redcyberdragon.net</code>: exchanging Google's one-time sign-in code for your tokens, and renewing those tokens later. The relay adds ChatterSyn's app credential, which Google asks developers not to publish inside the app, and passes the request straight to Google. It does not store or log your tokens or anything else, and it takes no part in anything else the app does. If you use your own Google app (Settings → Accounts → YouTube: advanced), the relay isn't used.</p>
 
   <h2>What ChatterSyn stores on your computer</h2>
   <ul>

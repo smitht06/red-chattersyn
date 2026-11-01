@@ -426,6 +426,8 @@ jobs:
     # chattersyn-site; the custom domain is attached once in the Cloudflare
     # dashboard). Google's OAuth consent screen links to the privacy policy,
     # so the site deploys from main and must stay true to what the app does.
+    # It also serves the app's Google sign-in relay (site/functions/, a Pages
+    # Function), which needs the project secret GOOGLE_CLIENT_SECRET.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
@@ -434,12 +436,14 @@ jobs:
       - name: Assemble site
         run: |
           set -euo pipefail
-          out="$RUNNER_TEMP/site"
-          cp -R site "$out"
+          # wrangler deploys public/ and compiles the Pages Functions it finds
+          # in functions/ next to it (the working directory below).
+          mkdir -p _pages
+          cp -R site _pages/public
+          mv _pages/public/functions _pages/functions
           # The same pictures as the app and its Flathub listing.
-          cp packaging/flatpak/screenshots/main.png "$out/screenshot.png"
-          cp src/chattersyn/assets/icon.png "$out/icon.png"
-          echo "site=$out" >> "$GITHUB_ENV"
+          cp packaging/flatpak/screenshots/main.png _pages/public/screenshot.png
+          cp src/chattersyn/assets/icon.png _pages/public/icon.png
 
       - name: Create the Pages project (first deploy only)
         # Fails harmlessly once the project exists.
@@ -455,8 +459,9 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: _pages
           # --branch=main: production, as for the APT repo.
-          command: pages deploy ${{ env.site }} --project-name=chattersyn-site --branch=main
+          command: pages deploy public --project-name=chattersyn-site --branch=main
 
   flatpak:
     # Builds the Flathub package from this checkout and lints it the way

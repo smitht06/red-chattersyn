@@ -130,13 +130,11 @@ def test_configured_loads_stored_blob():
 @pytest.fixture
 def builtin_client(monkeypatch):
     monkeypatch.setattr(auth_module, "BUILTIN_CLIENT_ID", "builtin.apps.googleusercontent.com")
-    monkeypatch.setattr(auth_module, "BUILTIN_CLIENT_SECRET", "builtin-secret")
 
 
 @pytest.fixture
 def no_builtin_client(monkeypatch):
     monkeypatch.setattr(auth_module, "BUILTIN_CLIENT_ID", "")
-    monkeypatch.setattr(auth_module, "BUILTIN_CLIENT_SECRET", "")
 
 
 async def test_builtin_client_needs_no_setup(fake_flow, builtin_client):
@@ -145,7 +143,10 @@ async def test_builtin_client_needs_no_setup(fake_flow, builtin_client):
     await auth.begin_flow()
     installed = fake_flow.last_config["config"]["installed"]
     assert installed["client_id"] == "builtin.apps.googleusercontent.com"
-    assert installed["client_secret"] == "builtin-secret"
+    # No secret ships in the app: token requests go to the sign-in relay,
+    # which adds it (site/functions/api/google/token.js).
+    assert installed["token_uri"] == auth_module.RELAY_TOKEN_URI
+    assert installed["client_secret"] == auth_module.RELAY_CLIENT_SECRET
     await auth.close()
 
 
