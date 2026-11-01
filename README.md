@@ -200,9 +200,9 @@ keeps reporting the old release.
 
 ## Credentials setup
 
-Out of the box the app runs **read-only on Twitch** (anonymous chat) and needs
-credentials for everything else. Everything is configured from
-**Settings → Accounts** (Cmd/Ctrl+,).
+Out of the box the app reads **Twitch chat anonymously**. Sending, YouTube
+and moderation need you to sign in, one click each in **Settings → Accounts**
+(Cmd/Ctrl+,).
 
 ### Twitch (sending, badge metadata, live status)
 
@@ -233,28 +233,34 @@ FFZ); sending, badge metadata, and live status need the account.
 
 ### YouTube (reading, sending, moderation)
 
-Reading works with a plain **API key** (quota-free gRPC push). Sending needs a
-Google **OAuth client** with `youtube.force-ssl` consent.
+Sign-in is one click, like Twitch: **Settings → Accounts → YouTube → Connect
+Account…** opens Google in your browser, and you approve ChatterSyn's access
+to your YouTube account there. ChatterSyn uses its own registered Google app (a
+desktop OAuth client whose ID is built in, like the Twitch one); one
+permission, `youtube.force-ssl`, covers reading, sending and moderating. Your
+tokens live in the OS keychain. The app's Google client secret isn't in the
+app: sign-in goes through ChatterSyn's sign-in relay on
+`chattersyn.redcyberdragon.net` (`site/functions/`), which adds it, passes the
+request to Google and stores nothing.
 
-1. [console.cloud.google.com](https://console.cloud.google.com/) → create a
-   project → **APIs & Services → Library** → enable **YouTube Data API v3**.
-2. **Credentials → Create credentials → API key** — paste it into
-   **Settings → Accounts → Data API key**. Chat reading works now.
-3. For sending: **OAuth consent screen** → External, add yourself as a test
-   user (no scopes needed on the consent screen itself).
-4. **Credentials → Create credentials → OAuth client ID** → *Desktop app* →
-   **Download JSON** (this is `client_secrets.json`).
-5. In ChatterSyn, **Settings → Accounts → Authorize** → pick
-   `client_secrets.json` → complete consent in your browser.
+> **While Google reviews ChatterSyn's app**, Google shows a "Google hasn't
+> verified this app" warning: click **Advanced**, then **Go to ChatterSyn**.
+> Until the review is done, at most 100 people can sign in through the app.
+> Both limits go away once Google approves it.
 
-The **Stream tab**'s YouTube side always needs OAuth — "my live stream"
-(`liveBroadcasts.list mine=true`) rejects API keys, so an API-key-only setup
-shows the "YouTube auth required" placeholder until you authorize.
+The **Stream tab**'s YouTube side needs the sign-in: "my live stream"
+(`liveBroadcasts.list mine=true`) rejects API keys.
 
-> **Note on "Testing" publishing status:** test-project refresh tokens expire
-> after **7 days**. ChatterSyn detects this, tells you in chat, and
-> **Settings → Accounts → Authorize** re-consents in one click. Publishing
-> the app (or keeping it in Testing and re-consenting weekly) avoids this.
+**Advanced** (Settings → Accounts → *YouTube: advanced*), with your own Google
+Cloud project ([console.cloud.google.com](https://console.cloud.google.com/),
+enable **YouTube Data API v3**):
+
+- **Read without signing in:** create an **API key** and paste it into
+  **Data API key**. Reading works; sending and moderation still need a sign-in.
+- **Your own Google app:** set up the OAuth consent screen (External, add
+  yourself as a test user), create an OAuth client ID of type *Desktop app*,
+  **Download JSON** (`client_secrets.json`) and pick it with **Use Own Google
+  Client…**. It then replaces ChatterSyn's app, with your project's quota.
 
 ### Quota
 
@@ -264,7 +270,9 @@ shows the "YouTube auth required" placeholder until you authorize.
   items carry only channel ids); names are cached for the session.
 - The streamer-bar stats refresh polls `videos.list` every ~2 min while a
   stream is live (1 quota unit per call).
-- Each **send** costs 20 units (10,000/day default). When the quota is
+- Each **send** costs 20 units. A Google project gets 10,000 units a day, and
+  everyone signed in through ChatterSyn's app shares that budget until Google
+  raises it (your own app from *Advanced* has its own). When the quota is
   exhausted, ChatterSyn shows a banner, pauses reading, and blocks the
   YouTube send toggle until the midnight-PT reset.
 
@@ -296,10 +304,22 @@ REST (send); Qt model/delegate chat rendering. See the plan in
 `~/.claude/plans/i-want-an-app-idempotent-pebble.md` for the full design.
 
 <!-- release-notes:start -->
-## Latest release: v0.9.1 (2026-10-28)
+## Latest release: v0.10.0 (2026-11-01)
+
+### New
+- **One-click YouTube sign-in:** Settings → Accounts → YouTube → **Connect Account…** now signs you in through ChatterSyn's own Google app, with no Google Cloud project or `client_secrets.json` needed. Until Google finishes reviewing the app, it shows a "Google hasn't verified this app" warning: click **Advanced**, then **Go to ChatterSyn**.
+- **Chat log switch:** turn saving chat to text files on or off in Settings → General, and open the log folder from there.
+- **Diagnostic log:** ChatterSyn now keeps a troubleshooting log, with sign-in tokens and keys removed. Open it from Settings → About → **Open Diagnostic Log Folder**.
 
 ### Improved
-- **Refreshed app icon:** the TV now has a separate base, and the icon sits on a rounded square like iOS and macOS app icons. The Dock, taskbar and app menus show its rounded shape instead of a square white tile, on macOS, Windows and Linux.
+- **YouTube chat logs:** logs of YouTube chats are now deleted after 30 days, as YouTube's rules require. Older ones are removed when you first start this version; Twitch logs are kept.
+- **Your own Google app:** if you set one up before, it keeps working. It's now under Settings → Accounts → *YouTube: advanced* → **Use Own Google Client…**, and the Data API key there is optional.
+- **About:** links to ChatterSyn's website, privacy policy and terms, plus YouTube's Terms of Service and where to revoke ChatterSyn's access.
+- **Keyring warning:** ChatterSyn now tells you when your sign-in tokens can't go into your system's keyring and are stored in a file instead.
+- **Demo mode:** `--demo` shows real emotes, and the status bar says plainly that it's sample chat.
+
+### Fixed
+- **Wrong version in About:** Settings → About said 0.1.0; it now shows the version you're running.
 
 Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
 <!-- release-notes:end -->

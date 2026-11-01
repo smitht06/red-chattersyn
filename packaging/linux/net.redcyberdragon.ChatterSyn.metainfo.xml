@@ -67,6 +67,17 @@
   </content_rating>
 
   <releases>
+    <release version="0.10.0" date="2026-11-01">
+      <description>
+        <p>One-click YouTube sign-in, a chat log switch and a diagnostic log.</p>
+        <ul>
+          <li>Connect YouTube from Settings → Accounts without a Google Cloud project</li>
+          <li>Turn chat logs on or off in Settings → General; YouTube chat logs are deleted after 30 days</li>
+          <li>A troubleshooting log with sign-in tokens removed, under Settings → About</li>
+          <li>About links to the website, privacy policy and terms</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.9.1" date="2026-10-28">
       <description>
         <p>Refreshed app icon on a rounded tile.</p>
