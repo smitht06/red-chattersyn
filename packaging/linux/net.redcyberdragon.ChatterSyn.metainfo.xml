@@ -67,6 +67,11 @@
   </content_rating>
 
   <releases>
+    <release version="0.10.1" date="2026-11-01">
+      <description>
+        <p>ChatterSyn now ships as a Flatpak for any Linux distribution.</p>
+      </description>
+    </release>
     <release version="0.10.0" date="2026-11-01">
       <description>
         <p>One-click YouTube sign-in, a chat log switch and a diagnostic log.</p>

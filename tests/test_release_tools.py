@@ -3,6 +3,7 @@
 
 import pytest
 from release_tools import (
+    EXPECTED_ASSETS,
     REPO_API,
     apt_version,
     bump,
@@ -114,12 +115,12 @@ def test_missing_assets_lists_absent_builds():
     release = {"assets": [{"name": "chattersyn-0.6.1-linux-x86_64.deb"},
                           {"name": "chattersyn-0.6.1-macos-arm64.zip"}]}
     assert missing_assets(release, "0.6.1") == [
-        "chattersyn-0.6.1-linux-x86_64.tar.gz", "chattersyn-0.6.1-windows-x86_64.zip"]
+        "chattersyn-0.6.1-linux-x86_64.tar.gz", "chattersyn-0.6.1-linux-x86_64.flatpak",
+        "chattersyn-0.6.1-windows-x86_64.zip"]
 
 
 def test_verify_all_published_and_stale_packages():
-    full = {"assets": [{"name": f"chattersyn-0.6.1-{s}"} for s in (
-        "linux-x86_64.deb", "linux-x86_64.tar.gz", "macos-arm64.zip", "windows-x86_64.zip")]}
+    full = {"assets": [{"name": f"chattersyn-0.6.1-{s}"} for s in EXPECTED_ASSETS]}
 
     def json_ok(url):
         assert url == f"{REPO_API}/releases/tags/v0.6.1"
@@ -164,8 +165,7 @@ def test_set_version_accepts_release_candidates():
 
 def test_verify_release_candidate_expects_debian_form_and_prerelease_flag():
     version = "0.7.1rc1"
-    assets = {"assets": [{"name": f"chattersyn-{version}-{s}"} for s in (
-        "linux-x86_64.deb", "linux-x86_64.tar.gz", "macos-arm64.zip", "windows-x86_64.zip")]}
+    assets = {"assets": [{"name": f"chattersyn-{version}-{s}"} for s in EXPECTED_ASSETS]}
 
     def text(url):
         return ("Package: chattersyn\nVersion: 0.7.1~rc1\n" if "Packages" in url

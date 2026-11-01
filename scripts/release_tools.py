@@ -44,7 +44,8 @@ APT_PACKAGES = "https://chattersyn-apt.pages.dev/dists/stable/main/binary-amd64/
 CASK = "https://raw.githubusercontent.com/smitht06/homebrew-chattersyn/main/Casks/chattersyn.rb"
 # Artifact suffixes the release job attaches (chattersyn-<version>-<suffix>).
 EXPECTED_ASSETS = (
-    "linux-x86_64.deb", "linux-x86_64.tar.gz", "macos-arm64.zip", "windows-x86_64.zip")
+    "linux-x86_64.deb", "linux-x86_64.tar.gz", "linux-x86_64.flatpak",
+    "macos-arm64.zip", "windows-x86_64.zip")
 
 _VERSION_RE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
 _PRERELEASE_RE = re.compile(r"v?(\d+\.\d+\.\d+)rc(\d+)")

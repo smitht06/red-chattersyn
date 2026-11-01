@@ -142,7 +142,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, flatpak]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -168,8 +168,15 @@ jobs:
     # so it can't be committed or served directly. Users add the source once;
     # afterwards `apt update && apt upgrade` delivers new releases. Also runs
     # on workflow_dispatch for smoke tests.
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: build
+    # After `release`: it uploads the files this job hashes. Before, the two ran
+    # in parallel, and a re-run hashed release assets that `release` was busy
+    # replacing (live hash mismatches, v0.9.1). `release` is skipped on
+    # workflow_dispatch, which must not skip this job.
+    if: >-
+      always() && needs.build.result == 'success'
+      && ((startsWith(github.ref, 'refs/tags/v') && needs.release.result == 'success')
+          || github.event_name == 'workflow_dispatch')
+    needs: [build, release]
     runs-on: ubuntu-latest
     steps:
       # Checkout FIRST, download LAST: a checkout run after the download
@@ -309,8 +316,15 @@ jobs:
     # byte-identical, and a mismatch would fail `brew install`'s checksum
     # verification the same way the apt Size/SHA256 mismatch did. Also runs on
     # workflow_dispatch for smoke tests.
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    needs: build
+    # After `release`: it uploads the files this job hashes. Before, the two ran
+    # in parallel, and a re-run hashed release assets that `release` was busy
+    # replacing (live hash mismatches, v0.9.1). `release` is skipped on
+    # workflow_dispatch, which must not skip this job.
+    if: >-
+      always() && needs.build.result == 'success'
+      && ((startsWith(github.ref, 'refs/tags/v') && needs.release.result == 'success')
+          || github.event_name == 'workflow_dispatch')
+    needs: [build, release]
     runs-on: ubuntu-latest
     steps:
       # Checkout FIRST, download LAST: a checkout run after the download
@@ -464,10 +478,9 @@ jobs:
           command: pages deploy public --project-name=chattersyn-site --branch=main
 
   flatpak:
-    # Builds the Flathub package from this checkout and lints it the way
-    # Flathub does (packaging/flatpak/README.md). The x86_64 bundle is a CI
-    # artifact for testing: flatpak install --user chattersyn-x86_64.flatpak
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    # Builds the Flatpak bundle from this checkout (packaging/flatpak/); on a
+    # tag, `release` attaches it to the GitHub release next to the .deb. Not
+    # on Flathub: its rules ban AI-written manifests (packaging/flatpak/README.md).
     runs-on: ubuntu-latest
     timeout-minutes: 120
     container:
@@ -476,9 +489,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Stamp version
+        run: echo "APP_VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1)" >> "$GITHUB_ENV"
+
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: chattersyn-x86_64.flatpak
+          # Named like the other release files.
+          bundle: chattersyn-${{ env.APP_VERSION }}-linux-x86_64.flatpak
           manifest-path: packaging/flatpak/net.redcyberdragon.ChatterSyn.yml
           cache-key: flatpak-builder-${{ hashFiles('packaging/flatpak/python3-*.json') }}
           # Like Flathub's builders: copy the store screenshots into the build,
@@ -486,6 +503,9 @@ jobs:
           mirror-screenshots-url: https://dl.flathub.org/media
 
       - name: Lint the way Flathub does
+        # Advisory: catches AppStream/metadata problems that software centers
+        # show, but a lint hiccup must not hold back a release.
+        continue-on-error: true
         run: |
           flatpak install -y --noninteractive flathub org.flatpak.Builder
           # --filesystem: the linter runs sandboxed and can't see the checkout otherwise.

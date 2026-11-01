@@ -1,7 +1,7 @@
-# Flatpak (Flathub)
+# Flatpak
 
-App ID **`net.redcyberdragon.ChatterSyn`** — permanent: Flathub, the desktop
-file, the icon and the metainfo all use it.
+App ID **`net.redcyberdragon.ChatterSyn`** — permanent: the desktop file, the
+icon, the metainfo and users' settings folder all use it.
 
 | File | What it is |
 |---|---|
@@ -41,33 +41,26 @@ flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest \
     packaging/flatpak/net.redcyberdragon.ChatterSyn.yml
 ```
 
-## Submitting to Flathub (once)
+## Distribution
 
-1. Fork [flathub/flathub](https://github.com/flathub/flathub) and branch from `new-pr`.
-2. Add the manifest and the two JSON files. In the manifest, switch the
-   `chattersyn` module's `sources` from this directory to the release tag:
+CI builds the bundle on every push (the `flatpak` job, x86_64). On a release
+tag, the `release` job attaches it to the GitHub release as
+`chattersyn-X.Y.Z-linux-x86_64.flatpak`, next to the `.deb`. Users install it
+with `flatpak install --user <file>`, which pulls the KDE runtime and PySide
+BaseApp from Flathub, and update by installing the next release's file.
 
-   ```yaml
-       sources:
-         - type: git
-           url: https://github.com/smitht06/red-chattersyn.git
-           tag: vX.Y.Z
-           commit: <the tag's full commit hash>
-           x-checker-data:
-             type: git
-             tag-pattern: ^v([\d.]+)$
-   ```
+## Why not Flathub
 
-3. Open a pull request against `new-pr` titled `Add net.redcyberdragon.ChatterSyn`.
-   Flathub's bot builds it (comment `bot, build` to rebuild); answer the reviewers.
-4. After the merge, Flathub creates `flathub/net.redcyberdragon.ChatterSyn` with
-   you as maintainer. Updates are pull requests there: `x-checker-data` makes
-   Flathub's bot open one for each new release tag. When dependencies change,
-   also copy in freshly generated JSON files.
-5. Verified badge: the Flathub developer portal gives a token to publish at
-   `https://redcyberdragon.net/.well-known/org.flathub.VerifiedApps.txt`.
+Flathub's [requirements](https://docs.flathub.org/docs/for-app-authors/requirements)
+(checked 2026-11-01) ban AI-generated or AI-assisted content in Flathub
+manifests, even disclosed, and AI-written submission PRs, commit messages and
+review replies; AI-generated app code must be disclosed and may be rejected.
+This manifest and `scripts/gen_flatpak_deps.py` were written with AI
+assistance, as was much of ChatterSyn, so they can't be submitted as they are.
+A Flathub listing would need a hand-written manifest and PR, plus the
+disclosure; reviewers decide.
 
-## Permissions (for reviewers)
+## Permissions
 
 | Permission | Why |
 |---|---|

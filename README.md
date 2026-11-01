@@ -125,8 +125,24 @@ Prefer a one-off install instead? The release also carries a standalone
 Installs to `/opt/chattersyn` with a `chattersyn` launcher and a menu entry;
 remove with `sudo apt remove chattersyn`. Built on Ubuntu 22.04 (glibc 2.35),
 so it runs on Linux Mint 21+ and similar. Credentials are stored via the
-Secret Service (gnome-keyring / KWallet) when available; otherwise keyring
-falls back to a local file (`~/.local/share/python_keyring/`).
+Secret Service (gnome-keyring / KWallet) when available; otherwise ChatterSyn
+warns you and keeps them in `secrets.json` next to its settings, readable only
+by you.
+
+**Linux, any distribution (Flatpak)** — download
+`chattersyn-<version>-linux-x86_64.flatpak` from the release and install it:
+
+```sh
+flatpak install --user chattersyn-<version>-linux-x86_64.flatpak
+flatpak run net.redcyberdragon.ChatterSyn
+```
+
+It uses the KDE runtime from Flathub, which `flatpak install` fetches for you
+(if Flathub isn't set up yet: `flatpak remote-add --if-not-exists --user flathub
+https://dl.flathub.org/repo/flathub.flatpakrepo`). To update, install the next
+release's file the same way. The Flatpak keeps its settings in
+`~/.var/app/net.redcyberdragon.ChatterSyn`, separate from the `.deb`.
+ChatterSyn isn't on Flathub: Flathub doesn't accept AI-written packaging.
 
 ## Releasing
 
@@ -304,22 +320,10 @@ REST (send); Qt model/delegate chat rendering. See the plan in
 `~/.claude/plans/i-want-an-app-idempotent-pebble.md` for the full design.
 
 <!-- release-notes:start -->
-## Latest release: v0.10.0 (2026-11-01)
+## Latest release: v0.10.1 (2026-11-01)
 
 ### New
-- **One-click YouTube sign-in:** Settings → Accounts → YouTube → **Connect Account…** now signs you in through ChatterSyn's own Google app, with no Google Cloud project or `client_secrets.json` needed. Until Google finishes reviewing the app, it shows a "Google hasn't verified this app" warning: click **Advanced**, then **Go to ChatterSyn**.
-- **Chat log switch:** turn saving chat to text files on or off in Settings → General, and open the log folder from there.
-- **Diagnostic log:** ChatterSyn now keeps a troubleshooting log, with sign-in tokens and keys removed. Open it from Settings → About → **Open Diagnostic Log Folder**.
-
-### Improved
-- **YouTube chat logs:** logs of YouTube chats are now deleted after 30 days, as YouTube's rules require. Older ones are removed when you first start this version; Twitch logs are kept.
-- **Your own Google app:** if you set one up before, it keeps working. It's now under Settings → Accounts → *YouTube: advanced* → **Use Own Google Client…**, and the Data API key there is optional.
-- **About:** links to ChatterSyn's website, privacy policy and terms, plus YouTube's Terms of Service and where to revoke ChatterSyn's access.
-- **Keyring warning:** ChatterSyn now tells you when your sign-in tokens can't go into your system's keyring and are stored in a file instead.
-- **Demo mode:** `--demo` shows real emotes, and the status bar says plainly that it's sample chat.
-
-### Fixed
-- **Wrong version in About:** Settings → About said 0.1.0; it now shows the version you're running.
+- **Flatpak for any Linux:** each release now includes a `.flatpak` file that installs on any Linux distribution with `flatpak install --user <file>`. It keeps its own settings, separate from the `.deb` version.
 
 Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
 <!-- release-notes:end -->

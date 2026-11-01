@@ -4,12 +4,11 @@
 #   flatpak-builder --user --install --force-clean build-dir \
 #       packaging/flatpak/net.redcyberdragon.ChatterSyn.yml
 #
-# The Flathub copy (repo flathub/net.redcyberdragon.ChatterSyn) is this file
-# with the `chattersyn` module's source switched from this directory to the
-# release tag; see packaging/flatpak/README.md.
+# CI's `flatpak` job builds this into the .flatpak attached to each GitHub
+# release; it is not on Flathub (see packaging/flatpak/README.md).
 #
-# PySide6 comes from io.qt.PySide.BaseApp (Flathub refuses PySide6 wheels from
-# PyPI); keep base-version equal to runtime-version. The other Python packages
+# PySide6 comes from io.qt.PySide.BaseApp (the KDE runtime's own PySide6, not
+# PyPI wheels); keep base-version equal to runtime-version. The other Python packages
 # are python3-*.json, generated from uv.lock by scripts/gen_flatpak_deps.py.
 app-id: net.redcyberdragon.ChatterSyn
 runtime: org.kde.Platform
