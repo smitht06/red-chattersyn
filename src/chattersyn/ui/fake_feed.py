@@ -49,6 +49,10 @@ YOUTUBE_LINES = [
     "greetings from Germany 🇩🇪",
     "first time here, loving it",
     "can we hit 100 likes??",
+    # Long lines wrap onto several rows, so resizing/zooming changes row
+    # heights — exercises auto-scroll following content that grows in place.
+    "ok so I just got here and I have no idea what is going on, can someone "
+    "explain why the streamer is building a castle out of cheese in this game",
 ]
 TWITCH_LINES = [
     "this game is actually insane",
@@ -61,7 +65,14 @@ TWITCH_LINES = [
     "EZ Clap",
     "whats the song called",
     "LUL he walked right into it",
+    "honestly the last boss fight was the best part of the whole run so far, the "
+    "dodge timing at the end was unreal and chat went absolutely crazy for it",
 ]
+
+# Every so often a raid-style burst lands in one go (tests the "↓ N new
+# messages" counter when scrolled up, and catching up after a hover pause).
+BURST_CHANCE = 0.01  # per message — roughly one burst every ~20 s
+BURST_SIZE = (15, 30)
 def _twitch_badge_urls(guid: str) -> dict[str, str]:
     # Twitch's public global-badge art (the same URLs Helix hands out).
     base = f"https://static-cdn.jtvnw.net/badges/v1/{guid}"
@@ -155,17 +166,20 @@ class FakeFeed:
         return Message.system(Platform.TWITCH if random.random() < 0.5 else Platform.YOUTUBE,
                               self.twitch_channel, text)
 
+    def _random_message(self) -> Message:
+        roll = random.random()
+        if roll < 0.04:
+            return self._system_message()
+        if roll < 0.5:
+            return self._twitch_message()
+        return self._youtube_message()
+
     async def _run(self) -> None:
         while self._running:
             await asyncio.sleep(random.uniform(0.08, 0.3))
-            roll = random.random()
-            if roll < 0.04:
-                msg = self._system_message()
-            elif roll < 0.5:
-                msg = self._twitch_message()
-            else:
-                msg = self._youtube_message()
-            self.tab.add_message(msg)
+            burst = random.random() < BURST_CHANCE
+            for _ in range(random.randint(*BURST_SIZE) if burst else 1):
+                self.tab.add_message(self._random_message())
 
     def handle_send(self, text: str) -> None:
         """M1: local echo into both platform feeds."""

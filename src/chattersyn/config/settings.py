@@ -24,7 +24,9 @@ DEFAULTS: dict[str, Any] = {
     # replaces it wholesale). ChatterSyn always renders emotes on YouTube rows.
     "youtube_emotes": {"emoji": False, "map": None},
     "tabs": [],
-    "general": {"restore_tabs": True},
+    # jump_to_latest_when_idle: a chat scrolled up jumps back to the newest
+    # messages after 15 s without activity in it (ChatView.IDLE_RESUME_MS).
+    "general": {"restore_tabs": True, "jump_to_latest_when_idle": True},
     "send": {"truncate_mode": "highlight", "block_urls_for_youtube": True},
     "twitch": {"client_id": "", "redirect_ports": [17821, 17822, 17823]},
     "hotkeys": {

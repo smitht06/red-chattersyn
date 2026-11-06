@@ -58,7 +58,7 @@ review replies; AI-generated app code must be disclosed and may be rejected.
 This manifest and `scripts/gen_flatpak_deps.py` were written with AI
 assistance, as was much of ChatterSyn, so they can't be submitted as they are.
 A Flathub listing would need a hand-written manifest and PR, plus the
-disclosure; reviewers decide.
+disclosure; reviewers decide. [SUBMITTING.md](SUBMITTING.md) walks through it.
 
 ## Permissions
 

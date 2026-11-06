@@ -320,10 +320,17 @@ REST (send); Qt model/delegate chat rendering. See the plan in
 `~/.claude/plans/i-want-an-app-idempotent-pebble.md` for the full design.
 
 <!-- release-notes:start -->
-## Latest release: v0.10.1 (2026-11-01)
+## Latest release: v0.10.2 (2026-11-06)
 
 ### New
-- **Flatpak for any Linux:** each release now includes a `.flatpak` file that installs on any Linux distribution with `flatpak install --user <file>`. It keeps its own settings, separate from the `.deb` version.
+- **New-message button.** When you scroll up in a chat, a "↓ N new messages" button counts what has arrived below. Click it to jump back to the newest messages.
+- **Jumps back when idle.** If you've scrolled up and leave the chat alone for 15 seconds, it returns to the newest messages and follows them again. Turn it off in Settings → General ("Jump back to new messages after 15 seconds of inactivity").
+
+### Improved
+- **Shorter hover pause.** Hovering over the chat still pauses it so names don't slide away while you aim. It now resumes 1.5 seconds after the mouse stops moving, so a mouse resting on the chat no longer freezes it.
+
+### Fixed
+- **Chat stuck scrolled up.** After hovering over the chat, zooming or resizing the window, the chat could stop following new messages and you'd miss them. It now stays at the bottom unless you scroll up yourself.
 
 Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
 <!-- release-notes:end -->

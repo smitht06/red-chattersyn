@@ -341,6 +341,16 @@ class SettingsDialog(QDialog):
             bool(self._settings.get("general.restore_tabs", True)))
         form.addRow("", self._restore_tabs)
 
+        self._idle_jump = QCheckBox(
+            "Jump back to new messages after 15 seconds of inactivity", page)
+        self._idle_jump.setChecked(
+            bool(self._settings.get("general.jump_to_latest_when_idle", True)))
+        self._idle_jump.setToolTip(
+            "When you've scrolled up in a chat and stop moving the mouse, "
+            "scrolling or typing in it for 15 seconds, the chat returns to the "
+            "newest messages and follows them again.")
+        form.addRow("", self._idle_jump)
+
         self._chat_logs = QCheckBox("Save chat logs to files", page)
         self._chat_logs.setChecked(bool(self._settings.get("logging.enabled", True)))
         self._chat_logs.setToolTip(
@@ -885,6 +895,7 @@ class SettingsDialog(QDialog):
             "youtube_emotes.map": (None if self._emoji_rows() == DEFAULT_EMOJI
                                    else self._emoji_rows()),
             "general.restore_tabs": self._restore_tabs.isChecked(),
+            "general.jump_to_latest_when_idle": self._idle_jump.isChecked(),
             "logging.enabled": self._chat_logs.isChecked(),
             "highlights": self._highlights,
             "moderation_actions": self._moderation_actions,

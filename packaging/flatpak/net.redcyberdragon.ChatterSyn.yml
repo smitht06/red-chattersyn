@@ -1,36 +1,24 @@
-# Flatpak manifest for ChatterSyn (app ID net.redcyberdragon.ChatterSyn).
-#
-# Build and install from this checkout:
-#   flatpak-builder --user --install --force-clean build-dir \
-#       packaging/flatpak/net.redcyberdragon.ChatterSyn.yml
-#
-# CI's `flatpak` job builds this into the .flatpak attached to each GitHub
-# release; it is not on Flathub (see packaging/flatpak/README.md).
-#
-# PySide6 comes from io.qt.PySide.BaseApp (the KDE runtime's own PySide6, not
-# PyPI wheels); keep base-version equal to runtime-version. The other Python packages
-# are python3-*.json, generated from uv.lock by scripts/gen_flatpak_deps.py.
 app-id: net.redcyberdragon.ChatterSyn
 runtime: org.kde.Platform
-runtime-version: '6.11'
+runtime-version: "6.11"
 sdk: org.kde.Sdk
 base: io.qt.PySide.BaseApp
-base-version: '6.11'
+base-version: "6.11"
 sdk-extensions:
-  - org.freedesktop.Sdk.Extension.rust-stable  # maturin and cryptography are Rust
+  - org.freedesktop.Sdk.Extension.rust-stable
 command: chattersyn
 finish-args:
-  - --share=network   # Twitch, YouTube and emote CDNs; OAuth sign-in on localhost
-  - --share=ipc       # X11 shared memory
+  - --share=network
+  - --share=ipc
   - --socket=wayland
   - --socket=fallback-x11
-  - --device=dri      # OpenGL
-  - --socket=pulseaudio  # the highlight ping sound
-  - --talk-name=org.freedesktop.secrets  # sign-in tokens in the desktop keyring
+  - --device=dri
+  - --socket=pulseaudio
+  - --talk-name=org.freedesktop.secrets
 build-options:
   env:
-    BASEAPP_REMOVE_WEBENGINE: '1'
-    BASEAPP_DISABLE_NUMPY: '1'
+    BASEAPP_REMOVE_WEBENGINE: "1"
+    BASEAPP_DISABLE_NUMPY: "1"
 cleanup-commands:
   - /app/cleanup-BaseApp.sh
 modules:

@@ -159,6 +159,8 @@ def test_accept_writes_general_and_accounts(qapp, tmp_path, settings_path):
     dialog._scale.setValue(1.25)
     dialog._scrollback.setValue(500)
     dialog._restore_tabs.setChecked(False)
+    assert dialog._idle_jump.isChecked()  # idle jump-to-latest default on
+    dialog._idle_jump.setChecked(False)
     assert dialog._badges.isChecked()  # badges default on
     dialog._badges.setChecked(False)
     assert dialog._chat_logs.isChecked()  # chat logs default on
@@ -170,6 +172,7 @@ def test_accept_writes_general_and_accounts(qapp, tmp_path, settings_path):
     assert data["ui_scale"] == 1.25
     assert data["scrollback"] == 500
     assert data["general"]["restore_tabs"] is False
+    assert data["general"]["jump_to_latest_when_idle"] is False
     assert data["badges"]["enabled"] is False
     assert data["logging"]["enabled"] is False
     # Twitch has no credential fields anymore: sign-in is the browser flow
