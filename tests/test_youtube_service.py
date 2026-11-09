@@ -1389,3 +1389,30 @@ async def test_pool_reset_is_announced_once_and_wakes_waiting_watches(
     await settle()
     assert _pool_states(events) == [(Pool.SHARED, resume), (Pool.SHARED, None)]
     assert svc.resolver.deeps == [True]
+
+
+async def test_signin_fallback_is_for_that_chat_only(service, clock, signals, fake_readers):
+    # R11: a members-only chat read with the sign-in does not move the channel
+    # tab's later checks and streams off the key.
+    events, _ = signals
+    chat2 = _resolution(ResolveState.LIVE, video_id="vid2", live_chat_id="chat2")
+    svc, naps = _scheduled(service, clock, [LIVE, chat2], api_key="K")
+    _sign_in(svc)
+    FakeGrpcReader.script = [
+        ReadRefused("not authorized", key_invalid=False),  # members-only: key refused
+        ([_rest_item("ce1", "chat has ended", kind="chatEndedEvent")], "page-9"),
+        StreamEnded("done"),
+    ]
+    svc.watch(CHANNEL, "k1")
+    assert await wait_until(lambda: naps.dues())
+    assert FakeGrpcReader.instances[1].metadata == (("authorization", "Bearer tok"),)
+    svc.quota.mark_exhausted(Pool.SHARED)  # only the sign-in's pool is used up
+    await settle()
+    assert not _waits(events)  # the channel's checks use the key: not blocked
+    clock.advance(120)
+    naps.wake("k1")
+    assert await wait_until(lambda: len(FakeGrpcReader.instances) == 3)
+    assert svc.resolver.times == [T0, T0 + 2 * MIN]
+    assert FakeGrpcReader.instances[2].metadata == (("x-goog-api-key", "K"),)
+    assert FakeGrpcReader.instances[2].calls == [("chat2", None)]
+    assert not _waits(events)

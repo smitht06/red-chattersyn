@@ -162,7 +162,7 @@ class _Watch:
     channel_title: str = ""
     viewers: int = 0
     started_at: dt.datetime | None = None
-    use_signin: bool = False  # key not allowed for this watch: read with the sign-in
+    use_signin: bool = False  # key refused for this live chat: read it with the sign-in
     kind: WatchKind = field(init=False)  # follows target (see watch())
     on_screen: bool = True
     last_check: dt.datetime | None = None
@@ -438,6 +438,8 @@ class YouTubeService:
         self._checked(watch, restart_offline=found_again
                       or resolution.state is ResolveState.LIVE)
         watch.video_id = resolution.video_id
+        if resolution.live_chat_id != watch.live_chat_id:
+            watch.use_signin = False  # the sign-in fallback was for that chat only
         watch.live_chat_id = resolution.live_chat_id
         watch.channel_id = resolution.channel_id
         watch.title = resolution.title
@@ -725,6 +727,7 @@ class YouTubeService:
         """Clear per-stream state so a channel target can re-resolve afresh."""
         watch.chat_ended = False
         watch.live_chat_id = None
+        watch.use_signin = False  # the key may read the next chat
         watch.channel_id = None
         watch.read_page_token = None
         watch.backoff = BACKOFF_BASE
