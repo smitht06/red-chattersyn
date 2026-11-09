@@ -369,9 +369,13 @@ class YouTubeService:
         return bool(self.api._usable_key() or self.tokens)
 
     def set_api_key(self, value: str) -> None:
-        """Live refresh after Settings accept (the key lives in the keyring)."""
+        """Live refresh after Settings accept (the key lives in the keyring).
+        Wakes every watch: one waiting for a used-up pool its calls no longer
+        need (e.g. a key added during a sign-in quota wait) goes on at once."""
         self._api_key = value.strip()
         self.api.reset_key_problem()
+        for watch in self._watches.values():
+            watch.wake.set()
 
     def api_key_problem(self) -> str:
         """User-facing note when the API key is rejected, else ''."""
@@ -704,7 +708,9 @@ class YouTubeService:
 
     async def _quota_wait(self, watch_key: str, watch: _Watch, pool: Pool) -> None:
         """Wait for `pool`'s reset, keeping the watch; then start afresh as if
-        the tab had just been opened (a deep first check)."""
+        the tab had just been opened (a deep first check). The wait ends
+        early when, after a wake, the watch's calls no longer need `pool`
+        (e.g. an API key was added during a sign-in quota wait)."""
         resume = self.quota.resume_at(pool)
         if resume is None:
             return  # usable again already
@@ -715,10 +721,12 @@ class YouTubeService:
         self._system_row(watch, "YouTube quota used up — reading paused until "
                          f"{resume.astimezone():%H:%M}")
         await self._wait_until(
-            watch, lambda: self.quota.resume_at(pool) or self._now(), quota_wait=True)
+            watch, lambda: self.quota.resume_at(pool) or self._now(),
+            quota_wait=True, quota_pool=pool)
         if watch.stopped:
             return
-        self._pool_resumed(pool, resume)
+        if not self.quota.exhausted(pool):
+            self._pool_resumed(pool, resume)
         self._reset_watch(watch)
         watch.deep = True
         watch.offline_since = self._now()
@@ -825,13 +833,15 @@ class YouTubeService:
 
     async def _wait_until(
         self, watch: _Watch | _PoolTimer, due: Callable[[], dt.datetime], *,
-        quota_wait: bool = False,
+        quota_wait: bool = False, quota_pool: Pool | None = None,
     ) -> None:
         """Wait until `due()` against the wall clock. A wake (e.g. a
         visibility change) recomputes `due()`. A normal wait also ends when a
         check is asked for or a pool the watch needs is used up (looked at
-        first and after each wake); a quota wait ends only at `due()`."""
-        look = True
+        first and after each wake); a quota wait ends at `due()`, or - given
+        `quota_pool` - after a wake once the watch no longer needs that pool."""
+        look = True  # a normal wait looks first and after each wake
+        woken = False  # a quota wait looks after each wake only
         while not watch.stopped:
             watch.wake.clear()
             if not quota_wait:
@@ -839,12 +849,15 @@ class YouTubeService:
                     return
                 if look and await self._blocked_pool(watch) is not None:
                     return
+            elif (quota_pool is not None and woken
+                  and await self._blocked_pool(watch) is not quota_pool):
+                return
             watch.next_check = due()
             left = (watch.next_check - self._now()).total_seconds()
             if left <= 0:
                 return
             await self._nap(watch, min(left, SLEEP_CHUNK))
-            look = watch.wake.is_set()
+            look = woken = watch.wake.is_set()
 
     async def _nap(self, watch: _Watch | _PoolTimer, seconds: float) -> None:
         """Sleep `seconds` or until the watch is woken."""

@@ -1391,6 +1391,57 @@ async def test_pool_reset_is_announced_once_and_wakes_waiting_watches(
     assert svc.resolver.deeps == [True]
 
 
+async def test_key_entered_during_a_shared_wait_checks_with_it_at_once(service, clock, signals):
+    # The sign-in's pool is used up; the user adds an API key in Settings: the
+    # waiting watch leaves its wait without waiting for the reset and checks
+    # (deep) with the key.
+    events, _ = signals
+    svc = service(now=clock)
+    naps = Naps(clock)
+    svc._nap = naps
+    _sign_in(svc)  # no key: the watch's calls use the shared pool
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"items": []}, request=request)
+
+    await _mock_rest(svc, handler)
+    resume = svc.quota.mark_exhausted(Pool.SHARED)
+    svc.watch(CHANNEL, "k1")
+    assert await wait_until(lambda: _waits(events) and naps.dues("k1"))
+    await settle()
+    assert naps.dues("k1")[-1] == resume
+    assert requests == []
+    svc.set_api_key("K")
+    assert await wait_until(lambda: requests)
+    assert clock() < resume  # it did not wait for the reset
+    assert requests[0].url.params["key"] == "K"
+    assert "authorization" not in requests[0].headers
+    assert svc.quota.exhausted(Pool.SHARED)
+    assert _pool_states(events) == [(Pool.SHARED, resume)]  # no reset announced
+
+
+async def test_visibility_wake_keeps_a_wait_whose_pool_is_still_used_up(
+        service, clock, signals):
+    events, _ = signals
+    svc, naps = _scheduled(service, clock, [OFFLINE])
+    _sign_in(svc)
+    resume = svc.quota.mark_exhausted(Pool.SHARED)
+    svc.watch(CHANNEL, "k1")
+    assert await wait_until(lambda: _waits(events) and naps.dues("k1"))
+    await settle()
+    clock.advance(5 * 60)
+    svc.set_on_screen("k1", False)
+    await settle()
+    svc.set_on_screen("k1", True)
+    await settle()
+    assert svc.resolver.calls == []
+    assert len(_waits(events)) == 1  # the same wait goes on
+    assert naps.dues("k1")[-1] == resume
+    assert not svc._watches["k1"].task.done()
+
+
 async def test_signin_fallback_is_for_that_chat_only(service, clock, signals, fake_readers):
     # R11: a members-only chat read with the sign-in does not move the channel
     # tab's later checks and streams off the key.
