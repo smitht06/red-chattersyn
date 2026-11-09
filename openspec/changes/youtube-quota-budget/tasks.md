@@ -168,7 +168,7 @@ Interfaces:
 3. In `_from_mine` and `_from_video`, fill `scheduled_starts` from the single scheduled start.
 4. Run the verify command. Expected: PASS.
 
-- [ ] 3.3 Watch loop on the schedule, visibility API — verify: uv run pytest tests/test_youtube_service.py -q passes
+- [x] 3.3 Watch loop on the schedule, visibility API — verify: uv run pytest tests/test_youtube_service.py -q passes
 
 Covers: YQB-17, YQB-18, YQB-20, YQB-39, YQB-40, YQB-41, YQB-54 · Test: scenario-first
 
