@@ -306,14 +306,3 @@ async def test_unauthenticated_error_property():
     for status, reason in ((401, "unauthenticated"), (401, "authError")):
         assert YoutubeApiError(status, reason, "nope").is_unauthenticated
     assert not YoutubeApiError(403, "quotaExceeded", "quota").is_unauthenticated
-
-
-async def test_quota_tracker_daily_rollover():
-    tracker = QuotaTracker()
-    tracker.charge(5)
-    assert tracker.used == 5
-    tracker.mark_exhausted()
-    assert tracker.exhausted()
-    tracker._day = None  # simulate a new day
-    assert not tracker.exhausted()
-    assert tracker.used == 0

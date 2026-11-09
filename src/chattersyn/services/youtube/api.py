@@ -5,11 +5,11 @@ Endpoints used (verified against the discovery document, 2026-10-15):
   channels.list            1 unit      uploads / mine / chat display names
   playlistItems.list       1 unit      uploads playlist scan (newest video)
   liveBroadcasts.list      1 unit      mine=true — the user's own broadcast
-  search.list              1 unit      100 calls/day separate bucket
+  search.list              1 unit      its own bucket of 100 calls/day
   liveChatMessages.list    5 units     REST fallback reader
   liveChatMessages.insert  20 units    send
-  liveChatBans.insert      50 units    ban (user card)
-  liveChatBans.delete      50 units    unban (user card)
+  liveChatBans.insert      200 units   ban / timeout (user card)
+  liveChatBans.delete      200 units   unban (user card)
 
 All live chat methods are OAuth-only (API keys are rejected). The default
 project quota is 10,000 units/day; the tracker below is approximate (a single
@@ -18,11 +18,12 @@ project quota is 10,000 units/day; the tracker below is approximate (a single
 
 from __future__ import annotations
 
-import datetime as dt
 import logging
 from collections.abc import Awaitable, Callable
 
 import httpx
+
+from .quota import Pool, QuotaTracker
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +34,7 @@ QUOTA = {
     "list": 5,
     "insert": 20,
     "meta": 1,  # videos/channels/playlistItems/search
-    "ban": 50,  # liveChatBans insert/delete
+    "ban": 200,  # liveChatBans insert/delete
 }
 
 # Error reasons that mean the chat itself is gone/blocked (not retryable by us).
@@ -66,44 +67,6 @@ class YoutubeApiError(Exception):
     def is_unauthenticated(self) -> bool:
         # "authError" = an API key used where OAuth is required (e.g. mine=true).
         return self.http_status == 401 or self.reason in ("unauthenticated", "authError")
-
-
-class QuotaTracker:
-    """Approximate per-project-day quota accounting (in-memory)."""
-
-    DAILY_UNITS = 10_000
-
-    def __init__(self) -> None:
-        self._used = 0
-        self._day: dt.date | None = None
-        self._exhausted = False
-
-    def _rollover(self) -> None:
-        today = dt.datetime.now().date()
-        if self._day != today:
-            self._day = today
-            self._used = 0
-            self._exhausted = False
-
-    def charge(self, units: int) -> None:
-        self._rollover()
-        self._used += units
-
-    def exhausted(self) -> bool:
-        self._rollover()
-        return self._exhausted
-
-    def mark_exhausted(self) -> None:
-        self._exhausted = True
-
-    @property
-    def used(self) -> int:
-        self._rollover()
-        return self._used
-
-    @property
-    def remaining(self) -> int:
-        return max(0, self.DAILY_UNITS - self.used)
 
 
 class YouTubeApi:
@@ -178,7 +141,7 @@ class YouTubeApi:
             retryable=reason == "rateLimitExceeded" or response.status_code in (429, 500, 502, 503),
         )
         if exc.is_quota:
-            self.quota.mark_exhausted()
+            self.quota.mark_exhausted(Pool.SHARED)
         log.debug("YouTube API %s -> %s %s", path, response.status_code, reason)
         raise exc
 
