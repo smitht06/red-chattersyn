@@ -123,7 +123,7 @@ Interfaces:
 
 ## 3. Live detection
 
-- [ ] 3.1 Check schedule — verify: uv run pytest tests/test_youtube_schedule.py -q passes
+- [x] 3.1 Check schedule — verify: uv run pytest tests/test_youtube_schedule.py -q passes
 
 Covers: YQB-6, YQB-7, YQB-8, YQB-9, YQB-10, YQB-11, YQB-12, YQB-13, YQB-14, YQB-15, YQB-16, YQB-19, YQB-36, YQB-37, YQB-38, YQB-40, YQB-52, YQB-53 · Test: scenario-first
 
