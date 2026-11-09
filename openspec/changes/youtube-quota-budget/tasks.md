@@ -143,7 +143,7 @@ Interfaces:
 2. Implement `next_check_at` to these rules.
 3. Run the verify command. Expected: PASS.
 
-- [ ] 3.2 Resolver: deep scan once, cheap re-checks — verify: uv run pytest tests/test_youtube_resolver.py -q passes
+- [x] 3.2 Resolver: deep scan once, cheap re-checks — verify: uv run pytest tests/test_youtube_resolver.py -q passes
 
 Covers: YQB-1, YQB-2, YQB-3, YQB-4, YQB-5, YQB-35 · Test: scenario-first
 
