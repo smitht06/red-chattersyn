@@ -169,21 +169,22 @@ async def test_youtube_live_status_composes_stats(win):
 # -- YouTube send-toggle blocking (quota / auth) -----------------------------------------
 
 
-async def test_quota_exhausted_blocks_youtube_send_toggle(win):
+async def test_quota_exhausted_sets_status_without_blocking_send(win):
+    """A read-pool wait only changes the status text; the send toggle is
+    driven by QuotaPoolState for the shared pool (tests/test_main_window_quota.py)."""
     tab = win._tabs[0]
     win._on_youtube_state(YoutubeState(
         watch_key=tab.tab_key, state=WatchState.QUOTA_EXHAUSTED,
-        video_id="v1", live_chat_id="lc1", channel_id="UC1"))
-    assert not tab.header.youtube_enabled()
-    assert not tab.header._youtube_chip.isEnabled()
-    assert "quota" in tab.header._youtube_chip.toolTip()
-    assert tab.header._status_label.text() == "YouTube quota exhausted"
+        video_id="v1", live_chat_id="lc1", channel_id="UC1",
+        resume_at=dt.datetime(2026, 11, 10, 8, 5, tzinfo=dt.UTC)))
+    assert tab.header.youtube_enabled()
+    assert tab.header._youtube_chip.isEnabled()
+    assert tab.header._status_label.text().startswith("YouTube quota used up · resumes at ")
 
 
 async def test_live_unblocks_youtube_send_toggle(win):
     tab = win._tabs[0]
-    win._on_youtube_state(YoutubeState(
-        watch_key=tab.tab_key, state=WatchState.QUOTA_EXHAUSTED, video_id="v1"))
+    tab.header.set_youtube_send_enabled(False, "x")
     win._on_youtube_state(YoutubeState(
         watch_key=tab.tab_key, state=WatchState.LIVE, video_id="v1",
         live_chat_id="lc1", title="Stream", channel_title="Chan", channel_id="UC1"))
@@ -206,8 +207,7 @@ async def test_unblock_restores_user_toggle_off_preference(win):
     force it back on."""
     tab = win._tabs[0]
     tab.header._youtube_chip.setChecked(False)  # user choice
-    win._on_youtube_state(YoutubeState(
-        watch_key=tab.tab_key, state=WatchState.QUOTA_EXHAUSTED, video_id="v1"))
+    tab.header.set_youtube_send_enabled(False, "x")
     win._on_youtube_state(YoutubeState(
         watch_key=tab.tab_key, state=WatchState.LIVE, video_id="v1",
         live_chat_id="lc1", title="Stream", channel_title="Chan", channel_id="UC1"))

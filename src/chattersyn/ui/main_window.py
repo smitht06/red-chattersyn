@@ -57,8 +57,14 @@ from ..services.twitch.auth import DEFAULT_TWITCH_CLIENT_ID, MODERATION_SCOPE, T
 from ..services.twitch.mapper import ClearChat, ClearMsg, RoomState, UserState
 from ..services.twitch.service import TwitchService
 from ..services.youtube.auth import YouTubeAuthError
+from ..services.youtube.quota import Pool
 from ..services.youtube.resolver import MINE_TARGET
-from ..services.youtube.service import WatchState, YouTubeService, YoutubeState
+from ..services.youtube.service import (
+    QuotaPoolState,
+    WatchState,
+    YouTubeService,
+    YoutubeState,
+)
 from . import theme
 from .emote_picker import EmotePickerPopup
 from .empty_tab_page import EmptyTabPage
@@ -91,6 +97,11 @@ def _chat_mode_text(state: dict) -> str:
     if state.get("slow"):
         parts.append(f"slow {state['slow']}s")
     return " · ".join(parts)
+
+
+def _format_resume(resume_at: dt.datetime) -> str:
+    """A quota resume time (aware UTC from the service) as local "HH:MM"."""
+    return resume_at.astimezone().strftime("%H:%M")
 
 
 def _tab_title(twitch_channel: str, youtube_target: str) -> str:
@@ -132,6 +143,9 @@ class MainWindow(QMainWindow):
         self._moderation = ModerationState()
         self._msgs_since_clearchat: dict[str, int] = {}  # twitch channel -> messages since last CC row
         self._clearchat_rows: dict[tuple[str, str, str], str] = {}  # (tab_key, channel, login) -> system row id
+        # When the shared YouTube quota pool (sends, bans, Stream tab) is usable
+        # again; None while it is fine. Drives every tab's YouTube send toggle.
+        self._shared_pool_resume_at: dt.datetime | None = None
         self._identity_retry_at = 0.0  # monotonic stamp of the last identity retry
         self._identity_retry_task: asyncio.Task | None = None
         self._roomstate_text: dict[str, str] = {}  # twitch channel -> last chat-mode label
@@ -687,6 +701,8 @@ class MainWindow(QMainWindow):
                     tab.header.set_chat_modes(text)
         elif isinstance(event, YoutubeState):
             self._on_youtube_state(event)
+        elif isinstance(event, QuotaPoolState):
+            self._on_quota_pool_state(event)
 
     def _expire_disable(self, channel: str, login: str, deadline: float | None) -> None:
         """A timeout's duration has passed: un-gray the user's rows.
@@ -782,7 +798,10 @@ class MainWindow(QMainWindow):
             tab.set_youtube_status(self._format_stream_status(
                 event.channel_title or "", event.viewers or 0,
                 event.started_at.isoformat() if event.started_at else "") or "live")
-            tab.header.set_youtube_send_enabled(True)
+            # Reads continuing (the key pool) must not re-enable sends while
+            # the shared pool they bill against is used up.
+            if self._shared_pool_resume_at is None:
+                tab.header.set_youtube_send_enabled(True)
         elif state is WatchState.UPCOMING:
             tab.set_youtube(event.title or tab.youtube_title, live=False)
             tab.header.set_viewer_count(Platform.YOUTUBE, None)
@@ -807,12 +826,12 @@ class MainWindow(QMainWindow):
                     f"YouTube chat unavailable: {event.detail}",
                     extra={"watch_key": tab.tab_key}))
         elif state is WatchState.QUOTA_EXHAUSTED:
-            tab.set_youtube_status("YouTube quota exhausted")
-            # Sends bill 20 units per insert and would be rejected anyway —
-            # block the toggle until the quota resets (midnight PT) and the
-            # watch goes LIVE again.
-            tab.header.set_youtube_send_enabled(
-                False, "YouTube quota exhausted — resets midnight PT")
+            # Only this tab's READS wait. The send toggle follows the shared
+            # pool alone (QuotaPoolState), since sends always use the sign-in.
+            text = "YouTube quota used up"
+            if event.resume_at is not None:
+                text += f" · resumes at {_format_resume(event.resume_at)}"
+            tab.set_youtube_status(text)
         elif state is WatchState.AUTH_REQUIRED:
             tab.set_youtube_status("YouTube auth required")
             tab.header.set_youtube_send_enabled(
@@ -835,6 +854,24 @@ class MainWindow(QMainWindow):
             # the id — the chat is still alive, just unwatchable.
             self._moderation.forget_youtube_chat(tab.youtube_live_chat_id)
             tab.youtube_live_chat_id = ""
+
+    def _quota_block_reason(self) -> str:
+        resume_at = self._shared_pool_resume_at
+        if resume_at is None:
+            return ""
+        return f"YouTube quota used up — resumes at {_format_resume(resume_at)}"
+
+    def _on_quota_pool_state(self, event: QuotaPoolState) -> None:
+        """The shared pool ran out (block every tab's YouTube send toggle) or
+        is usable again (unblock; the header restores the earlier on/off)."""
+        if event.pool is not Pool.SHARED:
+            return  # key-pool reads never block sends
+        self._shared_pool_resume_at = event.resume_at
+        for tab in self._tabs:
+            if event.resume_at is None:
+                tab.header.set_youtube_send_enabled(True)
+            else:
+                tab.header.set_youtube_send_enabled(False, self._quota_block_reason())
 
     # -- moderation rights (user card mod actions) ------------------------------------
 
@@ -936,8 +973,9 @@ class MainWindow(QMainWindow):
             if platform == "twitch":
                 self._bind_streamer_tabs()
             elif platform == "youtube":
-                for tab in self._tabs:
-                    tab.header.set_youtube_send_enabled(True)
+                if self._shared_pool_resume_at is None:
+                    for tab in self._tabs:
+                        tab.header.set_youtube_send_enabled(True)
                 # Fresh tokens apply immediately instead of after the
                 # 60-120 s poll sleep of the existing watch loop.
                 self._rewatch_streamer_tabs()
@@ -1232,6 +1270,15 @@ class MainWindow(QMainWindow):
             youtube_enabled = False  # never silently drop: the row above says why
 
         if not twitch_enabled and not youtube_enabled:
+            if (tab.youtube_target and self._shared_pool_resume_at is not None
+                    and tab.header.youtube_send_blocked()):
+                # YouTube is what the user wants, but its send toggle waits
+                # for the shared quota: say when it comes back.
+                tab.add_message(Message.system(
+                    Platform.YOUTUBE, tab.youtube_live_chat_id,
+                    self._quota_block_reason(),
+                    extra={"watch_key": tab.tab_key}))
+                return
             tab.add_message(Message.system(
                 Platform.SYSTEM, tab.twitch_channel,
                 "nothing to send to — enable a send toggle"))
@@ -1430,6 +1477,8 @@ class MainWindow(QMainWindow):
         # no fresh ROOMSTATE (the join is a no-op), but the header must
         # still show the current modes.
         tab.header.set_chat_modes(self._roomstate_text.get(twitch_channel, ""))
+        if self._shared_pool_resume_at is not None:
+            tab.header.set_youtube_send_enabled(False, self._quota_block_reason())
         self._sync_send_limits(tab)
         self._sync_empty_state()
         self._save_tabs()
