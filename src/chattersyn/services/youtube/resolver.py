@@ -14,7 +14,7 @@ import enum
 import logging
 import re
 
-from .api import YouTubeApi
+from .api import YouTubeApi, YoutubeApiError
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +57,7 @@ class Resolution:
         scheduled_start: dt.datetime | None = None,
         viewers: int = 0,
         started_at: dt.datetime | None = None,
+        scheduled_starts: list[dt.datetime] | None = None,
     ):
         self.state = state
         self.video_id = video_id
@@ -67,6 +68,9 @@ class Resolution:
         self.scheduled_start = scheduled_start
         self.viewers = viewers  # liveStreamingDetails.concurrentViewers
         self.started_at = started_at  # liveStreamingDetails.actualStartTime
+        # Start times of every upcoming video seen (stale ones included; the
+        # scheduler filters them).
+        self.scheduled_starts: list[dt.datetime] = list(scheduled_starts or [])
 
     @property
     def resolved(self) -> bool:
@@ -92,13 +96,33 @@ def parse_target(target: str) -> tuple[str, str] | None:
     return None
 
 
+class _ChannelCache:
+    """What a channel target remembers so re-checks read one page only."""
+
+    def __init__(self, channel_id: str, uploads: str, page_ids: list[str],
+                 videos: list[dict]):
+        self.channel_id = channel_id
+        self.uploads = uploads
+        self.page_ids = page_ids  # ids on the newest page at the last check
+        self.videos = videos  # videos from the last videos_batch (newest first)
+
+
 class LiveChatResolver:
     def __init__(self, api: YouTubeApi):
         self._api = api
+        self._cache: dict[tuple[str, str], _ChannelCache] = {}
 
-    async def resolve(self, target: str) -> Resolution:
+    def forget(self, target: str) -> None:
+        """Drop what is remembered for a channel target."""
+        parsed = parse_target(target)
+        if parsed is not None:
+            self._cache.pop(parsed, None)
+
+    async def resolve(self, target: str, *, deep: bool = False) -> Resolution:
         """Resolve a video URL/id, a channel handle/id, or MINE_TARGET (the
-        authorized account's own live broadcast) to a live chat."""
+        authorized account's own live broadcast) to a live chat. A channel
+        resolve is a full scan when deep or not yet cached; otherwise it reads
+        only the newest uploads page."""
         parsed = parse_target(target)
         if parsed is None:
             return Resolution(ResolveState.NOT_FOUND)
@@ -107,6 +131,9 @@ class LiveChatResolver:
             return await self._from_video(value)
         if kind == "mine":
             return await self._from_mine()
+        cached = None if deep else self._cache.get(parsed)
+        if cached is not None:
+            return await self._recheck_channel(parsed, cached)
         return await self._from_channel(value, kind)
 
     async def _from_mine(self) -> Resolution:
@@ -134,6 +161,7 @@ class LiveChatResolver:
             channel_title=snippet.get("channelTitle", ""),
             channel_id=snippet.get("channelId"),
             scheduled_start=_parse_dt(snippet.get("scheduledStartTime")),
+            scheduled_starts=_starts([snippet.get("scheduledStartTime")]),
             viewers=int(((item.get("statistics") or {}).get("concurrentViewers")) or 0),
             started_at=_parse_dt(snippet.get("actualStartTime")),
         )
@@ -163,31 +191,73 @@ class LiveChatResolver:
         )
         if not uploads:
             return Resolution(ResolveState.OFFLINE, channel_id=channel_id)
-        videos = await self._newest_videos(uploads)
+        videos, page_ids = await self._newest_videos(uploads)
+        self._cache[(kind, channel)] = _ChannelCache(channel_id, uploads, page_ids, videos)
+        return self._channel_resolution(channel_id, videos)
+
+    def _channel_resolution(self, channel_id: str, videos: list[dict]) -> Resolution:
+        starts = self._upcoming_starts(videos)
         for video in videos:
             if self._live_state(video) == "live":
-                return self._video_resolution(video)
+                res = self._video_resolution(video)
+                res.scheduled_starts = starts
+                return res
         if not videos:
             return Resolution(ResolveState.OFFLINE, channel_id=channel_id)
-        return self._video_resolution(videos[0])  # newest: upcoming/ended/offline
+        res = self._video_resolution(videos[0])  # newest: upcoming/ended/offline
+        res.scheduled_starts = starts
+        return res
 
-    async def _newest_videos(self, uploads_playlist: str) -> list[dict]:
+    def _upcoming_starts(self, videos: list[dict]) -> list[dt.datetime]:
+        return _starts(
+            video.get("liveStreamingDetails", {}).get("scheduledStartTime")
+            for video in videos if self._live_state(video) == "upcoming")
+
+    async def _recheck_channel(
+        self, key: tuple[str, str], cache: _ChannelCache
+    ) -> Resolution:
+        """One playlistItems page (1 unit), plus one videos.list unless the
+        page is unchanged and nothing on it is upcoming or live."""
+        try:
+            page = await self._api.playlist_items(cache.uploads)
+        except YoutubeApiError as exc:
+            if exc.http_status == 404:
+                self._cache.pop(key, None)
+                return Resolution(ResolveState.NOT_FOUND)
+            raise
+        ids = _page_ids(page)
+        watching = [v for v in cache.videos if self._live_state(v) in ("upcoming", "live")]
+        if ids == cache.page_ids and not watching:
+            return self._channel_resolution(cache.channel_id, cache.videos)
+        # Also refresh a watched video that has slipped off the newest page
+        # (a long-running stream found by the deep scan).
+        extra = [v["id"] for v in watching if v.get("id") not in ids]
+        wanted = [*ids, *extra]
         videos: list[dict] = []
+        for start in range(0, len(wanted), BATCH):
+            videos.extend(await self._api.videos_batch(wanted[start:start + BATCH]))
+        videos.sort(key=lambda v: v.get("snippet", {}).get("publishedAt", ""), reverse=True)
+        cache.page_ids = ids
+        cache.videos = videos
+        return self._channel_resolution(cache.channel_id, videos)
+
+    async def _newest_videos(self, uploads_playlist: str) -> tuple[list[dict], list[str]]:
+        """Deep scan -> (videos newest first, ids on the newest page)."""
+        videos: list[dict] = []
+        first_page: list[str] | None = None
         page_token: str | None = None
         for _ in range(MAX_PLAYLIST_PAGES):
             page = await self._api.playlist_items(uploads_playlist, page_token=page_token)
-            ids = [
-                item["contentDetails"]["videoId"]
-                for item in page.get("items", [])
-                if "videoId" in item.get("contentDetails", {})
-            ]
+            ids = _page_ids(page)
+            if first_page is None:
+                first_page = ids
             for start in range(0, len(ids), BATCH):
                 videos.extend(await self._api.videos_batch(ids[start:start + BATCH]))
             page_token = page.get("nextPageToken")
             if not page_token or any(self._live_state(v) == "live" for v in videos):
                 break
         videos.sort(key=lambda v: v.get("snippet", {}).get("publishedAt", ""), reverse=True)
-        return videos
+        return videos, first_page or []
 
     @staticmethod
     def _live_state(video: dict) -> str:
@@ -216,9 +286,22 @@ class LiveChatResolver:
             channel_title=snippet.get("channelTitle", ""),
             channel_id=snippet.get("channelId"),
             scheduled_start=_parse_dt(details.get("scheduledStartTime")),
+            scheduled_starts=_starts([details.get("scheduledStartTime")]),
             viewers=int(details.get("concurrentViewers") or 0),
             started_at=_parse_dt(details.get("actualStartTime")),
         )
+
+
+def _page_ids(page: dict) -> list[str]:
+    return [
+        item["contentDetails"]["videoId"]
+        for item in page.get("items", [])
+        if "videoId" in item.get("contentDetails", {})
+    ]
+
+
+def _starts(values) -> list[dt.datetime]:
+    return [d for d in (_parse_dt(v) for v in values) if d is not None]
 
 
 def _parse_dt(value: str | None) -> dt.datetime | None:

@@ -354,3 +354,185 @@ async def test_live_video_carries_viewers_and_started_at():
     resolution = await LiveChatResolver(_api(handler)).resolve("dQw4w9WgXcQ")
     assert resolution.viewers == 1234
     assert resolution.started_at == dt.datetime(2026, 10, 16, 10, 0, tzinfo=dt.UTC)
+
+
+# -- deep scan once, cheap re-checks (counting fake API, 1 unit per call) ---------------
+
+
+class CountingApi:
+    """Duck-typed YouTubeApi: every call costs 1 unit and is logged."""
+
+    def __init__(self, pages, videos):
+        self.pages = pages  # list of lists of video ids, newest page first
+        self.videos = videos  # id -> video dict (mutable between resolves)
+        self.calls = []
+        self.playlist_error = None
+
+    async def channel_by_handle(self, handle):
+        self.calls.append("channel_by_handle")
+        return _channel()
+
+    async def channel_by_id(self, channel_id):
+        self.calls.append("channel_by_id")
+        return _channel()
+
+    async def playlist_items(self, playlist_id, page_token=None, max_results=50):
+        self.calls.append("playlist_items")
+        if self.playlist_error:
+            raise self.playlist_error
+        index = int(page_token or 0)
+        page = {"items": [{"contentDetails": {"videoId": v}} for v in self.pages[index]]}
+        if index + 1 < len(self.pages):
+            page["nextPageToken"] = str(index + 1)
+        return page
+
+    async def videos_batch(self, ids):
+        self.calls.append("videos_batch")
+        return [self.videos[i] for i in ids if i in self.videos]
+
+    def names(self, name):
+        return [c for c in self.calls if c == name]
+
+
+def _offline_channel(pages=1, per_page=50):
+    ids = [[f"v{p:02d}{i:04d}"[:11].ljust(11, "x") for i in range(per_page)]
+           for p in range(pages)]
+    videos = {v: _video(v, published=f"2026-10-01T00:{n % 60:02d}:00Z")
+              for n, page in enumerate(ids) for v in page}
+    return ids, videos
+
+
+async def test_deep_finds_live_on_page_three():  # YQB-1
+    ids, videos = _offline_channel(pages=4)
+    live = ids[2][7]
+    videos[live] = _video(live, live="live", chat_id="CHAT")
+    api = CountingApi(ids, videos)
+    res = await LiveChatResolver(api).resolve("@forsen", deep=True)
+    assert res.state is ResolveState.LIVE and res.live_chat_id == "CHAT"
+    assert res.video_id == live
+
+
+async def test_deep_live_on_first_page_reads_one_page():  # YQB-2
+    ids, videos = _offline_channel(pages=4)
+    live = ids[0][3]
+    videos[live] = _video(live, live="live", chat_id="CHAT")
+    api = CountingApi(ids, videos)
+    res = await LiveChatResolver(api).resolve("@forsen", deep=True)
+    assert res.resolved
+    assert len(api.names("playlist_items")) == 1
+
+
+async def test_recheck_of_big_offline_channel_costs_at_most_two():  # YQB-3
+    ids, videos = _offline_channel(pages=20)  # 1,000 uploads
+    api = CountingApi(ids, videos)
+    resolver = LiveChatResolver(api)
+    first = await resolver.resolve("@forsen", deep=True)
+    assert first.state is ResolveState.OFFLINE
+    api.calls.clear()
+    res = await resolver.resolve("@forsen")
+    assert res.state is ResolveState.OFFLINE
+    assert len(api.calls) <= 2
+    assert "channel_by_handle" not in api.calls and "channel_by_id" not in api.calls
+
+
+async def test_recheck_unchanged_page_costs_one_unit():  # YQB-4
+    ids, videos = _offline_channel(pages=3)
+    api = CountingApi(ids, videos)
+    resolver = LiveChatResolver(api)
+    first = await resolver.resolve("@forsen", deep=True)
+    api.calls.clear()
+    res = await resolver.resolve("@forsen")
+    assert api.calls == ["playlist_items"]
+    assert res.state is ResolveState.OFFLINE
+    assert res.video_id == first.video_id
+
+
+async def test_recheck_finds_new_live_video():  # YQB-5
+    ids, videos = _offline_channel(pages=2)
+    api = CountingApi(ids, videos)
+    resolver = LiveChatResolver(api)
+    await resolver.resolve("@forsen", deep=True)
+    new = "newLiveVid1"
+    videos[new] = _video(new, live="live", chat_id="CHAT", published="2026-11-01T00:00:00Z")
+    api.pages[0] = [new, *api.pages[0][:49]]
+    res = await resolver.resolve("@forsen")
+    assert res.resolved and res.video_id == new
+    assert len(api.names("channel_by_handle")) == 1  # only the deep resolve
+
+
+async def test_upcoming_without_start_time_is_rechecked_and_goes_live():  # YQB-35
+    ids, videos = _offline_channel(pages=1, per_page=5)
+    up = ids[0][1]
+    videos[up] = _video(up, live="upcoming")
+    api = CountingApi(ids, videos)
+    resolver = LiveChatResolver(api)
+    first = await resolver.resolve("@forsen", deep=True)
+    assert first.scheduled_starts == []
+    api.calls.clear()
+    videos[up] = _video(up, live="live", chat_id="CHAT")
+    res = await resolver.resolve("@forsen")
+    assert "videos_batch" in api.calls
+    assert res.resolved and res.video_id == up
+
+
+async def test_recheck_lists_scheduled_starts_of_upcoming_videos():
+    ids, videos = _offline_channel(pages=1, per_page=4)
+    a, b = ids[0][0], ids[0][2]
+    for vid, when in ((a, "2026-12-01T10:00:00Z"), (b, "2026-12-02T10:00:00Z")):
+        videos[vid] = _video(vid, live="upcoming")
+        videos[vid]["liveStreamingDetails"]["scheduledStartTime"] = when
+    api = CountingApi(ids, videos)
+    resolver = LiveChatResolver(api)
+    deep = await resolver.resolve("@forsen", deep=True)
+    again = await resolver.resolve("@forsen")
+    expected = [dt.datetime(2026, 12, 1, 10, tzinfo=dt.UTC),
+                dt.datetime(2026, 12, 2, 10, tzinfo=dt.UTC)]
+    assert sorted(deep.scheduled_starts) == expected
+    assert sorted(again.scheduled_starts) == expected
+
+
+async def test_recheck_404_forgets_channel_and_is_not_found():
+    from chattersyn.services.youtube.api import YoutubeApiError
+
+    ids, videos = _offline_channel(pages=1, per_page=3)
+    api = CountingApi(ids, videos)
+    resolver = LiveChatResolver(api)
+    await resolver.resolve("@forsen", deep=True)
+    api.playlist_error = YoutubeApiError(404, "playlistNotFound", "gone")
+    res = await resolver.resolve("@forsen")
+    assert res.state is ResolveState.NOT_FOUND
+    api.playlist_error = None
+    api.calls.clear()
+    await resolver.resolve("@forsen")  # cache gone: full path looks the channel up again
+    assert "channel_by_handle" in api.calls
+
+
+async def test_forget_drops_cache():
+    ids, videos = _offline_channel(pages=1, per_page=3)
+    api = CountingApi(ids, videos)
+    resolver = LiveChatResolver(api)
+    await resolver.resolve("@forsen", deep=True)
+    resolver.forget("@forsen")
+    api.calls.clear()
+    await resolver.resolve("@forsen")
+    assert "channel_by_handle" in api.calls
+
+
+async def test_video_and_mine_fill_scheduled_starts():
+    video = _video("dQw4w9WgXcQ", live="upcoming")
+    video["liveStreamingDetails"]["scheduledStartTime"] = "2026-12-01T10:00:00Z"
+
+    class Api:
+        async def videos(self, video_id, *, signin=False):
+            return {"items": [video]}
+
+        async def live_broadcasts_mine(self):
+            item = _broadcast("b1", status="ready", chat_id=None)
+            item["snippet"]["scheduledStartTime"] = "2026-12-03T10:00:00Z"
+            return [item]
+
+    resolver = LiveChatResolver(Api())
+    got = await resolver.resolve("dQw4w9WgXcQ")
+    assert got.scheduled_starts == [dt.datetime(2026, 12, 1, 10, tzinfo=dt.UTC)]
+    mine = await resolver.resolve("mine:")
+    assert mine.scheduled_starts == [dt.datetime(2026, 12, 3, 10, tzinfo=dt.UTC)]
