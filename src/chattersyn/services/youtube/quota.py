@@ -9,13 +9,18 @@ from __future__ import annotations
 
 import datetime as dt
 import enum
+import logging
 import random
 from collections.abc import Callable
 
 from PySide6.QtCore import QDateTime, QTime, QTimeZone
 
+log = logging.getLogger(__name__)
+
 UTC = dt.UTC
 RESUME_JITTER = (60.0, 600.0)  # seconds after the reset, to spread clients out
+PACIFIC_FALLBACK_OFFSET = -8 * 3600  # PST, used only without a tz database
+_warned_no_tz = False
 
 
 class Pool(enum.Enum):
@@ -27,9 +32,27 @@ def _utc_now() -> dt.datetime:
     return dt.datetime.now(UTC)
 
 
+def _lookup_pacific() -> QTimeZone:
+    return QTimeZone(b"America/Los_Angeles")
+
+
+def _pacific_zone() -> QTimeZone:
+    """America/Los_Angeles, or a fixed UTC-8 when the tz database lacks it
+    (a frozen/Flatpak build with a stripped one); warns once."""
+    global _warned_no_tz
+    tz = _lookup_pacific()
+    if tz.isValid():
+        return tz
+    if not _warned_no_tz:
+        _warned_no_tz = True
+        log.warning("time zone America/Los_Angeles not available; "
+                    "YouTube quota resets use a fixed UTC-8")
+    return QTimeZone(PACIFIC_FALLBACK_OFFSET)
+
+
 def next_pacific_midnight(now: dt.datetime) -> dt.datetime:
     """The next 00:00 America/Los_Angeles after `now` (aware UTC in and out)."""
-    tz = QTimeZone(b"America/Los_Angeles")
+    tz = _pacific_zone()
     pt = QDateTime.fromSecsSinceEpoch(int(now.timestamp()), QTimeZone.utc()).toTimeZone(tz)
     nxt = QDateTime(pt.date().addDays(1), QTime(0, 0), tz).toUTC().toPython()
     return nxt.replace(tzinfo=UTC)
