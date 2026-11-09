@@ -367,10 +367,11 @@ class CountingApi:
         self.videos = videos  # id -> video dict (mutable between resolves)
         self.calls = []
         self.playlist_error = None
+        self.channel_missing = False
 
     async def channel_by_handle(self, handle):
         self.calls.append("channel_by_handle")
-        return _channel()
+        return {"items": []} if self.channel_missing else _channel()
 
     async def channel_by_id(self, channel_id):
         self.calls.append("channel_by_id")
@@ -492,15 +493,26 @@ async def test_recheck_lists_scheduled_starts_of_upcoming_videos():
     assert sorted(again.scheduled_starts) == expected
 
 
-async def test_recheck_404_forgets_channel_and_is_not_found():
+@pytest.mark.parametrize("channel_exists,state", [
+    (True, ResolveState.OFFLINE),  # its last public upload was removed
+    (False, ResolveState.NOT_FOUND),  # the channel itself is gone
+])
+async def test_recheck_404_forgets_channel_and_scans_deep(channel_exists, state):
+    # A re-check 404 is answered like a deep scan's 404 in the same resolve:
+    # the channel is looked up again (OFFLINE if it exists, NOT_FOUND if not).
     ids, videos = _offline_channel(pages=1, per_page=3)
     api = CountingApi(ids, videos)
     resolver = LiveChatResolver(api)
     await resolver.resolve("@forsen", deep=True)
     api.playlist_error = YoutubeApiError(404, "playlistNotFound", "gone")
+    api.channel_missing = not channel_exists
+    api.calls.clear()
     res = await resolver.resolve("@forsen")
-    assert res.state is ResolveState.NOT_FOUND
+    assert res.state is state
+    assert api.calls == (["playlist_items", "channel_by_handle", "playlist_items"]
+                         if channel_exists else ["playlist_items", "channel_by_handle"])
     api.playlist_error = None
+    api.channel_missing = False
     api.calls.clear()
     await resolver.resolve("@forsen")  # cache gone: full path looks the channel up again
     assert "channel_by_handle" in api.calls

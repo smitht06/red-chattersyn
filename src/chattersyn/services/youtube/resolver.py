@@ -133,7 +133,11 @@ class LiveChatResolver:
             return await self._from_mine()
         cached = None if deep else self._cache.get(parsed)
         if cached is not None:
-            return await self._recheck_channel(parsed, cached)
+            res = await self._recheck_channel(parsed, cached)
+            if res is not None:
+                return res
+            # The uploads playlist is gone: answer like a deep scan (OFFLINE
+            # with no public uploads, NOT_FOUND when the channel is gone too).
         return await self._from_channel(value, kind)
 
     async def _from_mine(self) -> Resolution:
@@ -221,15 +225,16 @@ class LiveChatResolver:
 
     async def _recheck_channel(
         self, key: tuple[str, str], cache: _ChannelCache
-    ) -> Resolution:
+    ) -> Resolution | None:
         """One playlistItems page (1 unit), plus one videos.list unless the
-        page is unchanged and nothing on it is upcoming or live."""
+        page is unchanged and nothing on it is upcoming or live. None (cache
+        dropped) when the page is a 404: the caller scans deep instead."""
         try:
             page = await self._api.playlist_items(cache.uploads)
         except YoutubeApiError as exc:
             if exc.http_status == 404:
                 self._cache.pop(key, None)
-                return Resolution(ResolveState.NOT_FOUND)
+                return None
             raise
         ids = _page_ids(page)
         watching = [v for v in cache.videos if self._live_state(v) in ("upcoming", "live")]
