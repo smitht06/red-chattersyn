@@ -305,7 +305,7 @@ Files: create openspec/changes/youtube-quota-budget/quota-extension.md
 2. Compute the per-user daily cost from the schedule.py constants: a typical day (one Stream tab and two channel tabs, 4 h open, one 2-h stream) and the worst case (one idle on-screen channel tab for 24 h, ≤ 600 units).
 3. Mark what only the user can fill in (project number, contact details, screencast). No secrets in the file.
 
-- [ ] 5.2 Full verification — verify: uv run ruff check src/ tests/ and uv run pytest -q both pass, and the quota probe shows ≤ 600 units/day
+- [x] 5.2 Full verification — verify: uv run ruff check src/ tests/ and uv run pytest -q both pass, and the quota probe shows ≤ 600 units/day
 
 Covers: — · Test: none: runs the existing suite and a measurement
 
