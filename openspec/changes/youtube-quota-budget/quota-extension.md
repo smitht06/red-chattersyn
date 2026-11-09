@@ -93,7 +93,7 @@ A channel or video tab that is not live checks again on this schedule:
 | Tab not on screen (another tab selected, or window minimized) | Every 15 min |
 | Channel handle/id not found | Every 15 min, on screen or not |
 | The user's own Stream tab (`mine:`) | Every 2 min, hidden or not; 30 s from 5 min before to 15 min after a scheduled start |
-| Tab brought on screen | One check at once if the last check is over 60 s old (so tab switching costs at most about one check per minute) |
+| Channel or video tab brought on screen | One check at once if the last check is over 60 s old (so tab switching costs at most about one check per minute). Not for the Stream tab or a not-found channel, which keep their own rhythm. |
 | Live stream being read | No checks; stats refresh `videos.list` every 120 s |
 | Quota used up | No calls at all until the reset (midnight Pacific plus a random 1 to 10 min), then one fresh deep scan |
 
@@ -104,8 +104,9 @@ and the first after a quota reset, is a deep scan: 3 units for a channel with up
 to 50 uploads, at most 21 units (1 + 10 pages x 2) for a long catalogue.
 
 Before this change an idle channel tab polled every 60 s and rescanned the whole
-uploads list each time: 4,320 to 60,480 units per tab per day. That is why the
-shared project quota ran out.
+uploads list each time: 4,320 to 30,240 units per tab per day while offline
+(1,440 checks x 3 to 21 units), and up to 60,480 while a stream was scheduled
+(checked every 30 s). That is why the shared project quota ran out.
 
 ## Per-user daily cost
 
@@ -114,7 +115,7 @@ table. The idle-tab figures were also reproduced by the project's tests, which
 run the real resolver and schedule for 24 simulated hours against a fake API that
 counts calls (`test_idle_channel_tab_day_budget` in `tests/test_youtube_service.py`).
 
-### Worst case for a user who does not stream: an idle tab for 24 hours
+### Worst case: tabs left open and idle for 24 hours
 
 | Tab left open 24 h | Units/day |
 | --- | --- |
@@ -123,12 +124,17 @@ counts calls (`test_idle_channel_tab_day_budget` in `tests/test_youtube_service.
 | Same, channel with no public uploads (every check is a lookup plus a 404) | 596 |
 | One channel tab not on screen | about 99 (96 checks plus the scan), at most 195 |
 | A channel tab whose handle is not found | 96 |
-| The user's own Stream tab, no broadcast | 720 |
+| The user's own Stream tab, no broadcast (checked every 2 min, on screen or not) | 720 |
+| **Combined worst case: Stream tab + one on-screen channel tab** | **720 + about 300 = about 1,020, at most 720 + 597 = 1,317** |
+| Each further (hidden) channel tab | about 99 each, at most 195 |
 
-Only one tab is on screen at a time, so a user's worst case is one on-screen
-tab. Each further tab is a hidden tab at about 100 units/day. The 600-unit bound
-for an on-screen channel tab is pinned by the test above (597 and 596 are the
-measured maximums).
+Only one tab is on screen at a time, so there is at most one on-screen channel
+tab. The bound of 600 units/day (597 and 596 above) is per on-screen channel tab
+and is consistent with the test's <= 600 limit. The Stream tab is checked every
+2 minutes whether it is on screen or not, so it adds its 720 on top, and every
+hidden channel tab adds about 99 to 195. A user with a Stream tab, one on-screen
+channel tab and three hidden channel tabs would spend about 720 + 300 + 3 x 99 =
+1,317 units on an idle day, at most 720 + 597 + 3 x 195 = 1,902.
 
 ### Typical day for a user who streams: one Stream tab and two channel tabs, app open 4 hours, one 2-hour stream
 
@@ -169,17 +175,20 @@ Other reference points:
 
 - A user who only watches (no stream of their own, 4 h, two channel tabs, one
   chat read for 2 h, no sending): about 132 + 60 + 65 + 100 = 360 units.
-- A signed-in user with the app open and idle all day (one on-screen channel
-  tab): about 300 units; worst case 600.
+- A signed-in user with the app open and idle all day, one on-screen channel tab
+  and no Stream tab: about 300 units; worst case 597.
 - Each ban or timeout costs 200 units, each message sent costs 20.
 
 ### Why a larger quota is needed
 
-At the default 10,000 units/day, the typical streaming day above fits about 7
-users, and the idle worst case (about 300 units) fits about 33 users, per day,
-across everyone who signs in with the built-in client. Expected users:
+At the default 10,000 units/day, the typical streaming day above (about 1,420
+units) fits about 7 users per day, and a user with a Stream tab and an on-screen
+channel tab left idle (about 1,020 to 1,317 units) fits about 7 to 9 users. Only
+a user with a single idle on-screen channel tab and no Stream tab (about 300
+units) fits about 33. These counts are across everyone who signs in with the
+built-in client. Expected users:
 `[PLACEHOLDER: number of daily active users]`. Quota requested:
-`[PLACEHOLDER: users x about 1,420 for streamers or about 300 for idle users, plus headroom]`
+`[PLACEHOLDER: users x about 1,420 for streamers, about 300 for viewers with no Stream tab, plus headroom]`
 units/day.
 
 ## What was done to keep usage low (the changes in this release)
