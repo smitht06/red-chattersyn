@@ -1,6 +1,7 @@
 """YQB-28/48/49/57/58: MainWindow renders the YouTube quota wait."""
 
 import datetime as dt
+import os
 import time
 
 import pytest
@@ -15,13 +16,28 @@ RESUME = dt.datetime(2026, 11, 10, 8, 5, tzinfo=dt.UTC)
 RESUME_LOCAL = "09:05"  # TZ is pinned to Europe/Berlin (CET, UTC+1) below
 
 
-@pytest.fixture(autouse=True)
-def _berlin_time(monkeypatch):
-    monkeypatch.setenv("TZ", "Europe/Berlin")
+# time.tzset is POSIX-only (absent on Windows): the tests that check a local
+# resume time pin TZ with it and are skipped where it is missing.
+needs_tzset = pytest.mark.skipif(
+    not hasattr(time, "tzset"), reason="time.tzset is POSIX-only (needed to pin TZ)")
+
+
+@pytest.fixture
+def berlin_time():
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "Europe/Berlin"
     time.tzset()
     yield
-    monkeypatch.undo()
+    if old is None:
+        del os.environ["TZ"]
+    else:
+        os.environ["TZ"] = old
     time.tzset()
+
+
+def in_berlin(test):
+    """Run `test` with local time pinned to Europe/Berlin (skipped without tzset)."""
+    return needs_tzset(pytest.mark.usefixtures("berlin_time")(test))
 
 
 @pytest.fixture
@@ -71,10 +87,12 @@ def _live(tab):
         viewers=7)
 
 
+@in_berlin
 def test_format_resume_is_local_time():
     assert _format_resume(RESUME) == RESUME_LOCAL
 
 
+@in_berlin
 async def test_quota_exhausted_status_shows_resume_time(win):  # YQB-28
     tab = win._tabs[0]
     win._on_youtube_state(YoutubeState(
@@ -91,6 +109,7 @@ async def test_key_pool_wait_does_not_block_sending(win):  # YQB-27 / ruling
     assert tab.header._youtube_chip.isEnabled()
 
 
+@in_berlin
 async def test_shared_pool_blocks_toggle_with_resume_tooltip(win):  # YQB-28
     tab = win._tabs[0]
     other = _yt_tab(win, "other")
@@ -137,6 +156,7 @@ async def test_dual_send_while_waiting_goes_to_twitch_only(win):  # YQB-48
     assert win._send.calls == [("hello", True, False)]
 
 
+@in_berlin
 async def test_youtube_only_send_while_waiting_is_refused(win):  # YQB-49
     tab = _yt_tab(win)
     win._send = _FakeSend()
