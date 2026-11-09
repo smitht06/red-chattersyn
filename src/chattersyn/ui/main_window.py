@@ -167,6 +167,7 @@ class MainWindow(QMainWindow):
         self._notebook = Notebook(self)
         self._notebook.new_tab_requested.connect(self._new_streamer_tab)
         self._notebook.tabCloseRequested.connect(self._close_tab)
+        self._notebook.currentChanged.connect(lambda _index: self._report_visibility())
         # Stack: notebook while tabs exist, link page when the last one closes.
         self._empty_tab_page = EmptyTabPage(self)
         self._empty_tab_page.new_stream.connect(self._new_streamer_tab)
@@ -1447,7 +1448,26 @@ class MainWindow(QMainWindow):
             if self._youtube is not None and youtube_target:
                 tab.youtube_target = youtube_target
                 self._youtube.watch(youtube_target, tab.tab_key)
+        self._report_visibility()
         return tab
+
+    def _report_visibility(self) -> None:
+        """Tell the YouTube service which tab is on screen: the selected tab
+        while the window is not minimized (the notebook shows one tab at a time).
+        New watches start on-screen, so this runs after every watch()."""
+        if self._youtube is None:
+            return
+        current = self._notebook.currentWidget()
+        minimized = self.isMinimized()
+        for tab in self._tabs:
+            if tab.youtube_target:
+                self._youtube.set_on_screen(
+                    tab.tab_key, tab is current and not minimized)
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._report_visibility()
 
     async def _join_twitch(self, tab: Tab) -> None:
         if self._twitch is None or not tab.twitch_channel:
@@ -1515,6 +1535,7 @@ class MainWindow(QMainWindow):
         for tab in self._streamer_tabs:
             self._youtube.unwatch(tab.tab_key)
             self._youtube.watch(tab.youtube_target, tab.tab_key)
+        self._report_visibility()
 
     def _new_twitch_tab(self) -> None:
         twitch, ok = QInputDialog.getText(self, "New Twitch Tab", "Twitch channel:")
