@@ -249,7 +249,7 @@ Interfaces:
    - The Stream tab's reads use SHARED (A22).
 3. Run the verify command. Expected: PASS.
 
-- [ ] 4.2 Quota wait in the window — verify: uv run pytest tests/test_main_window_streams.py tests/test_main_window_quota.py -q passes
+- [x] 4.2 Quota wait in the window — verify: uv run pytest tests/test_main_window_streams.py tests/test_main_window_quota.py -q passes
 
 Covers: YQB-28, YQB-48, YQB-49, YQB-57, YQB-58 · Test: scenario-first
 
