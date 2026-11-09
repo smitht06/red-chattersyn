@@ -200,7 +200,7 @@ Interfaces:
 3. A channel NOT_FOUND keeps watching: call `forget(target)`, and the next resolve is deep. Leave the live/no-chat-id path unchanged.
 4. Rewrite the `fast` fixture and `test_mine_offline_uses_mine_interval` for the schedule. Run the verify command. Expected: PASS.
 
-- [ ] 3.4 Report tab visibility from the window — verify: uv run pytest tests/test_main_window_visibility.py -q passes
+- [x] 3.4 Report tab visibility from the window — verify: uv run pytest tests/test_main_window_visibility.py -q passes
 
 Covers: YQB-15, YQB-17, YQB-18 · Test: scenario-first
 
