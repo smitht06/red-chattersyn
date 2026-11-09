@@ -1004,6 +1004,21 @@ async def test_stream_end_restarts_the_offline_rhythm(service, clock, fake_reade
     assert svc.resolver.times == [T0]
 
 
+@pytest.mark.parametrize("starts_in,next_in", [
+    (dt.timedelta(hours=3), 15 * MIN),  # far off: at most 15 min, not 2
+    (dt.timedelta(minutes=4), dt.timedelta(seconds=30)),  # inside the 5-min lead
+])
+async def test_upcoming_scheduled_start_sets_the_next_check(
+        service, clock, starts_in, next_in):
+    upcoming = Resolution(state=ResolveState.UPCOMING, video_id="vid1",
+                          scheduled_starts=[T0 + starts_in])
+    svc, naps = _scheduled(service, clock, [upcoming])
+    svc.watch(CHANNEL, "k1")  # an on-screen channel tab
+    assert await wait_until(lambda: naps.log)
+    assert svc.resolver.times == [T0]
+    assert naps.dues()[-1] == T0 + next_in
+
+
 async def test_live_without_chat_id_rechecks_after_30_s(service, clock):
     live_no_id = _resolution(ResolveState.LIVE, live_chat_id=None)
     svc, naps = _scheduled(service, clock, [live_no_id])
