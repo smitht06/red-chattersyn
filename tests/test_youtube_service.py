@@ -1076,6 +1076,7 @@ class CountingApi:
         self.ids = ids  # the newest uploads page (newest first)
         self.videos = videos
         self.calls: list[str] = []
+        self.playlist_error = None
 
     async def channel_by_handle(self, handle):
         self.calls.append("channel_by_handle")
@@ -1084,6 +1085,8 @@ class CountingApi:
 
     async def playlist_items(self, playlist_id, page_token=None, max_results=50):
         self.calls.append("playlist_items")
+        if self.playlist_error:
+            raise self.playlist_error
         return {"items": [{"contentDetails": {"videoId": v}} for v in self.ids]}
 
     async def videos_batch(self, ids):
@@ -1092,16 +1095,20 @@ class CountingApi:
         return [self.videos[i] for i in ids if i in self.videos]
 
 
-@pytest.mark.parametrize("upcoming_on_page", [False, True])
-async def test_idle_channel_tab_day_budget(service, clock, signals, upcoming_on_page):
+@pytest.mark.parametrize("page", ["plain", "upcoming", "no_uploads"])
+async def test_idle_channel_tab_day_budget(service, clock, signals, page):
     events, _ = signals
     ids = [f"vid{i:08d}" for i in range(50)]
     videos = {v: _upload(v, minute=59 - i) for i, v in enumerate(ids)}
-    if upcoming_on_page:
+    if page == "upcoming":
         # Worst case: an upcoming video without a start time makes every
         # re-check also read videos.list (2 units), and still counts as offline.
         videos[ids[1]] = _upload(ids[1], live="upcoming", minute=58)
     api = CountingApi(ids, videos)
+    if page == "no_uploads":
+        # Uploads playlist 404 (no public uploads): every check is a lookup
+        # plus the 404 (2 units), on the offline rhythm.
+        api.playlist_error = YoutubeApiError(404, "playlistNotFound", "no uploads")
     svc = service(now=clock)
     svc.resolver = LiveChatResolver(api)
     naps = Naps(clock, auto=True, until=T0 + dt.timedelta(hours=24))
@@ -1109,5 +1116,60 @@ async def test_idle_channel_tab_day_budget(service, clock, signals, upcoming_on_
     svc.watch(CHANNEL, "k1")  # on screen all day
     assert await wait_until(naps.idle.is_set, timeout=10)
     assert {e.state for e in events} == {WatchState.OFFLINE}
-    assert api.calls.count("channel_by_handle") == 1  # one deep scan at the start
+    if page != "no_uploads":
+        assert api.calls.count("channel_by_handle") == 1  # one deep scan at the start
     assert len(api.calls) <= 600
+
+
+# -- fix round 1: rulings R9, R8a, R8b ---------------------------------------------------
+
+
+async def test_channel_without_public_uploads_stays_on_the_offline_schedule(
+        service, clock, signals):
+    events, _ = signals
+    api = CountingApi(["vid00000000"], {})
+    api.playlist_error = YoutubeApiError(404, "playlistNotFound", "no uploads")
+    svc = service(now=clock)
+    svc.resolver = LiveChatResolver(api)
+    naps = Naps(clock)
+    svc._nap = naps
+    svc.watch(CHANNEL, "k1")
+    assert await wait_until(lambda: naps.log)
+    assert naps.dues()[-1] == T0 + 2 * MIN  # the offline rhythm, not the 60-s error retry
+    assert {e.state for e in events} == {WatchState.OFFLINE}
+
+
+async def test_stream_tab_coming_on_screen_keeps_its_2_minute_rhythm(service, clock):
+    svc, naps = _scheduled(service, clock, [OFFLINE])
+    svc.watch("mine:", "k1")
+    svc.set_on_screen("k1", False)
+    assert await wait_until(lambda: naps.log)
+    clock.advance(90)  # last check is stale (> 60 s), its 2-minute check is not due yet
+    svc.set_on_screen("k1", True)
+    await settle()
+    assert svc.resolver.times == [T0]
+    assert naps.dues()[-1] == T0 + 2 * MIN
+
+
+async def test_not_found_channel_coming_on_screen_keeps_its_15_minute_rhythm(service, clock):
+    svc, naps = _scheduled(service, clock, [NOT_FOUND])
+    svc.watch(CHANNEL, "k1")
+    svc.set_on_screen("k1", False)
+    assert await wait_until(lambda: naps.log)
+    clock.advance(5 * 60)
+    svc.set_on_screen("k1", True)
+    await settle()
+    assert svc.resolver.times == [T0]
+    assert naps.dues()[-1] == T0 + 15 * MIN
+
+
+async def test_channel_found_again_restarts_the_offline_window(service, clock):
+    # NOT_FOUND for hours, then found offline: the watch starts afresh, so the
+    # 30-minute "recently offline" window (2-minute rhythm) counts from now.
+    svc, naps = _scheduled(service, clock, [NOT_FOUND] * 12 + [OFFLINE], auto=True,
+                           until=T0 + 181 * MIN)
+    svc.watch(CHANNEL, "k1")
+    assert await wait_until(naps.idle.is_set)
+    assert svc.resolver.times[-1] == T0 + 180 * MIN
+    assert svc.resolver.deeps[-1] is True  # found after NOT_FOUND: deep scan
+    assert naps.dues()[-1] == T0 + 182 * MIN

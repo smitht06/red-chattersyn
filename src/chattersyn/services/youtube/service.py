@@ -131,6 +131,7 @@ class _Watch:
     last_check: dt.datetime | None = None
     offline_since: dt.datetime = field(default_factory=_utc_now)  # watch start / live last seen
     deep: bool = True  # next resolve scans the channel's uploads in full
+    last_state: ResolveState | None = None  # of the last successful resolve
     check_now: bool = False  # came on screen with a stale last check
     next_check: dt.datetime | None = None  # the due time being waited for
     wake: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
@@ -280,7 +281,9 @@ class YouTubeService:
         """Tell a watch whether its tab is on screen (selected, window not
         minimized). The next check moves to the last check plus the new
         interval; coming on screen checks at once when the last check is
-        older than 60 s. Live chat reading is not affected."""
+        older than 60 s — for channel and video tabs only, and not while not
+        found (the Stream tab and a not-found channel keep their rhythm on
+        screen or not). Live chat reading is not affected."""
         watch = self._watches.get(watch_key)
         if watch is None:
             return
@@ -288,7 +291,9 @@ class YouTubeService:
         watch.on_screen = on_screen
         if not on_screen:
             watch.check_now = False
-        elif (coming_on and watch.last_check is not None
+        elif (coming_on and watch.kind is not WatchKind.MINE
+              and watch.last_state is not ResolveState.NOT_FOUND
+              and watch.last_check is not None
               and self._now() - watch.last_check > ON_SCREEN_RECHECK_AGE):
             watch.check_now = True
         watch.wake.set()
@@ -366,7 +371,12 @@ class YouTubeService:
             return True
 
         watch.deep = False
-        self._checked(watch, saw_live=resolution.state is ResolveState.LIVE)
+        # Found after NOT_FOUND = the watch starts afresh (offline window too).
+        found_again = (watch.last_state is ResolveState.NOT_FOUND
+                       and resolution.state is not ResolveState.NOT_FOUND)
+        watch.last_state = resolution.state
+        self._checked(watch, restart_offline=found_again
+                      or resolution.state is ResolveState.LIVE)
         watch.video_id = resolution.video_id
         watch.live_chat_id = resolution.live_chat_id
         watch.channel_id = resolution.channel_id
@@ -386,7 +396,7 @@ class YouTubeService:
         if resolution.resolved:
             outcome = await self._read_until_end(watch_key, watch)
             # The stream was live until now: the offline rhythm starts afresh.
-            self._checked(watch, saw_live=True)
+            self._checked(watch, restart_offline=True)
             if outcome == "ended":
                 # Always emit ENDED (the tab must drop its stale live_chat_id
                 # and moderation state); channel targets then keep watching.
@@ -646,12 +656,13 @@ class YouTubeService:
             Platform.YOUTUBE, watch.live_chat_id or watch.video_id or "",
             text, extra={"watch_key": watch.watch_key, "video_id": watch.video_id}))
 
-    def _checked(self, watch: _Watch, *, saw_live: bool = False) -> None:
-        """Record a check (and, if the stream was live, the time it was seen)."""
+    def _checked(self, watch: _Watch, *, restart_offline: bool = False) -> None:
+        """Record a check. restart_offline: the offline window counts from now
+        (the stream was live until now, or the watch starts afresh)."""
         now = self._now()
         watch.last_check = now
         watch.check_now = False  # this check is the one asked for
-        if saw_live:
+        if restart_offline:
             watch.offline_since = now
 
     async def _wait_seconds(self, watch: _Watch, seconds: float) -> None:

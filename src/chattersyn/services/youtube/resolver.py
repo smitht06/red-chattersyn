@@ -191,7 +191,13 @@ class LiveChatResolver:
         )
         if not uploads:
             return Resolution(ResolveState.OFFLINE, channel_id=channel_id)
-        videos, page_ids = await self._newest_videos(uploads)
+        scan = await self._newest_videos(uploads)
+        if scan is None:
+            # No public uploads: the channel exists but is offline. Nothing is
+            # cached, so each check is this lookup plus the 404 (2 units).
+            self._cache.pop((kind, channel), None)
+            return Resolution(ResolveState.OFFLINE, channel_id=channel_id)
+        videos, page_ids = scan
         self._cache[(kind, channel)] = _ChannelCache(channel_id, uploads, page_ids, videos)
         return self._channel_resolution(channel_id, videos)
 
@@ -241,13 +247,22 @@ class LiveChatResolver:
         cache.videos = videos
         return self._channel_resolution(cache.channel_id, videos)
 
-    async def _newest_videos(self, uploads_playlist: str) -> tuple[list[dict], list[str]]:
-        """Deep scan -> (videos newest first, ids on the newest page)."""
+    async def _newest_videos(
+        self, uploads_playlist: str
+    ) -> tuple[list[dict], list[str]] | None:
+        """Deep scan -> (videos newest first, ids on the newest page).
+        None when the first page is a 404: YouTube's answer for the uploads
+        playlist of a channel with no public uploads."""
         videos: list[dict] = []
         first_page: list[str] | None = None
         page_token: str | None = None
         for _ in range(MAX_PLAYLIST_PAGES):
-            page = await self._api.playlist_items(uploads_playlist, page_token=page_token)
+            try:
+                page = await self._api.playlist_items(uploads_playlist, page_token=page_token)
+            except YoutubeApiError as exc:
+                if exc.http_status == 404 and first_page is None:
+                    return None
+                raise
             ids = _page_ids(page)
             if first_page is None:
                 first_page = ids

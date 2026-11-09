@@ -5,7 +5,7 @@ import datetime as dt
 import httpx
 import pytest
 
-from chattersyn.services.youtube.api import QuotaTracker, YouTubeApi
+from chattersyn.services.youtube.api import QuotaTracker, YouTubeApi, YoutubeApiError
 from chattersyn.services.youtube.resolver import (
     BATCH,
     MAX_PLAYLIST_PAGES,
@@ -493,8 +493,6 @@ async def test_recheck_lists_scheduled_starts_of_upcoming_videos():
 
 
 async def test_recheck_404_forgets_channel_and_is_not_found():
-    from chattersyn.services.youtube.api import YoutubeApiError
-
     ids, videos = _offline_channel(pages=1, per_page=3)
     api = CountingApi(ids, videos)
     resolver = LiveChatResolver(api)
@@ -550,3 +548,20 @@ async def test_recheck_with_live_off_page_stays_one_batch():
     res = await resolver.resolve("@forsen")
     assert res.resolved and res.video_id == live
     assert api.calls == ["playlist_items", "videos_batch"]
+
+
+async def test_deep_scan_without_public_uploads_is_offline():
+    # YouTube answers 404 for the uploads playlist of a channel with no public
+    # uploads: the handle is right, the channel is just offline (ruling R9).
+    ids, videos = _offline_channel(pages=1, per_page=3)
+    api = CountingApi(ids, videos)
+    api.playlist_error = YoutubeApiError(404, "playlistNotFound", "no uploads")
+    resolver = LiveChatResolver(api)
+    res = await resolver.resolve("@forsen", deep=True)
+    assert res.state is ResolveState.OFFLINE
+    assert res.channel_id == "UCchannel"
+    assert api.calls == ["channel_by_handle", "playlist_items"]
+    api.calls.clear()
+    again = await resolver.resolve("@forsen")  # the next check: still offline, <= 2 units
+    assert again.state is ResolveState.OFFLINE
+    assert len(api.calls) <= 2
