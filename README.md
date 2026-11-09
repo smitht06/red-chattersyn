@@ -320,17 +320,20 @@ REST (send); Qt model/delegate chat rendering. See the plan in
 `~/.claude/plans/i-want-an-app-idempotent-pebble.md` for the full design.
 
 <!-- release-notes:start -->
-## Latest release: v0.10.2 (2026-11-06)
+## Latest release: v0.10.3 (2026-11-09)
 
 ### New
-- **New-message button.** When you scroll up in a chat, a "↓ N new messages" button counts what has arrived below. Click it to jump back to the newest messages.
-- **Jumps back when idle.** If you've scrolled up and leave the chat alone for 15 seconds, it returns to the newest messages and follows them again. Turn it off in Settings → General ("Jump back to new messages after 15 seconds of inactivity").
+- **API key status.** Settings → Accounts now tells you when your YouTube API key isn't working. ChatterSyn then reads with your Google sign-in instead, or pauses YouTube reading if you're not signed in.
 
 ### Improved
-- **Shorter hover pause.** Hovering over the chat still pauses it so names don't slide away while you aim. It now resumes 1.5 seconds after the mouse stops moving, so a mouse resting on the chat no longer freezes it.
+- **Much lighter on YouTube quota.** YouTube tabs check far less often whether an offline channel has gone live. An idle channel tab now uses about 300 quota units a day instead of up to 30,000. A tab you aren't looking at, or a minimized window, checks every 15 minutes and catches up as soon as you switch to it. Your own Stream tab still checks every 2 minutes.
+- **Scheduled streams.** A tab waiting for a scheduled stream checks every 15 minutes until shortly before the start, then every 30 seconds until 15 minutes after it.
+- **Your API key pays for reading.** If you've set your own YouTube Data API key (Settings → Accounts), it's now used for reading public chats and checking channels even while you're signed in with Google. Sending, bans and your own Stream tab still use your Google account, and members-only chats switch to it automatically.
 
 ### Fixed
-- **Chat stuck scrolled up.** After hovering over the chat, zooming or resizing the window, the chat could stop following new messages and you'd miss them. It now stays at the bottom unless you scroll up yourself.
+- **Stuck after the quota ran out.** When YouTube's daily quota ran out, tabs stopped until you restarted the app. They now show "YouTube quota used up · resumes at HH:MM" and come back on their own shortly after midnight Pacific Time. Meanwhile YouTube sending is switched off, and Twitch keeps working.
+- **API key without Google sign-in.** YouTube tabs never connected if you had set an API key but weren't signed in with Google.
+- **Channels with no videos.** A channel tab for a channel with no public videos kept showing an error and retrying every minute. It now shows the channel as offline.
 
 Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
 <!-- release-notes:end -->
