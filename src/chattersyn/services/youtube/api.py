@@ -109,6 +109,10 @@ class YouTubeApi:
     def reset_key_problem(self) -> None:
         self.key_problem = ""
 
+    def has_usable_key(self) -> bool:
+        """True when an API key is set and has not been rejected."""
+        return self._usable_key() is not None
+
     # -- plumbing ----------------------------------------------------------------
 
     def _usable_key(self) -> str | None:

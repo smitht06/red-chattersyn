@@ -366,7 +366,7 @@ class YouTubeService:
         return await self.sender.send(live_chat_id, text)
 
     def can_read(self) -> bool:
-        return bool(self.api._usable_key() or self.tokens)
+        return bool(self.api.has_usable_key() or self.tokens)
 
     def set_api_key(self, value: str) -> None:
         """Live refresh after Settings accept (the key lives in the keyring).
@@ -757,9 +757,9 @@ class YouTubeService:
             self.tokens = await self.auth.ensure_valid()
         has_token = self.tokens is not None and bool(self.tokens.token)
         signin = _is_mine_target(watch.target) or watch.use_signin
-        if has_token and (signin or not self.api._usable_key()):
+        if has_token and (signin or not self.api.has_usable_key()):
             return (("authorization", f"Bearer {self.tokens.token}"),), Pool.SHARED
-        if self._api_key and self.api._usable_key():
+        if self._api_key and self.api.has_usable_key():
             return (("x-goog-api-key", self._api_key),), Pool.KEY
         return (), Pool.SHARED
 

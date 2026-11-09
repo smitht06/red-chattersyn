@@ -306,3 +306,18 @@ async def test_unauthenticated_error_property():
     for status, reason in ((401, "unauthenticated"), (401, "authError")):
         assert YoutubeApiError(status, reason, "nope").is_unauthenticated
     assert not YoutubeApiError(403, "quotaExceeded", "quota").is_unauthenticated
+
+
+def test_has_usable_key():
+    key = {"value": ""}
+    api = YouTubeApi(lambda: _token("tok"), QuotaTracker(),
+                     get_key=lambda: key["value"] or None, client=_client(None))
+    assert api.has_usable_key() is False  # no key set
+    key["value"] = "K"
+    assert api.has_usable_key() is True
+    api.key_problem = "keyInvalid"
+    assert api.has_usable_key() is False  # rejected key
+    api.reset_key_problem()
+    assert api.has_usable_key() is True
+    assert YouTubeApi(lambda: _token("tok"), QuotaTracker(),
+                      client=_client(None)).has_usable_key() is False  # no key source
