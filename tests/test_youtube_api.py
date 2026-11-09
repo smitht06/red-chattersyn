@@ -106,7 +106,7 @@ async def test_api_key_fallback_when_no_token():
     async def no_token():
         return None
 
-    async def key():
+    def key():
         return "APIKEY"
 
     api = YouTubeApi(no_token, QuotaTracker(), get_key=key, client=_client(handler))

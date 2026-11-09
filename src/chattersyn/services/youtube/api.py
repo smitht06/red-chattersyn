@@ -37,6 +37,20 @@ QUOTA = {
     "ban": 200,  # liveChatBans insert/delete
 }
 
+# Reasons that mean the user's API key itself is unusable (bad, expired, restricted,
+# or the API not enabled for its project). Matched against error.errors[].reason
+# (classic Google API errors) and error.details[].reason (google.rpc.ErrorInfo).
+# UNVERIFIED against Google's reference: cloud.google.com/apis/design/errors
+# (-> google.aip.dev/193) and the YouTube errors page do not list these strings
+# (checked 2026-11-09); the set comes from the task brief / Google API platform
+# conventions (keyInvalid, keyExpired, accessNotConfigured, ipRefererBlocked;
+# ErrorInfo API_KEY_*, SERVICE_DISABLED). Re-check when a real key failure is seen.
+KEY_INVALID_REASONS = {
+    "keyInvalid", "keyExpired", "accessNotConfigured", "ipRefererBlocked",
+    "API_KEY_INVALID", "API_KEY_EXPIRED", "SERVICE_DISABLED", "API_KEY_SERVICE_BLOCKED",
+    "API_KEY_HTTP_REFERRER_BLOCKED", "API_KEY_IP_ADDRESS_BLOCKED",
+}
+
 # Error reasons that mean the chat itself is gone/blocked (not retryable by us).
 CHAT_UNAVAILABLE = {"liveChatEnded", "liveChatDisabled", "liveChatNotFound", "forbidden"}
 
@@ -75,12 +89,13 @@ class YouTubeApi:
         get_token: Callable[[], Awaitable[str | None]],
         quota: QuotaTracker | None = None,
         *,
-        get_key: Callable[[], Awaitable[str | None]] | None = None,
+        get_key: Callable[[], str | None] | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._get_token = get_token
         self._get_key = get_key
         self.quota = quota or QuotaTracker()
+        self.key_problem = ""  # reason the API key was rejected; "" when fine
         self._owned = client is None
         self._client = client or httpx.AsyncClient(base_url=BASE_URL, timeout=TIMEOUT)
 
@@ -88,51 +103,104 @@ class YouTubeApi:
         if self._owned:
             await self._client.aclose()
 
+    def reset_key_problem(self) -> None:
+        self.key_problem = ""
+
     # -- plumbing ----------------------------------------------------------------
 
-    async def _auth(self) -> tuple[dict[str, str], dict[str, str]]:
-        """(headers, query params): OAuth Bearer when a token exists, else the
-        API key as ?key=. Live chat endpoints reject API keys server-side (a
-        403 authError surfaces through the normal error path)."""
+    def _usable_key(self) -> str | None:
+        if self.key_problem or self._get_key is None:
+            return None
+        return self._get_key() or None
+
+    async def read_pool(self, *, signin: bool = False) -> Pool | None:
+        """The pool a public read would be charged to right now, or None when
+        there is no credential at all."""
+        if not signin and self._usable_key():
+            return Pool.KEY
+        if await self._get_token() is not None:
+            return Pool.SHARED
+        return None
+
+    async def _auth(
+        self, public: bool, signin: bool
+    ) -> tuple[dict[str, str], dict[str, str], Pool]:
+        """(headers, query params, pool). Public reads use the user's API key
+        when it works (its own quota pool); everything else - and a rejected
+        key - uses the OAuth Bearer (the shared pool). Live chat endpoints
+        reject API keys server-side, so they never take the public path."""
+        if public and not signin:
+            key = self._usable_key()
+            if key:
+                return {}, {"key": key}, Pool.KEY
         token = await self._get_token()
         if token is not None:
-            return {"Authorization": f"Bearer {token}"}, {}
-        key = await self._get_key() if self._get_key is not None else None
-        if not key:
-            raise YoutubeApiError(401, "unauthenticated", "no YouTube token or API key available")
-        return {}, {"key": key}
+            return {"Authorization": f"Bearer {token}"}, {}, Pool.SHARED
+        if public and self.key_problem:
+            raise YoutubeApiError(401, "unauthenticated", "API key not working")
+        raise YoutubeApiError(401, "unauthenticated", "no YouTube token or API key available")
 
-    async def _get(self, path: str, params: dict, units: int) -> dict:
-        self.quota.charge(units)
-        headers, auth = await self._auth()
-        response = await self._client.get(path, params={**params, **auth}, headers=headers)
-        return self._parse(response, path)
+    def _check_pool(self, pool: Pool) -> None:
+        if self.quota.exhausted(pool):
+            raise YoutubeApiError(403, "quotaExceeded", "daily YouTube quota used up")
+
+    async def _send(
+        self, method: str, path: str, params: dict, units: int, public: bool,
+        signin: bool, body: dict | None = None,
+    ) -> tuple[httpx.Response, Pool]:
+        headers, auth, pool = await self._auth(public, signin)
+        self._check_pool(pool)
+        self.quota.charge(units, pool)
+        kwargs: dict = {"params": {**params, **auth}, "headers": headers}
+        if body is not None:
+            kwargs["json"] = body
+        response = await self._client.request(method, path, **kwargs)
+        return response, pool
+
+    async def _request(
+        self, method: str, path: str, params: dict, units: int, *,
+        public: bool = False, signin: bool = False, body: dict | None = None,
+    ) -> dict:
+        response, pool = await self._send(method, path, params, units, public, signin, body)
+        if method == "DELETE" and response.status_code < 300:
+            return {}  # 204 No Content - nothing to parse
+        try:
+            return self._parse(response, path, pool)
+        except YoutubeApiError:
+            # A rejected key: repeat this read once with the sign-in, if any.
+            if pool is Pool.KEY and self.key_problem and await self._get_token() is not None:
+                response, pool = await self._send(
+                    method, path, params, units, public, True, body)
+                return self._parse(response, path, pool)
+            if pool is Pool.KEY and self.key_problem:
+                raise YoutubeApiError(401, "unauthenticated", "API key not working") from None
+            raise
+
+    async def _get(
+        self, path: str, params: dict, units: int, *, public: bool = False, signin: bool = False
+    ) -> dict:
+        return await self._request("GET", path, params, units, public=public, signin=signin)
 
     async def _post(self, path: str, params: dict, body: dict, units: int) -> dict:
-        self.quota.charge(units)
-        headers, auth = await self._auth()
-        response = await self._client.post(
-            path, params={**params, **auth}, json=body, headers=headers)
-        return self._parse(response, path)
+        return await self._request("POST", path, params, units, body=body)
 
     async def _delete(self, path: str, params: dict, units: int) -> dict:
-        self.quota.charge(units)
-        headers, auth = await self._auth()
-        response = await self._client.delete(path, params={**params, **auth}, headers=headers)
-        if response.status_code < 300:
-            return {}  # 204 No Content — nothing to parse
-        return self._parse(response, path)
+        return await self._request("DELETE", path, params, units)
 
-    def _parse(self, response: httpx.Response, path: str) -> dict:
+    def _parse(self, response: httpx.Response, path: str, pool: Pool = Pool.SHARED) -> dict:
         if response.status_code < 300:
             return response.json()
         reason, message = "unknown", ""
+        reasons: set[str] = set()
         try:
             error = response.json()["error"]
             message = error.get("message", "")
             first = (error.get("errors") or [{}])[0]
             reason = first.get("reason", "unknown")
-        except (ValueError, KeyError, TypeError):
+            for item in (error.get("errors") or []) + (error.get("details") or []):
+                if isinstance(item, dict) and item.get("reason"):
+                    reasons.add(item["reason"])
+        except (ValueError, KeyError, TypeError, AttributeError):
             pass
         exc = YoutubeApiError(
             response.status_code,
@@ -141,19 +209,23 @@ class YouTubeApi:
             retryable=reason == "rateLimitExceeded" or response.status_code in (429, 500, 502, 503),
         )
         if exc.is_quota:
-            self.quota.mark_exhausted(Pool.SHARED)
+            self.quota.mark_exhausted(pool)
+        elif pool is Pool.KEY and reasons & KEY_INVALID_REASONS:
+            self.key_problem = sorted(reasons & KEY_INVALID_REASONS)[0]
         log.debug("YouTube API %s -> %s %s", path, response.status_code, reason)
         raise exc
 
     # -- metadata / resolution --------------------------------------------------------
 
-    async def videos(self, video_id: str) -> dict | None:
-        """videos.list for one video; None when the video does not exist."""
+    async def videos(self, video_id: str, *, signin: bool = False) -> dict | None:
+        """videos.list for one video; None when the video does not exist.
+        signin=True forces the Google sign-in (the Stream tab's own reads)."""
         try:
             return await self._get(
                 "/videos",
                 {"part": "liveStreamingDetails,snippet", "id": video_id},
                 QUOTA["meta"],
+                public=True, signin=signin,
             )
         except YoutubeApiError as exc:
             if exc.http_status == 404:
@@ -167,7 +239,7 @@ class YouTubeApi:
         return (await self._get(
             "/videos",
             {"part": "liveStreamingDetails,snippet", "id": ",".join(ids)},
-            QUOTA["meta"],
+            QUOTA["meta"], public=True,
         )).get("items", [])
 
     async def channel_by_handle(self, handle: str) -> dict | None:
@@ -175,7 +247,7 @@ class YouTubeApi:
             return await self._get(
                 "/channels",
                 {"part": "contentDetails,snippet,statistics", "forHandle": handle.lstrip("@")},
-                QUOTA["meta"],
+                QUOTA["meta"], public=True,
             )
         except YoutubeApiError as exc:
             if exc.http_status in (400, 404):
@@ -191,7 +263,7 @@ class YouTubeApi:
         data = await self._get(
             "/channels",
             {"part": "snippet", "id": ",".join(channel_ids)},
-            QUOTA["meta"],
+            QUOTA["meta"], public=True,
         )
         return {
             item["id"]: (item.get("snippet") or {}).get("title", "")
@@ -204,7 +276,7 @@ class YouTubeApi:
             return await self._get(
                 "/channels",
                 {"part": "contentDetails,snippet,statistics", "id": channel_id},
-                QUOTA["meta"],
+                QUOTA["meta"], public=True,
             )
         except YoutubeApiError as exc:
             if exc.http_status in (400, 404):
@@ -221,7 +293,7 @@ class YouTubeApi:
         }
         if page_token:
             params["pageToken"] = page_token
-        return await self._get("/playlistItems", params, QUOTA["meta"])
+        return await self._get("/playlistItems", params, QUOTA["meta"], public=True)
 
     async def search_live(self, channel_id: str) -> list[dict]:
         """search.list eventType=live (own 100-calls/day bucket)."""
@@ -229,7 +301,7 @@ class YouTubeApi:
             "/search",
             {"part": "snippet", "eventType": "live", "type": "video",
              "channelId": channel_id, "maxResults": "25"},
-            QUOTA["meta"],
+            QUOTA["meta"], public=True,
         )).get("items", [])
 
     async def channels_mine(self) -> dict:

@@ -257,6 +257,15 @@ class YouTubeService:
     def set_api_key(self, value: str) -> None:
         """Live refresh after Settings accept (the key lives in the keyring)."""
         self._api_key = value.strip()
+        self.api.reset_key_problem()
+
+    def api_key_problem(self) -> str:
+        """User-facing note when the API key is rejected, else ''."""
+        if not self.api.key_problem:
+            return ""
+        if self.tokens:
+            return "API key not working — using your Google sign-in"
+        return "API key not working — YouTube reading paused"
 
     # -- watch loop ----------------------------------------------------------------------
 

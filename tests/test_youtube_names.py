@@ -9,13 +9,14 @@ import chattersyn.services.youtube.names as names_mod
 from chattersyn.core.bus import bridge
 from chattersyn.models.message import Author, Message, Platform
 from chattersyn.services.youtube.names import YouTubeNames
+from chattersyn.services.youtube.quota import Pool
 
 
 class FakeQuota:
     def __init__(self, exhausted=False):
         self._exhausted = exhausted
 
-    def exhausted(self):
+    def exhausted(self, pool=None):
         return self._exhausted
 
 
@@ -26,6 +27,9 @@ class FakeApi:
         self.delay = delay
         self.calls: list[list[str]] = []
         self.quota = FakeQuota(exhausted)
+
+    async def read_pool(self, *, signin=False):
+        return Pool.SHARED
 
     async def channels_names(self, ids):
         self.calls.append(list(ids))

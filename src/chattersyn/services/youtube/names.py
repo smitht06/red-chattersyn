@@ -60,7 +60,8 @@ class YouTubeNames:
 
     async def _resolve(self, batch: dict[str, list[Message]]) -> None:
         names: dict[str, str] = {}
-        if not self._api.quota.exhausted():
+        pool = await self._api.read_pool()
+        if pool is not None and not self._api.quota.exhausted(pool):
             uncached = [cid for cid in batch if cid not in self._cache]
             for start in range(0, len(uncached), BATCH):
                 chunk = uncached[start:start + BATCH]

@@ -13,6 +13,7 @@ from chattersyn.services.youtube import names as names_mod
 from chattersyn.services.youtube import service as service_mod
 from chattersyn.services.youtube.api import YoutubeApiError
 from chattersyn.services.youtube.names import YouTubeNames
+from chattersyn.services.youtube.quota import Pool
 from chattersyn.services.youtube.reader import StreamEnded
 from chattersyn.services.youtube.resolver import Resolution, ResolveState
 from chattersyn.services.youtube.service import WatchState, YouTubeService
@@ -206,7 +207,10 @@ class _NamesApi:
     def __init__(self, names):
         self.names = names
         self.calls: list[list[str]] = []
-        self.quota = SimpleNamespace(exhausted=lambda: False)
+        self.quota = SimpleNamespace(exhausted=lambda pool=None: False)
+
+    async def read_pool(self, *, signin=False):
+        return Pool.SHARED
 
     async def channels_names(self, ids):
         self.calls.append(list(ids))
