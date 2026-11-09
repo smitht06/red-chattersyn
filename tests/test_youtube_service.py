@@ -2,6 +2,7 @@
 REST fallback after gRPC failures, quota terminal state, cancellation."""
 
 import asyncio
+import datetime as dt
 import json
 from types import SimpleNamespace
 
@@ -15,7 +16,7 @@ from chattersyn.services.youtube.api import YoutubeApiError
 from chattersyn.services.youtube.names import YouTubeNames
 from chattersyn.services.youtube.quota import Pool
 from chattersyn.services.youtube.reader import ReadRefused, StreamEnded
-from chattersyn.services.youtube.resolver import Resolution, ResolveState
+from chattersyn.services.youtube.resolver import LiveChatResolver, Resolution, ResolveState
 from chattersyn.services.youtube.service import WatchState, YouTubeService
 
 
@@ -50,18 +51,29 @@ def _rest_item(msg_id, text, kind="textMessageEvent"):
 
 
 class FakeResolver:
-    """Scripted resolve() results; the last entry repeats when exhausted."""
+    """Scripted resolve() results; the last entry repeats when exhausted.
+    Logs each call's target, deep flag and (with a clock) time."""
 
-    def __init__(self, results):
+    def __init__(self, results, clock=None):
         self.results = list(results)
+        self.clock = clock
         self.calls: list[str] = []
+        self.deeps: list[bool] = []
+        self.times: list[dt.datetime] = []
+        self.forgotten: list[str] = []
 
-    async def resolve(self, target):
+    async def resolve(self, target, *, deep=False):
         self.calls.append(target)
+        self.deeps.append(deep)
+        if self.clock is not None:
+            self.times.append(self.clock())
         entry = self.results.pop(0) if len(self.results) > 1 else self.results[0]
         if isinstance(entry, BaseException):
             raise entry
         return entry
+
+    def forget(self, target):
+        self.forgotten.append(target)
 
 
 class FakeReader:
@@ -131,9 +143,15 @@ class Store:
 
 @pytest.fixture
 def fast(monkeypatch):
+    """Every wait of the watch loop lasts ~10 ms of real time: the check
+    schedule answers "10 ms after the last check" for every state."""
+
+    def soon(kind, state, *, last_check, **_):
+        return last_check + dt.timedelta(milliseconds=10)
+
+    monkeypatch.setattr(service_mod, "next_check_at", soon)
     monkeypatch.setattr(service_mod, "RE_RESOLVE_INTERVAL", 0.01)
     monkeypatch.setattr(service_mod, "UPCOMING_RE_RESOLVE", 0.01)
-    monkeypatch.setattr(service_mod, "MINE_RE_RESOLVE_INTERVAL", 0.01)
     monkeypatch.setattr(service_mod, "BACKOFF_BASE", 0.01)
     monkeypatch.setattr(service_mod, "BACKOFF_CAP", 0.02)
 
@@ -153,12 +171,12 @@ def fake_readers(monkeypatch):
 async def service():
     services = []
 
-    def make(api_key=""):
+    def make(api_key="", now=None):
         # The API key lives in the keyring (SecretsStore), not settings.json.
         store = Store()
         if api_key:
             store.set("youtube_api_key", api_key)
-        svc = YouTubeService(Settings({}), store)
+        svc = YouTubeService(Settings({}), store, **({} if now is None else {"now": now}))
         # No real keyring/network: tests set svc.tokens directly.
         svc.auth.configured = lambda: False
         services.append(svc)
@@ -186,6 +204,74 @@ async def wait_until(predicate, timeout=2.0, step=0.005):
             return True
         await asyncio.sleep(step)
     return predicate()
+
+
+async def settle(rounds=20):
+    """Let the watch tasks run until they block again."""
+    for _ in range(rounds):
+        await asyncio.sleep(0)
+
+
+# -- schedule-driven time ---------------------------------------------------------------
+
+T0 = dt.datetime(2026, 11, 9, 12, 0, tzinfo=dt.UTC)
+MIN = dt.timedelta(minutes=1)
+
+
+class FakeClock:
+    """Injected YouTubeService clock (aware UTC); moves only when told."""
+
+    def __init__(self, start=T0):
+        self.t = start
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, seconds):
+        self.t += dt.timedelta(seconds=seconds)
+
+
+class Naps:
+    """Stands in for YouTubeService._nap and logs (watch_key, due, seconds).
+
+    Manual (default): a nap returns only when its watch is woken, so time
+    moves only when the test moves the clock. auto=True: each nap advances the
+    clock by its length until `until`; from then on naps block and `idle` is set.
+    """
+
+    def __init__(self, clock, *, auto=False, until=None):
+        self.clock = clock
+        self.auto = auto
+        self.until = until
+        self.log: list[tuple[str, dt.datetime, float]] = []
+        self.idle = asyncio.Event()
+
+    async def __call__(self, watch, seconds):
+        self.log.append((watch.watch_key, watch.next_check, seconds))
+        if self.auto and (self.until is None or self.clock.t < self.until):
+            self.clock.advance(seconds)
+            await asyncio.sleep(0)
+            return
+        if self.auto:
+            self.idle.set()
+        await watch.wake.wait()
+
+    def dues(self, key="k1"):
+        return [due for k, due, _ in self.log if k == key]
+
+
+@pytest.fixture
+def clock():
+    return FakeClock()
+
+
+def _scheduled(service, clock, results, *, auto=False, until=None, api_key=""):
+    """A service on the fake clock with a scripted resolver and logged naps."""
+    svc = service(api_key=api_key, now=clock)
+    svc.resolver = FakeResolver(results, clock=clock)
+    naps = Naps(clock, auto=auto, until=until)
+    svc._nap = naps  # instance attribute shadows the bound method
+    return svc, naps
 
 
 # -- live read + reconnect ------------------------------------------------------------
@@ -449,22 +535,15 @@ async def test_unauthenticated_resolve_emits_auth_required_for_video_target(
     svc.unwatch("k1")
 
 
-async def test_mine_offline_uses_mine_interval(monkeypatch, service):
-    monkeypatch.setattr(service_mod, "MINE_RE_RESOLVE_INTERVAL", 77.0)
-    svc = service()
-    svc.resolver = FakeResolver([OFFLINE])
-    sleeps = []
-
-    async def fake_sleep(watch, seconds):
-        sleeps.append(seconds)
-        watch.stopped = True  # end the loop after the first sleep
-
-    svc._sleep = fake_sleep  # instance attribute shadows the bound method
+async def test_mine_offline_rechecks_every_2_minutes_on_or_off_screen(service, clock):
+    svc, naps = _scheduled(service, clock, [OFFLINE])
     svc.watch("mine:", "k1")
-    task = svc._watches["k1"].task
-
-    assert await wait_until(lambda: task.done())
-    assert sleeps == [77.0]
+    assert await wait_until(lambda: naps.log)
+    assert naps.dues()[-1] == T0 + 2 * MIN
+    svc.set_on_screen("k1", False)  # YQB-19: the Stream tab keeps its rhythm off screen
+    await settle()
+    assert naps.dues()[-1] == T0 + 2 * MIN
+    assert svc.resolver.times == [T0]
 
 
 # -- error paths ------------------------------------------------------------------------
@@ -785,3 +864,250 @@ async def test_signin_refused_is_terminal_not_a_hot_loop(
     assert await wait_until(lambda: any(e.state is WatchState.UNAVAILABLE for e in events))
     assert len(FakeGrpcReader.instances) <= 2
     assert svc.quota.used_in(Pool.SHARED) <= 10
+
+
+# -- check schedule and visibility (youtube-quota-budget 3.3) --------------------------
+
+
+async def test_yqb54_leaving_screen_moves_next_check_to_last_plus_15(service, clock):
+    svc, naps = _scheduled(service, clock, [OFFLINE])
+    svc.watch(CHANNEL, "k1")
+    assert await wait_until(lambda: naps.log)
+    assert naps.dues()[-1] == T0 + 2 * MIN  # on screen, recently offline
+    clock.advance(60)
+    svc.set_on_screen("k1", False)
+    await settle()
+    assert naps.dues()[-1] == T0 + 15 * MIN  # last check + 15 min, not now + 15
+    assert svc.resolver.times == [T0]
+
+
+async def test_yqb17_selecting_a_stale_hidden_tab_checks_at_once(service, clock):
+    svc, naps = _scheduled(service, clock, [OFFLINE])
+    svc.watch(CHANNEL, "k1")
+    svc.set_on_screen("k1", False)
+    assert await wait_until(lambda: naps.log)
+    assert naps.dues()[-1] == T0 + 15 * MIN
+    clock.advance(5 * 60)
+    svc.set_on_screen("k1", True)
+    assert await wait_until(lambda: len(svc.resolver.times) == 2)
+    assert svc.resolver.times == [T0, T0 + 5 * MIN]
+    await settle()
+    assert naps.dues()[-1] == T0 + 7 * MIN  # then the on-screen rhythm
+
+
+async def test_yqb39_selecting_a_fresh_tab_makes_no_extra_check(service, clock):
+    svc, naps = _scheduled(service, clock, [OFFLINE])
+    svc.watch(CHANNEL, "k1")
+    svc.set_on_screen("k1", False)
+    assert await wait_until(lambda: naps.log)
+    clock.advance(20)
+    svc.set_on_screen("k1", True)
+    await settle()
+    assert svc.resolver.times == [T0]
+    assert naps.dues()[-1] == T0 + 2 * MIN
+
+
+async def test_yqb18_restoring_the_window_checks_the_selected_tab(service, clock):
+    svc, naps = _scheduled(service, clock, [OFFLINE])
+    svc.watch("@chanone", "k1")  # the selected tab
+    svc.watch("@chantwo", "k2")  # another tab
+    svc.set_on_screen("k2", False)
+    assert await wait_until(lambda: naps.dues("k1") and naps.dues("k2"))
+    svc.set_on_screen("k1", False)  # minimized: no tab is on screen
+    svc.set_on_screen("k2", False)
+    clock.advance(5 * 60)
+    svc.set_on_screen("k1", True)  # restored: the selected tab is on screen again
+    svc.set_on_screen("k2", False)
+    assert await wait_until(lambda: svc.resolver.calls.count("@chanone") == 2)
+    await settle()
+    assert svc.resolver.calls.count("@chantwo") == 1
+    assert naps.dues("k2")[-1] == T0 + 15 * MIN
+
+
+async def test_yqb40_not_found_channel_rechecks_every_15_minutes(service, clock, signals):
+    events, _ = signals
+    svc, naps = _scheduled(service, clock, [NOT_FOUND], auto=True, until=T0 + 31 * MIN)
+    svc.watch(CHANNEL, "k1")  # on screen: still 15 minutes
+    assert await wait_until(naps.idle.is_set)
+    assert svc.resolver.times == [T0, T0 + 15 * MIN, T0 + 30 * MIN]
+    assert {e.state for e in events} == {WatchState.NOT_FOUND}
+    assert svc.resolver.forgotten == [CHANNEL] * 3
+    assert not svc._watches["k1"].task.done()  # keeps watching
+
+
+async def test_yqb41_channel_found_later_deep_scans_and_reads(
+        service, clock, signals, fake_readers):
+    events, _ = signals
+    svc, naps = _scheduled(service, clock, [NOT_FOUND, LIVE, OFFLINE], auto=True,
+                           until=T0 + 30 * MIN, api_key="K")
+    FakeGrpcReader.script = [StreamEnded("chat ended or disabled (indistinguishable)")]
+    svc.watch(CHANNEL, "k1")
+    assert await wait_until(naps.idle.is_set)
+    assert svc.resolver.times[:2] == [T0, T0 + 15 * MIN]
+    assert svc.resolver.deeps[:3] == [True, True, False]  # found: deep; then cheap re-checks
+    assert FakeGrpcReader.instances[0].calls == [("Cg0KC2Zvbw", None)]  # reading started
+    assert WatchState.LIVE in [e.state for e in events]
+
+
+async def test_yqb20_hidden_live_tab_keeps_chat_and_viewer_count(
+        service, signals, fake_readers, monkeypatch):
+    monkeypatch.setattr(service_mod, "STREAM_STATS_INTERVAL", 0.01)
+    events, messages = signals
+    svc = service(api_key="K")
+    svc.resolver = FakeResolver([LIVE])
+
+    async def videos(video_id, *, signin=False):
+        return {"items": [{"liveStreamingDetails": {"concurrentViewers": "77"}}]}
+
+    svc.api.videos = videos
+
+    class OpenStream(FakeGrpcReader):
+        async def read(self, live_chat_id, page_token, on_item, stop_event=None):
+            on_item(_rest_item("m1", "still here"))
+            await asyncio.sleep(0.2)  # the stream stays open across stats ticks
+            raise StreamEnded("done")
+
+    monkeypatch.setattr(service_mod, "GrpcReader", OpenStream)
+    svc.watch(VIDEO_URL, "k1")
+    svc.set_on_screen("k1", False)
+    assert await wait_until(lambda: any(m.plain == "still here" for m in messages))
+    assert await wait_until(lambda: any(
+        e.state is WatchState.LIVE and e.viewers == 77 for e in events))
+    assert svc._watches["k1"].on_screen is False
+
+
+async def test_stream_end_restarts_the_offline_rhythm(service, clock, fake_readers, monkeypatch):
+    svc, naps = _scheduled(service, clock, [LIVE, OFFLINE], api_key="K")
+
+    class TwoHourStream(FakeGrpcReader):
+        async def read(self, live_chat_id, page_token, on_item, stop_event=None):
+            clock.advance(2 * 3600)
+            on_item(_rest_item("ce1", "chat has ended", kind="chatEndedEvent"))
+            return "page-9", None
+
+    monkeypatch.setattr(service_mod, "GrpcReader", TwoHourStream)
+    svc.watch(CHANNEL, "k1")
+    assert await wait_until(lambda: naps.log)
+    # Live was seen until the end: 2-minute rhythm from then, not a catch-up check.
+    assert naps.dues()[-1] == T0 + dt.timedelta(hours=2, minutes=2)
+    assert svc.resolver.times == [T0]
+
+
+async def test_live_without_chat_id_rechecks_after_30_s(service, clock):
+    live_no_id = _resolution(ResolveState.LIVE, live_chat_id=None)
+    svc, naps = _scheduled(service, clock, [live_no_id])
+    svc.watch(CHANNEL, "k1")
+    svc.set_on_screen("k1", False)  # this wait does not follow the visibility rhythm
+    assert await wait_until(lambda: naps.log)
+    assert naps.dues()[-1] == T0 + dt.timedelta(seconds=30)
+
+
+async def test_wall_clock_jump_during_a_sleep_checks_within_one_chunk(service, clock):
+    # asyncio.sleep runs on the monotonic clock, which stops during suspend.
+    svc, naps = _scheduled(service, clock, [OFFLINE])
+    svc.watch(CHANNEL, "k1")
+    svc.set_on_screen("k1", False)  # next check in 15 minutes
+    chunks = []
+
+    async def suspend_once(watch, seconds):
+        chunks.append(seconds)
+        if len(chunks) == 1:
+            clock.advance(3 * 3600)  # the machine slept: this nap ends 3 h later
+            return
+        await watch.wake.wait()
+
+    svc._nap = suspend_once
+    assert await wait_until(lambda: len(svc.resolver.times) == 2)
+    assert chunks[0] == 60  # a 15-minute wait sleeps in chunks of at most 60 s
+    assert svc.resolver.times == [T0, T0 + dt.timedelta(hours=3)]  # right after that chunk
+    await settle()
+    assert all(seconds <= 60 for seconds in chunks)
+
+
+async def test_visibility_flapping_one_check_per_minute(service, clock):
+    svc, naps = _scheduled(service, clock, [OFFLINE])
+    svc.watch(CHANNEL, "k1")
+    assert await wait_until(lambda: naps.log)
+    svc.set_on_screen("k1", False)
+    clock.advance(5 * 60)  # the last check is stale now
+    for _ in range(20):  # 20 on/off toggles within 60 s
+        clock.advance(1.5)
+        svc.set_on_screen("k1", True)
+        await settle()
+        clock.advance(1.5)
+        svc.set_on_screen("k1", False)
+        await settle()
+    assert len(svc.resolver.times) <= 2  # at most one extra check
+
+
+async def test_crashing_check_after_coming_on_screen_waits_before_retrying(service, clock):
+    # A non-API error (e.g. no network) after an at-once check must not leave
+    # that request pending, or every retry would run at once again.
+    svc, naps = _scheduled(service, clock, [OFFLINE, OSError("network is unreachable")])
+    svc.watch(CHANNEL, "k1")
+    svc.set_on_screen("k1", False)
+    assert await wait_until(lambda: naps.log)
+    clock.advance(5 * 60)
+    svc.set_on_screen("k1", True)
+    assert await wait_until(lambda: len(svc.resolver.times) == 2)
+    await settle()
+    assert len(svc.resolver.times) == 2
+    assert naps.dues()[-1] == T0 + 6 * MIN  # the usual 60-s retry
+
+
+# -- 24-hour budget of an idle channel tab (real resolver, counting fake API) -----------
+
+
+def _upload(video_id, *, live="none", minute=0):
+    return {
+        "id": video_id,
+        "snippet": {"title": "Video", "channelTitle": "Chan", "channelId": "UCchan",
+                    "publishedAt": f"2026-10-01T00:{minute:02d}:00Z",
+                    "liveBroadcastContent": live},
+        "liveStreamingDetails": {},
+    }
+
+
+class CountingApi:
+    """Duck-typed YouTubeApi for the real LiveChatResolver: every call costs
+    1 unit and is logged (the pattern of tests/test_youtube_resolver.py)."""
+
+    def __init__(self, ids, videos):
+        self.ids = ids  # the newest uploads page (newest first)
+        self.videos = videos
+        self.calls: list[str] = []
+
+    async def channel_by_handle(self, handle):
+        self.calls.append("channel_by_handle")
+        return {"items": [{"id": "UCchan",
+                           "contentDetails": {"relatedPlaylists": {"uploads": "UUchan"}}}]}
+
+    async def playlist_items(self, playlist_id, page_token=None, max_results=50):
+        self.calls.append("playlist_items")
+        return {"items": [{"contentDetails": {"videoId": v}} for v in self.ids]}
+
+    async def videos_batch(self, ids):
+        self.calls.append("videos_batch")
+        assert len(ids) <= 50
+        return [self.videos[i] for i in ids if i in self.videos]
+
+
+@pytest.mark.parametrize("upcoming_on_page", [False, True])
+async def test_idle_channel_tab_day_budget(service, clock, signals, upcoming_on_page):
+    events, _ = signals
+    ids = [f"vid{i:08d}" for i in range(50)]
+    videos = {v: _upload(v, minute=59 - i) for i, v in enumerate(ids)}
+    if upcoming_on_page:
+        # Worst case: an upcoming video without a start time makes every
+        # re-check also read videos.list (2 units), and still counts as offline.
+        videos[ids[1]] = _upload(ids[1], live="upcoming", minute=58)
+    api = CountingApi(ids, videos)
+    svc = service(now=clock)
+    svc.resolver = LiveChatResolver(api)
+    naps = Naps(clock, auto=True, until=T0 + dt.timedelta(hours=24))
+    svc._nap = naps
+    svc.watch(CHANNEL, "k1")  # on screen all day
+    assert await wait_until(naps.idle.is_set, timeout=10)
+    assert {e.state for e in events} == {WatchState.OFFLINE}
+    assert api.calls.count("channel_by_handle") == 1  # one deep scan at the start
+    assert len(api.calls) <= 600

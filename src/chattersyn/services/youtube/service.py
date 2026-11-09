@@ -3,12 +3,15 @@ and sending. One watch task per target (video URL/id or channel handle).
 
 State machine per watch:
     resolving -> live (read loop) -> ended/unavailable
-              -> upcoming/offline (poll re-resolve) -> live | stays offline
-              -> not_found (channel targets keep re-checking)
+              -> upcoming/offline (re-check on the schedule) -> live | stays offline
+              -> not_found (channel targets keep re-checking, deep scan when found)
               -> auth_required (no OAuth token; keeps re-checking)
 
-"mine:" targets poll their own broadcast while offline (120 s — the 2-minute
-go-live latency budget) instead of the 60 s channel re-check.
+While a watch is not live, schedule.next_check_at decides when it checks next
+(it depends on the kind of target, the stream's state, scheduled starts and
+whether the tab is on screen — set_on_screen). The wait wakes early on a
+visibility change, and re-reads the wall clock at least every 60 s because
+asyncio.sleep runs on the monotonic clock, which stops during system suspend.
 
 The gRPC streamList reader is primary when an API key or OAuth token exists
 (API key = read-only public chats, OAuth = everything); the REST reader is
@@ -27,7 +30,8 @@ import datetime as dt
 import enum
 import logging
 import time
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 
 import grpc
 
@@ -40,25 +44,38 @@ from .mapper import map_item
 from .names import YouTubeNames
 from .quota import Pool
 from .reader import GrpcReader, ReadQuotaExceeded, ReadRefused, RestReader, StreamEnded
-from .resolver import LiveChatResolver, Resolution, ResolveState, _parse_dt
+from .resolver import LiveChatResolver, Resolution, ResolveState, _parse_dt, parse_target
+from .schedule import WatchKind, next_check_at
 from .sender import YoutubeSender, YoutubeSendError
 
 log = logging.getLogger(__name__)
 
 BACKOFF_BASE = 1.0
 BACKOFF_CAP = 30.0
-RE_RESOLVE_INTERVAL = 60.0  # offline/upcoming re-check
-UPCOMING_RE_RESOLVE = 30.0
+RE_RESOLVE_INTERVAL = 60.0  # retry after a failed check (error, auth required)
+UPCOMING_RE_RESOLVE = 30.0  # live but no chat id yet
 STREAM_STATS_INTERVAL = 120.0  # videos.list refresh while live (1 quota unit)
-MINE_RE_RESOLVE_INTERVAL = 120.0  # own-broadcast poll while offline (720 units/day)
+SLEEP_CHUNK = 60.0  # longest single sleep before the wall clock is read again
+ON_SCREEN_RECHECK_AGE = dt.timedelta(seconds=60)  # coming on screen checks at once past this
+
+_KINDS = {"video": WatchKind.VIDEO, "handle": WatchKind.CHANNEL,
+          "channel": WatchKind.CHANNEL, "mine": WatchKind.MINE}
+
+
+def _utc_now() -> dt.datetime:
+    return dt.datetime.now(dt.UTC)
 
 
 def _is_mine_target(target: str) -> bool:
     """True for MINE_TARGET — the signed-in user's own broadcast."""
-    from .resolver import parse_target
-
     parsed = parse_target(target)
     return parsed is not None and parsed[0] == "mine"
+
+
+def _watch_kind(target: str) -> WatchKind:
+    """Unrecognised targets act as videos: their NOT_FOUND ends the watch."""
+    parsed = parse_target(target)
+    return _KINDS[parsed[0]] if parsed is not None else WatchKind.VIDEO
 
 
 class WatchState(enum.Enum):
@@ -109,11 +126,29 @@ class _Watch:
     viewers: int = 0
     started_at: dt.datetime | None = None
     use_signin: bool = False  # key not allowed for this watch: read with the sign-in
+    kind: WatchKind = field(init=False)  # follows target (see watch())
+    on_screen: bool = True
+    last_check: dt.datetime | None = None
+    offline_since: dt.datetime = field(default_factory=_utc_now)  # watch start / live last seen
+    deep: bool = True  # next resolve scans the channel's uploads in full
+    check_now: bool = False  # came on screen with a stale last check
+    next_check: dt.datetime | None = None  # the due time being waited for
+    wake: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+
+    def __post_init__(self) -> None:
+        self.kind = _watch_kind(self.target)
 
 
 class YouTubeService:
-    def __init__(self, settings: Settings, secrets) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        secrets,
+        *,
+        now: Callable[[], dt.datetime] = _utc_now,
+    ) -> None:
         self._settings = settings
+        self._now = now  # aware UTC; injected by tests
         # The API key lives in the keyring; migrate a legacy plain-text
         # settings.json value on first sight so it never sits on disk again.
         self._api_key = secrets.get("youtube_api_key") or ""
@@ -125,7 +160,7 @@ class YouTubeService:
                 settings.save()
                 self._api_key = legacy
         self.auth = YouTubeAuth(settings, secrets)
-        self.quota = QuotaTracker()
+        self.quota = QuotaTracker(now=self._now)
         self.api = YouTubeApi(self.auth.access_token, self.quota,
                               get_key=lambda: self._api_key or None)
         self.resolver = LiveChatResolver(self.api)
@@ -232,11 +267,31 @@ class YouTubeService:
         """Start resolving/reading `target` (video URL/id or channel handle)."""
         existing = self._watches.get(watch_key)
         if existing is not None:
-            existing.target = target
+            if target != existing.target:
+                existing.target = target
+                existing.kind = _watch_kind(target)
+                existing.deep = True
             return
-        watch = _Watch(target=target, watch_key=watch_key)
+        watch = _Watch(target=target, watch_key=watch_key, offline_since=self._now())
         self._watches[watch_key] = watch
         watch.task = asyncio.ensure_future(self._watch_loop(watch_key, watch))
+
+    def set_on_screen(self, watch_key: str, on_screen: bool) -> None:
+        """Tell a watch whether its tab is on screen (selected, window not
+        minimized). The next check moves to the last check plus the new
+        interval; coming on screen checks at once when the last check is
+        older than 60 s. Live chat reading is not affected."""
+        watch = self._watches.get(watch_key)
+        if watch is None:
+            return
+        coming_on = on_screen and not watch.on_screen
+        watch.on_screen = on_screen
+        if not on_screen:
+            watch.check_now = False
+        elif (coming_on and watch.last_check is not None
+              and self._now() - watch.last_check > ON_SCREEN_RECHECK_AGE):
+            watch.check_now = True
+        watch.wake.set()
 
     def unwatch(self, watch_key: str) -> None:
         watch = self._watches.pop(watch_key, None)
@@ -282,13 +337,16 @@ class YouTubeService:
                 log.warning("watch %s crashed: %s", watch.target, exc)
                 watch.detail = str(exc)
                 self._emit(watch_key, WatchState.RESOLVING, detail=str(exc))
-                await self._sleep(watch, RE_RESOLVE_INTERVAL)
+                self._checked(watch)  # a failed check still counts: no retry at once
+                await self._wait_seconds(watch, RE_RESOLVE_INTERVAL)
 
     async def _watch_iteration(self, watch_key: str, watch: _Watch) -> bool:
-        """One resolve -> read cycle. False = terminal, stop watching."""
+        """One resolve -> read cycle, then the wait for the next check.
+        False = terminal, stop watching."""
         try:
-            resolution = await self.resolver.resolve(watch.target)
+            resolution = await self.resolver.resolve(watch.target, deep=watch.deep)
         except YoutubeApiError as exc:
+            self._checked(watch)
             if exc.is_quota:
                 self._emit(watch_key, WatchState.QUOTA_EXHAUSTED,
                            detail="YouTube quota exhausted (resets midnight PT)")
@@ -300,13 +358,15 @@ class YouTubeService:
                 log.warning("resolve %s unauthenticated: %s", watch.target, exc)
                 self._emit(watch_key, WatchState.AUTH_REQUIRED,
                            detail="connect a Google account to watch your stream")
-                await self._sleep(watch, RE_RESOLVE_INTERVAL)
+                await self._wait_seconds(watch, RE_RESOLVE_INTERVAL)
                 return True
             log.warning("resolve %s failed: %s", watch.target, exc)
             self._emit(watch_key, WatchState.RESOLVING, detail=str(exc))
-            await self._sleep(watch, RE_RESOLVE_INTERVAL)
+            await self._wait_seconds(watch, RE_RESOLVE_INTERVAL)
             return True
 
+        watch.deep = False
+        self._checked(watch, saw_live=resolution.state is ResolveState.LIVE)
         watch.video_id = resolution.video_id
         watch.live_chat_id = resolution.live_chat_id
         watch.channel_id = resolution.channel_id
@@ -319,40 +379,42 @@ class YouTubeService:
         if resolution.state is ResolveState.LIVE and not resolution.resolved:
             # Live but activeLiveChatId missing — it can lag a moment behind
             # the broadcast state; re-resolve instead of stopping the watch.
-            await self._sleep(watch, UPCOMING_RE_RESOLVE)
+            await self._wait_seconds(watch, UPCOMING_RE_RESOLVE)
             return True
 
+        state = resolution.state
         if resolution.resolved:
             outcome = await self._read_until_end(watch_key, watch)
+            # The stream was live until now: the offline rhythm starts afresh.
+            self._checked(watch, saw_live=True)
             if outcome == "ended":
                 # Always emit ENDED (the tab must drop its stale live_chat_id
                 # and moderation state); channel targets then keep watching.
                 self._emit(watch_key, WatchState.ENDED, detail=watch.detail)
-                if self._is_channel_target(watch.target):
-                    # The channel's chat ended: reset and watch for a new stream.
-                    self._reset_watch(watch)
-                    await self._sleep(watch, RE_RESOLVE_INTERVAL)
-                    return True
-                return False  # a specific video whose chat ended: stop watching
-            if outcome == "unavailable":
+                state = ResolveState.ENDED
+            else:  # "unavailable"
                 self._emit(watch_key, WatchState.UNAVAILABLE, detail=watch.detail)
-                if self._is_channel_target(watch.target):
-                    self._reset_watch(watch)
-                    await self._sleep(watch, RE_RESOLVE_INTERVAL)  # maybe a new stream
-                    return True
-                return False
-
-        if resolution.state is ResolveState.UPCOMING:
-            await self._sleep(watch, UPCOMING_RE_RESOLVE)
-        elif resolution.state is ResolveState.OFFLINE:
-            if _is_mine_target(watch.target):
-                await self._sleep(watch, MINE_RE_RESOLVE_INTERVAL)
-            else:
-                await self._sleep(watch, RE_RESOLVE_INTERVAL)
-        else:  # ENDED / NOT_FOUND
-            if not self._is_channel_target(watch.target):
+                state = ResolveState.OFFLINE  # maybe a new stream later
+            if watch.kind is WatchKind.VIDEO:
+                return False  # a specific video whose chat is over: stop watching
+            # The channel's chat is over: reset and watch for a new stream.
+            self._reset_watch(watch)
+        elif state in (ResolveState.ENDED, ResolveState.NOT_FOUND):
+            if watch.kind is WatchKind.VIDEO:
                 return False  # a specific video that ended: stop watching
-            await self._sleep(watch, RE_RESOLVE_INTERVAL)
+            if state is ResolveState.NOT_FOUND:
+                # Found again later = a fresh start: look it up and scan deep.
+                self.resolver.forget(watch.target)
+                watch.deep = True
+
+        starts = resolution.scheduled_starts
+        await self._wait_until(watch, lambda: next_check_at(
+            watch.kind, state,
+            last_check=watch.last_check,
+            offline_since=watch.offline_since,
+            scheduled_starts=starts,
+            on_screen=watch.on_screen,
+        ))
         return True
 
     async def _read_until_end(self, watch_key: str, watch: _Watch) -> str:
@@ -559,13 +621,6 @@ class YouTubeService:
 
     # -- helpers ------------------------------------------------------------------------
 
-    @staticmethod
-    def _is_channel_target(target: str) -> bool:
-        from .resolver import parse_target
-
-        parsed = parse_target(target)
-        return parsed is not None and parsed[0] in ("handle", "channel", "mine")
-
     def _emit_resolution(self, watch_key: str, resolution: Resolution) -> None:
         state = {
             ResolveState.LIVE: WatchState.LIVE,
@@ -590,6 +645,40 @@ class YouTubeService:
         bridge.message.emit(Message.system(
             Platform.YOUTUBE, watch.live_chat_id or watch.video_id or "",
             text, extra={"watch_key": watch.watch_key, "video_id": watch.video_id}))
+
+    def _checked(self, watch: _Watch, *, saw_live: bool = False) -> None:
+        """Record a check (and, if the stream was live, the time it was seen)."""
+        now = self._now()
+        watch.last_check = now
+        watch.check_now = False  # this check is the one asked for
+        if saw_live:
+            watch.offline_since = now
+
+    async def _wait_seconds(self, watch: _Watch, seconds: float) -> None:
+        due = self._now() + dt.timedelta(seconds=seconds)
+        await self._wait_until(watch, lambda: due)
+
+    async def _wait_until(self, watch: _Watch, due: Callable[[], dt.datetime]) -> None:
+        """Wait until `due()` against the wall clock, or until a check is
+        asked for. A wake (e.g. a visibility change) recomputes `due()`."""
+        while not watch.stopped:
+            watch.wake.clear()
+            if watch.check_now:
+                return
+            watch.next_check = due()
+            left = (watch.next_check - self._now()).total_seconds()
+            if left <= 0:
+                return
+            await self._nap(watch, min(left, SLEEP_CHUNK))
+
+    async def _nap(self, watch: _Watch, seconds: float) -> None:
+        """Sleep `seconds` or until the watch is woken."""
+        try:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(watch.wake.wait(), seconds)
+        except asyncio.CancelledError:
+            watch.stopped = True
+            raise
 
     async def _sleep(self, watch: _Watch, seconds: float) -> None:
         try:
