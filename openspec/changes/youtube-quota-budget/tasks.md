@@ -221,7 +221,7 @@ Interfaces:
 
 ## 4. Running out and resuming
 
-- [ ] 4.1 Watches wait per pool and resume after the reset — verify: uv run pytest tests/test_youtube_service.py -q passes
+- [x] 4.1 Watches wait per pool and resume after the reset — verify: uv run pytest tests/test_youtube_service.py -q passes
 
 Covers: YQB-27, YQB-28, YQB-29, YQB-30, YQB-46, YQB-47, YQB-56 · Test: scenario-first
 
