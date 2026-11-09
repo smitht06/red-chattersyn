@@ -645,6 +645,20 @@ async def test_unwatch_cancels_task(service, signals, fake_readers, fast):
         await task
 
 
+async def test_unwatch_forgets_the_channel_once_no_watch_uses_it(service, clock):
+    svc, naps = _scheduled(service, clock, [OFFLINE])
+    svc.watch("@otherchannel", "k1")
+    svc.watch("otherchannel", "k2")  # the same channel, typed without the @
+    svc.watch(CHANNEL, "k3")
+    assert await wait_until(lambda: len(svc.resolver.calls) == 3)
+    svc.unwatch("k1")
+    assert svc.resolver.forgotten == []  # k2 still reads the cached channel
+    svc.unwatch("k2")
+    assert svc.resolver.forgotten == ["otherchannel"]
+    svc.unwatch("k3")
+    assert svc.resolver.forgotten == ["otherchannel", CHANNEL]
+
+
 async def test_watch_same_key_updates_target(service, signals, fake_readers, fast):
     svc = service()
     svc.resolver = FakeResolver([ENDED])

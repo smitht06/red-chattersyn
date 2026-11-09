@@ -356,6 +356,11 @@ class YouTubeService:
             watch.stopped = True
             if watch.task is not None:
                 watch.task.cancel()
+            # Drop the channel's cached scan unless another tab still watches it.
+            parsed = parse_target(watch.target)
+            if not any(parse_target(other.target) == parsed
+                       for other in self._watches.values()):
+                self.resolver.forget(watch.target)
 
     # -- sending -----------------------------------------------------------------------
 
