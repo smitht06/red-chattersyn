@@ -295,7 +295,7 @@ Interfaces:
 
 ## 5. Quota-extension draft and final check
 
-- [ ] 5.1 Draft the quota-extension answers — verify: the file lists every YouTube method the app calls with its unit cost, when it runs, and a per-user daily cost
+- [x] 5.1 Draft the quota-extension answers — verify: the file lists every YouTube method the app calls with its unit cost, when it runs, and a per-user daily cost
 
 Covers: — · Test: none: prose the user submits to Google (D9, A19)
 
