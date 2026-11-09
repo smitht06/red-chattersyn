@@ -1,23 +1,30 @@
 """YouTubeService watch loop: resolution states, reconnect token, chat end,
-REST fallback after gRPC failures, quota terminal state, cancellation."""
+REST fallback after gRPC failures, quota waits per pool, cancellation."""
 
 import asyncio
 import datetime as dt
 import json
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 from chattersyn.config.settings import Settings
 from chattersyn.core.bus import bridge
 from chattersyn.services.youtube import names as names_mod
 from chattersyn.services.youtube import service as service_mod
-from chattersyn.services.youtube.api import YoutubeApiError
+from chattersyn.services.youtube.api import BASE_URL, YoutubeApiError
 from chattersyn.services.youtube.names import YouTubeNames
-from chattersyn.services.youtube.quota import Pool
-from chattersyn.services.youtube.reader import ReadRefused, StreamEnded
+from chattersyn.services.youtube.quota import Pool, next_pacific_midnight
+from chattersyn.services.youtube.reader import ReadQuotaExceeded, ReadRefused, StreamEnded
 from chattersyn.services.youtube.resolver import LiveChatResolver, Resolution, ResolveState
-from chattersyn.services.youtube.service import WatchState, YouTubeService
+from chattersyn.services.youtube.sender import YoutubeSendError
+from chattersyn.services.youtube.service import (
+    QuotaPoolState,
+    WatchState,
+    YouTubeService,
+    YoutubeState,
+)
 
 
 def _resolution(state, video_id="vid1", live_chat_id=None):
@@ -245,9 +252,11 @@ class Naps:
         self.until = until
         self.log: list[tuple[str, dt.datetime, float]] = []
         self.idle = asyncio.Event()
+        self.sleepers: dict[str, object] = {}  # watch_key -> the last one to nap
 
     async def __call__(self, watch, seconds):
         self.log.append((watch.watch_key, watch.next_check, seconds))
+        self.sleepers[watch.watch_key] = watch
         if self.auto and (self.until is None or self.clock.t < self.until):
             self.clock.advance(seconds)
             await asyncio.sleep(0)
@@ -258,6 +267,13 @@ class Naps:
 
     def dues(self, key="k1"):
         return [due for k, due, _ in self.log if k == key]
+
+    def chunks(self, key="k1"):
+        return [seconds for k, _, seconds in self.log if k == key]
+
+    def wake(self, key="k1"):
+        """End the current nap of `key` (its chunk is over)."""
+        self.sleepers[key].wake.set()
 
 
 @pytest.fixture
@@ -549,18 +565,6 @@ async def test_mine_offline_rechecks_every_2_minutes_on_or_off_screen(service, c
 # -- error paths ------------------------------------------------------------------------
 
 
-async def test_resolve_quota_exhausted_is_terminal(service, signals, fake_readers, fast):
-    svc = service()
-    events, messages = signals
-    svc.resolver = FakeResolver([YoutubeApiError(403, "quotaExceeded", "out of quota")])
-    svc.watch(VIDEO_URL, "k1")
-
-    task = svc._watches["k1"].task
-    assert await wait_until(lambda: task.done())
-    assert events[-1].state is WatchState.QUOTA_EXHAUSTED
-    assert any("quota exhausted" in m.plain for m in messages)
-
-
 async def test_auth_required_without_credentials(service, signals, fake_readers, fast):
     svc = service()  # no API key, no tokens
     events, _ = signals
@@ -608,17 +612,22 @@ async def test_rest_token_persisted_on_chat_end(service, signals, fake_readers, 
     assert svc._watches["k1"].read_page_token == "page-9"
 
 
-async def test_rest_quota_exhausted_marks_unavailable(service, signals, fake_readers, fast):
+async def test_rest_quota_used_up_waits_for_the_shared_reset(
+        service, signals, fake_readers, fast):
     svc = service()
-    svc.tokens = SimpleNamespace(token="tok")
+    _sign_in(svc)  # REST chat reads are sign-in only
     events, messages = signals
     svc.resolver = FakeResolver([LIVE])
     FakeGrpcReader.script = [RuntimeError("boom")] * 3
     FakeRestReader.script = [YoutubeApiError(403, "quotaExceeded", "out of quota")]
     svc.watch(VIDEO_URL, "k1")
 
-    assert await wait_until(lambda: any(e.state is WatchState.UNAVAILABLE for e in events))
-    assert any("quota exhausted" in m.plain for m in messages)
+    assert await wait_until(lambda: _waits(events))
+    assert svc.quota.exhausted(Pool.SHARED)
+    assert _waits(events)[0].resume_at == svc.quota.resume_at(Pool.SHARED)
+    assert WatchState.UNAVAILABLE not in [e.state for e in _states(events)]
+    assert any("quota used up" in m.plain for m in messages)
+    assert not svc._watches["k1"].task.done()  # the video tab keeps watching
 
 
 # -- lifecycle ---------------------------------------------------------------------------
@@ -838,18 +847,6 @@ async def test_yqb55_no_signin_refused_is_unavailable_and_keeps_key(
     assert await wait_until(lambda: len(FakeGrpcReader.instances) >= 2)
     assert FakeGrpcReader.instances[1].metadata == (("x-goog-api-key", "K"),)
     assert svc.api.key_problem == ""
-
-
-async def test_quota_exceeded_marks_pool_exhausted(service, signals, fake_readers, fast):
-    from chattersyn.services.youtube.reader import ReadQuotaExceeded
-    svc = service(api_key="K")
-    events, _ = signals
-    svc.resolver = FakeResolver([LIVE])
-    FakeGrpcReader.script = [ReadQuotaExceeded("quota")]
-    svc.watch(VIDEO_URL, "k1")
-    assert await wait_until(lambda: any(e.state is WatchState.UNAVAILABLE for e in events))
-    assert svc.quota.exhausted(Pool.KEY)
-    assert not svc.quota.exhausted(Pool.SHARED)
 
 
 @pytest.mark.parametrize("key_invalid", [False, True])
@@ -1173,3 +1170,222 @@ async def test_channel_found_again_restarts_the_offline_window(service, clock):
     assert svc.resolver.times[-1] == T0 + 180 * MIN
     assert svc.resolver.deeps[-1] is True  # found after NOT_FOUND: deep scan
     assert naps.dues()[-1] == T0 + 182 * MIN
+
+
+# -- quota waits per pool (youtube-quota-budget 4.1) -------------------------------------
+
+QUOTA_ERR = YoutubeApiError(403, "quotaExceeded", "out of quota")
+CHAT_ID = "Cg0KC2Zvbw"
+
+
+def _sign_in(svc, token="tok"):
+    """A Google sign-in for both the stream metadata and the REST client."""
+    svc.tokens = SimpleNamespace(token=token)
+
+    async def access_token():
+        return token
+
+    svc.api._get_token = access_token
+
+
+async def _mock_rest(svc, handler):
+    """Answer the service's REST calls with `handler` (no network)."""
+    await svc.api._client.aclose()
+    svc.api._client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url=BASE_URL)
+
+
+def _quota_response(request):
+    return httpx.Response(403, json={"error": {
+        "code": 403, "message": "quota",
+        "errors": [{"reason": "quotaExceeded", "message": "quota"}]}}, request=request)
+
+
+def _states(events):
+    return [e for e in events if isinstance(e, YoutubeState)]
+
+
+def _waits(events, key="k1"):
+    """The QUOTA_EXHAUSTED states emitted for `key`."""
+    return [e for e in _states(events)
+            if e.watch_key == key and e.state is WatchState.QUOTA_EXHAUSTED]
+
+
+def _pool_states(events):
+    return [(e.pool, e.resume_at) for e in events if isinstance(e, QuotaPoolState)]
+
+
+async def test_yqb28_quota_used_up_during_a_check_waits_for_the_reset(
+        service, clock, signals):
+    events, messages = signals
+    svc, naps = _scheduled(service, clock, [QUOTA_ERR])
+    _sign_in(svc)  # no key: the check uses the shared pool
+    svc.watch(CHANNEL, "k1")
+    assert await wait_until(lambda: _waits(events))
+    await settle()
+    resume = svc.quota.resume_at(Pool.SHARED)
+    midnight = next_pacific_midnight(T0)
+    assert midnight + MIN <= resume <= midnight + 10 * MIN
+    assert [e.resume_at for e in _waits(events)] == [resume]
+    assert _pool_states(events) == [(Pool.SHARED, resume)]
+    assert any("quota used up" in m.plain for m in messages)
+    # It waits for the reset in chunks of at most 60 s, and keeps its watch.
+    assert naps.dues()[-1] == resume
+    assert naps.chunks()[-1] == 60
+    assert not svc._watches["k1"].task.done()
+    # Coming back on screen with a stale check does not check while waiting.
+    clock.advance(5 * 60)
+    svc.set_on_screen("k1", False)
+    svc.set_on_screen("k1", True)
+    await settle()
+    assert svc.resolver.times == [T0]
+    assert naps.dues()[-1] == resume
+
+
+async def test_yqb30_quota_used_up_while_reading_keeps_the_video_tab(
+        service, clock, signals, fake_readers):
+    events, _ = signals
+    svc, naps = _scheduled(service, clock, [LIVE], api_key="K")
+    FakeGrpcReader.script = [ReadQuotaExceeded("quota"), StreamEnded("done")]
+    svc.watch(VIDEO_URL, "k1")
+    assert await wait_until(lambda: _waits(events))
+    await settle()
+    assert svc.quota.exhausted(Pool.KEY)
+    assert not svc.quota.exhausted(Pool.SHARED)
+    resume = svc.quota.resume_at(Pool.KEY)
+    assert _waits(events)[-1].resume_at == resume
+    assert WatchState.UNAVAILABLE not in [e.state for e in _states(events)]
+    assert not svc._watches["k1"].task.done()  # the video tab keeps watching
+    assert len(FakeGrpcReader.instances) == 1
+    # After the next midnight Pacific Time it starts again and reads.
+    clock.t = resume
+    naps.wake("k1")
+    assert await wait_until(lambda: len(FakeGrpcReader.instances) == 2)
+    assert svc.resolver.times == [T0, resume]
+    assert svc.resolver.deeps[-1] is True
+
+
+async def test_yqb29_after_the_reset_the_watch_checks_deep_and_reads(
+        service, clock, signals, fake_readers):
+    events, messages = signals
+    svc, naps = _scheduled(service, clock, [OFFLINE, QUOTA_ERR, LIVE], api_key="K")
+    FakeGrpcReader.script = [([_rest_item("m1", "back again")], None), StreamEnded("done")]
+    svc.watch(CHANNEL, "k1")
+    assert await wait_until(lambda: naps.dues())
+    clock.advance(120)
+    naps.wake("k1")  # the 2-minute check: the key's quota is used up
+    assert await wait_until(lambda: _waits(events))
+    await settle()
+    resume = _waits(events)[0].resume_at
+    assert resume == svc.quota.resume_at(Pool.KEY)
+    clock.t = resume
+    naps.wake("k1")  # the wait's last chunk ends
+    assert await wait_until(lambda: any(m.plain == "back again" for m in messages))
+    assert svc.resolver.times == [T0, T0 + 2 * MIN, resume]
+    assert svc.resolver.deeps == [True, False, True]  # resumed: a deep scan
+    assert _pool_states(events) == [(Pool.KEY, resume), (Pool.KEY, None)]
+    assert FakeGrpcReader.instances[0].calls == [(CHAT_ID, None)]
+
+
+async def test_yqb47_other_watches_on_the_pool_wait_at_once(service, clock, signals):
+    events, _ = signals
+    svc, naps = _scheduled(service, clock, [OFFLINE, OFFLINE, QUOTA_ERR])
+    _sign_in(svc)  # no key: both tabs read with the shared pool
+    svc.watch("@chanone", "k1")
+    svc.watch("@chantwo", "k2")
+    assert await wait_until(lambda: naps.dues("k1") and naps.dues("k2"))
+    clock.advance(120)
+    naps.wake("k1")  # only k1 checks, and learns the pool is used up
+    assert await wait_until(lambda: _waits(events, "k2"))
+    await settle()
+    assert _waits(events, "k2")[0].resume_at == _waits(events, "k1")[0].resume_at
+    assert svc.resolver.calls.count("@chantwo") == 1  # no call of its own
+    assert naps.dues("k2")[-1] == svc.quota.resume_at(Pool.SHARED)
+
+
+async def test_yqb56_tab_opened_while_its_pool_is_used_up_waits_without_a_call(
+        service, clock, signals):
+    events, _ = signals
+    svc, naps = _scheduled(service, clock, [OFFLINE], api_key="K")
+    _sign_in(svc)
+    resume = svc.quota.mark_exhausted(Pool.SHARED)
+    svc.watch(MINE_URL, "k1")  # A22: the Stream tab reads with the sign-in, key or not
+    svc.watch(CHANNEL, "k2")  # reads with the key: its pool is fine
+    assert await wait_until(lambda: _waits(events, "k1") and svc.resolver.calls)
+    await settle()
+    assert _waits(events, "k1")[0].resume_at == resume
+    assert svc.resolver.calls == [CHANNEL]
+    assert not _waits(events, "k2")
+
+
+async def test_yqb27_key_used_up_waits_key_reads_and_sends_still_work(
+        service, clock, signals):
+    events, _ = signals
+    svc, naps = _scheduled(service, clock, [OFFLINE], api_key="K")
+    _sign_in(svc)
+    sent = []
+
+    def handler(request):
+        sent.append(request)
+        return httpx.Response(200, json={"id": "msg1"}, request=request)
+
+    await _mock_rest(svc, handler)
+    resume = svc.quota.mark_exhausted(Pool.KEY)
+    svc.watch(CHANNEL, "k1")
+    assert await wait_until(lambda: _waits(events))
+    await settle()
+    assert _waits(events)[0].resume_at == resume
+    assert svc.resolver.calls == []  # no read moves to the sign-in
+    assert await svc.send(CHAT_ID, "hello") == {"id": "msg1"}
+    assert [r.headers["authorization"] for r in sent] == ["Bearer tok"]
+
+
+async def test_yqb46_send_quota_pauses_the_shared_pool_but_key_reads_go_on(
+        service, signals, fake_readers, fast, monkeypatch):
+    events, messages = signals
+    svc = service(api_key="K")
+    _sign_in(svc)
+    await _mock_rest(svc, _quota_response)
+    svc.resolver = FakeResolver([LIVE])
+    gate = asyncio.Event()
+
+    class HeldStream(FakeGrpcReader):
+        async def read(self, live_chat_id, page_token, on_item, stop_event=None):
+            self.metadata = await self._get_metadata()
+            if len(type(self).instances) == 1:
+                await gate.wait()  # the stream is open while the send fails
+                on_item(_rest_item("m1", "still reading"))
+                return "page-1", None
+            raise StreamEnded("done")
+
+    monkeypatch.setattr(service_mod, "GrpcReader", HeldStream)
+    svc.watch(VIDEO_URL, "k1")
+    assert await wait_until(lambda: FakeGrpcReader.instances)
+    with pytest.raises(YoutubeSendError):
+        await svc.send(CHAT_ID, "hello")
+    resume = svc.quota.resume_at(Pool.SHARED)
+    assert resume is not None
+    assert _pool_states(events) == [(Pool.SHARED, resume)]
+    gate.set()
+    assert await wait_until(lambda: len(FakeGrpcReader.instances) == 2)
+    assert any(m.plain == "still reading" for m in messages)
+    assert FakeGrpcReader.instances[1].metadata == (("x-goog-api-key", "K"),)
+    assert not _waits(events)
+    assert not svc.quota.exhausted(Pool.KEY)
+
+
+async def test_pool_reset_is_announced_once_and_wakes_waiting_watches(
+        service, clock, signals):
+    events, _ = signals
+    svc, naps = _scheduled(service, clock, [OFFLINE])
+    _sign_in(svc)
+    resume = svc.quota.mark_exhausted(Pool.SHARED)
+    svc.watch(CHANNEL, "k1")
+    assert await wait_until(lambda: naps.dues("quota:shared") and naps.dues("k1"))
+    assert naps.dues("quota:shared")[-1] == resume == naps.dues("k1")[-1]
+    clock.t = resume
+    naps.wake("quota:shared")  # only the pool's own timer: its last chunk ends
+    assert await wait_until(lambda: svc.resolver.times == [resume])
+    await settle()
+    assert _pool_states(events) == [(Pool.SHARED, resume), (Pool.SHARED, None)]
+    assert svc.resolver.deeps == [True]

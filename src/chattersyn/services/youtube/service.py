@@ -15,7 +15,14 @@ asyncio.sleep runs on the monotonic clock, which stops during system suspend.
 
 The gRPC streamList reader is primary when an API key or OAuth token exists
 (API key = read-only public chats, OAuth = everything); the REST reader is
-the fallback (OAuth only). Quota exhaustion is a terminal state for the day.
+the fallback (OAuth only).
+
+Quota runs out per pool (quota.Pool: SHARED = the sign-in, KEY = the user's
+own API key), app-wide. When a call reports a pool used up, every watch whose
+calls use that pool waits for the reset at once (QUOTA_EXHAUSTED with
+resume_at) and a watch started meanwhile waits without a call; watches on the
+other pool go on. At the resume time a waiting watch starts afresh (a deep
+first check). QuotaPoolState reports a pool running out and becoming usable.
 
 gRPC items carry only the author's channel id; YouTubeNames resolves ids to
 display names via batched channels.list calls (1 unit per 50 ids, cached for
@@ -104,6 +111,36 @@ class YoutubeState:
     viewers: int = 0
     started_at: dt.datetime | None = None
     detail: str = ""
+    resume_at: dt.datetime | None = None  # with QUOTA_EXHAUSTED: when the wait ends
+
+
+@dataclass
+class QuotaPoolState:
+    """Emitted on bridge.event when a quota pool runs out (resume_at = when it
+    is usable again) and once more with resume_at=None when it is."""
+
+    pool: Pool
+    resume_at: dt.datetime | None
+
+
+class _QuotaWait(Exception):
+    """Chat reading stopped because `pool` is used up until its reset."""
+
+    def __init__(self, pool: Pool):
+        super().__init__(pool.value)
+        self.pool = pool
+
+
+@dataclass
+class _PoolTimer:
+    """Waits for one pool's reset (like a watch, chunked against the wall
+    clock), so the reset is announced even when no watch waits for it."""
+
+    watch_key: str  # "quota:<pool>" (log/test label)
+    stopped: bool = False
+    next_check: dt.datetime | None = None
+    wake: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    task: asyncio.Task | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -162,6 +199,10 @@ class YouTubeService:
                 self._api_key = legacy
         self.auth = YouTubeAuth(settings, secrets)
         self.quota = QuotaTracker(now=self._now)
+        self.quota.on_exhausted = self._on_pool_exhausted
+        self._pool_resume: dict[Pool, dt.datetime] = {}  # reset not yet announced
+        self._pool_timers: dict[Pool, _PoolTimer] = {}
+        self._closed = False
         self.api = YouTubeApi(self.auth.access_token, self.quota,
                               get_key=lambda: self._api_key or None)
         self.resolver = LiveChatResolver(self.api)
@@ -245,9 +286,20 @@ class YouTubeService:
             log.warning("YouTube identity fetch failed: %s", exc)
 
     async def stop(self) -> None:
+        self._closed = True
         if self._auth_connection is not None:
             bridge.auth_state.disconnect(self._auth_connection)
             self._auth_connection = None
+        timers = list(self._pool_timers.values())
+        self._pool_timers.clear()
+        for timer in timers:
+            timer.stopped = True
+            if timer.task is not None:
+                timer.task.cancel()
+        for timer in timers:
+            if timer.task is not None:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await timer.task
         for watch in self._watches.values():
             watch.stopped = True
             if watch.task is not None:
@@ -348,15 +400,23 @@ class YouTubeService:
     async def _watch_iteration(self, watch_key: str, watch: _Watch) -> bool:
         """One resolve -> read cycle, then the wait for the next check.
         False = terminal, stop watching."""
+        pool = await self._blocked_pool(watch)
+        if pool is not None:
+            # Used up elsewhere, or before this tab opened: wait without a call.
+            await self._quota_wait(watch_key, watch, pool)
+            return True
         try:
             resolution = await self.resolver.resolve(watch.target, deep=watch.deep)
         except YoutubeApiError as exc:
             self._checked(watch)
             if exc.is_quota:
-                self._emit(watch_key, WatchState.QUOTA_EXHAUSTED,
-                           detail="YouTube quota exhausted (resets midnight PT)")
-                self._system_row(watch, "YouTube quota exhausted — reading paused (resets midnight PT)")
-                return False
+                # The API marks the pool itself; marking again is a no-op
+                # (and covers a quota error that did not come through it).
+                pool = await self.api.read_pool(
+                    signin=watch.kind is WatchKind.MINE) or Pool.SHARED
+                self.quota.mark_exhausted(pool)
+                await self._quota_wait(watch_key, watch, pool)
+                return True
             if exc.is_unauthenticated:
                 # OAuth-only paths (mine=true, REST chat) with no/bad token:
                 # surface a visible state instead of looping "resolving…".
@@ -394,7 +454,12 @@ class YouTubeService:
 
         state = resolution.state
         if resolution.resolved:
-            outcome = await self._read_until_end(watch_key, watch)
+            try:
+                outcome = await self._read_until_end(watch_key, watch)
+            except _QuotaWait as hit:
+                self._checked(watch, restart_offline=True)
+                await self._quota_wait(watch_key, watch, hit.pool)
+                return True
             # The stream was live until now: the offline rhythm starts afresh.
             self._checked(watch, restart_offline=True)
             if outcome == "ended":
@@ -431,7 +496,8 @@ class YouTubeService:
         """Run the reader with reconnect/REST-fallback logic; a parallel
         stats task refreshes viewers/uptime every ~2 minutes (1 quota unit
         per call — gRPC chat reading itself is quota-free and unaffected).
-        Returns "ended" | "unavailable"."""
+        Returns "ended" | "unavailable"; raises _QuotaWait when the quota
+        of the pool it reads with is used up."""
         stop_event = asyncio.Event()
         stats_task = asyncio.ensure_future(self._stats_loop(watch_key, watch))
         try:
@@ -493,6 +559,9 @@ class YouTubeService:
                 if use_grpc:
                     # streamList bills 5 units per (re)connection.
                     metadata, pool = await self._grpc_metadata(watch)
+                    if self.quota.exhausted(pool):
+                        # Used up elsewhere: no (re)connection on this pool.
+                        raise ReadQuotaExceeded("daily YouTube quota used up")
                     self.quota.charge(QUOTA["list"], pool)
 
                     async def get_metadata(metadata=metadata):
@@ -539,15 +608,13 @@ class YouTubeService:
                     continue
                 watch.detail = str(exc)
                 return "unavailable"
-            except ReadQuotaExceeded as exc:
+            except ReadQuotaExceeded:
                 self.quota.mark_exhausted(pool)
-                watch.detail = f"quota exhausted: {exc}"
-                return "unavailable"
+                raise _QuotaWait(pool) from None
             except YoutubeApiError as exc:
                 if exc.is_quota:
-                    watch.detail = "quota exhausted"
-                    self._system_row(watch, watch.detail)
-                    return "unavailable"
+                    self.quota.mark_exhausted(Pool.SHARED)  # REST chat = sign-in only
+                    raise _QuotaWait(Pool.SHARED) from None
                 if exc.is_chat_unavailable:
                     watch.detail = str(exc)
                     return "unavailable"
@@ -569,6 +636,90 @@ class YouTubeService:
                 await self._backoff_sleep(watch)
                 continue
         return "ended"
+
+    # -- quota pools -------------------------------------------------------------------
+
+    def _on_pool_exhausted(self, pool: Pool, resume_at: dt.datetime) -> None:
+        """QuotaTracker.on_exhausted (first mark per reset). Runs inside
+        mark_exhausted, often inside YouTubeApi._parse — it must not raise."""
+        self._pool_resume[pool] = resume_at
+        for watch in self._watches.values():
+            watch.wake.set()  # watches on this pool wait at once, not at their next check
+        try:
+            self._arm_pool_timer(pool, resume_at)
+        except Exception:
+            log.exception("YouTube %s quota: reset timer failed", pool.value)
+        try:
+            bridge.event.emit(QuotaPoolState(pool, resume_at))
+        except Exception:
+            log.exception("YouTube %s quota: announcing it failed", pool.value)
+
+    def _arm_pool_timer(self, pool: Pool, resume_at: dt.datetime) -> None:
+        old = self._pool_timers.pop(pool, None)
+        if old is not None:  # an earlier reset's timer that has not run yet
+            old.stopped = True
+            if old.task is not None:
+                old.task.cancel()
+        if self._closed:
+            return
+        loop = asyncio.get_running_loop()
+        timer = _PoolTimer(watch_key=f"quota:{pool.value}")
+        timer.task = loop.create_task(self._pool_timer(pool, resume_at, timer))
+        self._pool_timers[pool] = timer
+
+    async def _pool_timer(self, pool: Pool, resume_at: dt.datetime, timer: _PoolTimer) -> None:
+        await self._wait_until(timer, lambda: resume_at, quota_wait=True)
+        if self._pool_timers.get(pool) is timer:
+            del self._pool_timers[pool]
+        if not timer.stopped:
+            self._pool_resumed(pool, resume_at)
+
+    def _pool_resumed(self, pool: Pool, resume_at: dt.datetime) -> None:
+        """`pool`'s reset passed: announce it once (by whoever sees it first)
+        and wake every watch so the ones waiting for it start at once."""
+        if self._pool_resume.get(pool) != resume_at:
+            return  # already announced (or superseded by a later reset)
+        del self._pool_resume[pool]
+        for watch in self._watches.values():
+            watch.wake.set()
+        try:
+            bridge.event.emit(QuotaPoolState(pool, None))
+        except Exception:
+            log.exception("YouTube %s quota: announcing the reset failed", pool.value)
+
+    async def _blocked_pool(self, watch: _Watch) -> Pool | None:
+        """A used-up pool this watch's calls need (its checks or its chat
+        reading), else None. Looks credentials up only while a pool is used
+        up. The Stream tab's calls all use the sign-in (SHARED)."""
+        if not any(self.quota.exhausted(pool) for pool in Pool):
+            return None
+        mine = watch.kind is WatchKind.MINE
+        for signin in dict.fromkeys((mine, mine or watch.use_signin)):
+            pool = await self.api.read_pool(signin=signin)
+            if pool is not None and self.quota.exhausted(pool):
+                return pool
+        return None
+
+    async def _quota_wait(self, watch_key: str, watch: _Watch, pool: Pool) -> None:
+        """Wait for `pool`'s reset, keeping the watch; then start afresh as if
+        the tab had just been opened (a deep first check)."""
+        resume = self.quota.resume_at(pool)
+        if resume is None:
+            return  # usable again already
+        log.info("YouTube %s quota used up: %s waits until %s",
+                 pool.value, watch.target, resume.isoformat())
+        self._emit(watch_key, WatchState.QUOTA_EXHAUSTED, resume_at=resume,
+                   detail="YouTube quota used up")
+        self._system_row(watch, "YouTube quota used up — reading paused until "
+                         f"{resume.astimezone():%H:%M}")
+        await self._wait_until(
+            watch, lambda: self.quota.resume_at(pool) or self._now(), quota_wait=True)
+        if watch.stopped:
+            return
+        self._pool_resumed(pool, resume)
+        self._reset_watch(watch)
+        watch.deep = True
+        watch.offline_since = self._now()
 
     def _reset_watch(self, watch: _Watch) -> None:
         """Clear per-stream state so a channel target can re-resolve afresh."""
@@ -669,20 +820,30 @@ class YouTubeService:
         due = self._now() + dt.timedelta(seconds=seconds)
         await self._wait_until(watch, lambda: due)
 
-    async def _wait_until(self, watch: _Watch, due: Callable[[], dt.datetime]) -> None:
-        """Wait until `due()` against the wall clock, or until a check is
-        asked for. A wake (e.g. a visibility change) recomputes `due()`."""
+    async def _wait_until(
+        self, watch: _Watch | _PoolTimer, due: Callable[[], dt.datetime], *,
+        quota_wait: bool = False,
+    ) -> None:
+        """Wait until `due()` against the wall clock. A wake (e.g. a
+        visibility change) recomputes `due()`. A normal wait also ends when a
+        check is asked for or a pool the watch needs is used up (looked at
+        first and after each wake); a quota wait ends only at `due()`."""
+        look = True
         while not watch.stopped:
             watch.wake.clear()
-            if watch.check_now:
-                return
+            if not quota_wait:
+                if watch.check_now:
+                    return
+                if look and await self._blocked_pool(watch) is not None:
+                    return
             watch.next_check = due()
             left = (watch.next_check - self._now()).total_seconds()
             if left <= 0:
                 return
             await self._nap(watch, min(left, SLEEP_CHUNK))
+            look = watch.wake.is_set()
 
-    async def _nap(self, watch: _Watch, seconds: float) -> None:
+    async def _nap(self, watch: _Watch | _PoolTimer, seconds: float) -> None:
         """Sleep `seconds` or until the watch is woken."""
         try:
             with contextlib.suppress(TimeoutError):
