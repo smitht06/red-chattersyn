@@ -718,7 +718,7 @@ class YouTubeService:
                  pool.value, watch.target, resume.isoformat())
         self._emit(watch_key, WatchState.QUOTA_EXHAUSTED, resume_at=resume,
                    detail="YouTube quota used up")
-        self._system_row(watch, "YouTube quota used up — reading paused until "
+        self._system_row(watch, "YouTube quota used up · resumes at "
                          f"{resume.astimezone():%H:%M}")
         await self._wait_until(
             watch, lambda: self.quota.resume_at(pool) or self._now(),

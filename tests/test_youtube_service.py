@@ -1228,7 +1228,8 @@ async def test_yqb28_quota_used_up_during_a_check_waits_for_the_reset(
     assert midnight + MIN <= resume <= midnight + 10 * MIN
     assert [e.resume_at for e in _waits(events)] == [resume]
     assert _pool_states(events) == [(Pool.SHARED, resume)]
-    assert any("quota used up" in m.plain for m in messages)
+    row = f"YouTube quota used up · resumes at {resume.astimezone():%H:%M}"
+    assert [m.plain for m in messages if m.is_system] == [row]
     # It waits for the reset in chunks of at most 60 s, and keeps its watch.
     assert naps.dues()[-1] == resume
     assert naps.chunks()[-1] == 60
