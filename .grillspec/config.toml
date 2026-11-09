@@ -1,0 +1,18 @@
+version = 1
+
+[spec]
+backend = "openspec"
+artifacts_language = "auto"
+
+[grill]
+depth = "standard"
+
+[council]
+enabled = "ask"
+members = []
+external = "allow"
+timeout = 120
+share_project = false
+
+[gates]
+enabled = true
