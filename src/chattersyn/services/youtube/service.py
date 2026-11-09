@@ -453,6 +453,11 @@ class YouTubeService:
                 watch.detail = str(exc)
                 return "unavailable"
             except ReadRefused as exc:
+                if pool is not Pool.KEY:
+                    # The sign-in itself was refused: retrying the same
+                    # request would loop and burn shared quota.
+                    watch.detail = str(exc)
+                    return "unavailable"
                 if exc.key_invalid:
                     self.api.key_problem = exc.reason
                     continue  # signed in: retry at once with Bearer; else the

@@ -771,3 +771,17 @@ async def test_quota_exceeded_marks_pool_exhausted(service, signals, fake_reader
     assert await wait_until(lambda: any(e.state is WatchState.UNAVAILABLE for e in events))
     assert svc.quota.exhausted(Pool.KEY)
     assert not svc.quota.exhausted(Pool.SHARED)
+
+
+@pytest.mark.parametrize("key_invalid", [False, True])
+async def test_signin_refused_is_terminal_not_a_hot_loop(
+        service, signals, fake_readers, fast, key_invalid):
+    svc = service()  # no key: the read goes out with the sign-in
+    svc.tokens = SimpleNamespace(token="tok")
+    events, _ = signals
+    svc.resolver = FakeResolver([LIVE])
+    FakeGrpcReader.script = [ReadRefused("SERVICE_DISABLED", key_invalid=key_invalid)] * 20
+    svc.watch(VIDEO_URL, "k1")
+    assert await wait_until(lambda: any(e.state is WatchState.UNAVAILABLE for e in events))
+    assert len(FakeGrpcReader.instances) <= 2
+    assert svc.quota.used_in(Pool.SHARED) <= 10
