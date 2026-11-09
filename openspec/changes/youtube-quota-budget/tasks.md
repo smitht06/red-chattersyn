@@ -274,7 +274,7 @@ Interfaces:
    - `_on_send`: when YouTube is wanted, quota-blocked and Twitch is off, add the refusal row.
 3. Run the verify command. Expected: PASS.
 
-- [ ] 4.3 API key note in Settings — verify: uv run pytest tests/test_settings_dialog.py -q passes
+- [x] 4.3 API key note in Settings — verify: uv run pytest tests/test_settings_dialog.py -q passes
 
 Covers: YQB-26, YQB-43, YQB-44 · Test: scenario-first
 
