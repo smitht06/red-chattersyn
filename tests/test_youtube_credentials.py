@@ -122,6 +122,24 @@ async def test_yqb26_invalid_key_retries_with_signin(details):
     assert len(seen) == 3 and _uses_bearer(seen[2])
 
 
+async def test_live_bad_key_reply_shape_is_a_key_problem():
+    # What YouTube really sends for a bad key: errors[].reason is only
+    # "badRequest"; the key reason sits in the ErrorInfo detail.
+    body = {"error": {
+        "code": 400, "message": "API key not valid. Please pass a valid API key.",
+        "errors": [{"message": "API key not valid. Please pass a valid API key.",
+                    "domain": "global", "reason": "badRequest"}],
+        "status": "INVALID_ARGUMENT",
+        "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                     "reason": "API_KEY_INVALID", "domain": "googleapis.com",
+                     "metadata": {"service": "youtube.googleapis.com"}}],
+    }}
+    api, seen = _make([(400, body), OK])
+    await api.channel_by_handle("@x")
+    assert api.key_problem
+    assert _uses_key(seen[0]) and _uses_bearer(seen[1])
+
+
 async def test_yqb43_invalid_key_without_token_is_unauthenticated():
     api, seen = _make([(400, _error("keyInvalid"))], token=None)
     with pytest.raises(YoutubeApiError) as exc_info:

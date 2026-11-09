@@ -40,11 +40,14 @@ QUOTA = {
 # Reasons that mean the user's API key itself is unusable (bad, expired, restricted,
 # or the API not enabled for its project). Matched against error.errors[].reason
 # (classic Google API errors) and error.details[].reason (google.rpc.ErrorInfo).
-# UNVERIFIED against Google's reference: cloud.google.com/apis/design/errors
-# (-> google.aip.dev/193) and the YouTube errors page do not list these strings
-# (checked 2026-11-09); the set comes from the task brief / Google API platform
-# conventions (keyInvalid, keyExpired, accessNotConfigured, ipRefererBlocked;
-# ErrorInfo API_KEY_*, SERVICE_DISABLED). Re-check when a real key failure is seen.
+# Source: Google's ErrorReason reference
+# (docs.cloud.google.com/php/docs/reference/common-protos/latest/Api.ErrorReason)
+# lists API_KEY_INVALID, SERVICE_DISABLED, API_KEY_SERVICE_BLOCKED,
+# API_KEY_HTTP_REFERRER_BLOCKED and API_KEY_IP_ADDRESS_BLOCKED. A live YouTube
+# bad-key reply is HTTP 400 with error.errors[].reason "badRequest" and an
+# ErrorInfo detail (domain googleapis.com) with reason "API_KEY_INVALID" - which
+# is why error.details[].reason must be read. The legacy keyInvalid, keyExpired,
+# accessNotConfigured and ipRefererBlocked are kept for older reply shapes.
 KEY_INVALID_REASONS = {
     "keyInvalid", "keyExpired", "accessNotConfigured", "ipRefererBlocked",
     "API_KEY_INVALID", "API_KEY_EXPIRED", "SERVICE_DISABLED", "API_KEY_SERVICE_BLOCKED",
