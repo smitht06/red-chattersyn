@@ -225,6 +225,7 @@ class SettingsDialog(QDialog):
         twitch_status: str = "",
         youtube_status: str = "",
         youtube_api_key: str = "",
+        youtube_api_key_note: str = "",
         on_youtube_api_key: Callable[[str], None] | None = None,
         connect_twitch: Callable[[], None] | None = None,
         disconnect_twitch: Callable[[], None] | None = None,
@@ -275,7 +276,7 @@ class SettingsDialog(QDialog):
 
         self._add_page("General", self._build_general())
         self._add_page("Accounts", self._build_accounts(
-            twitch_status, youtube_status, youtube_api_key))
+            twitch_status, youtube_status, youtube_api_key, youtube_api_key_note))
         self._add_page("Commands", self._build_commands())
         self._add_page("Emotes", self._build_emotes())
         self._add_page("Highlights", self._build_highlights())
@@ -371,7 +372,8 @@ class SettingsDialog(QDialog):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _build_accounts(self, twitch_status: str, youtube_status: str,
-                        youtube_api_key: str = "") -> QWidget:
+                        youtube_api_key: str = "",
+                        youtube_api_key_note: str = "") -> QWidget:
         page = QWidget(self)
         layout = QVBoxLayout(page)
         layout.addWidget(QLabel("<b>Twitch</b>", page))
@@ -413,6 +415,12 @@ class SettingsDialog(QDialog):
         self._api_key.setEchoMode(QLineEdit.EchoMode.Password)
         self._api_key.setPlaceholderText("Optional: read chat without signing in")
         advanced.addRow("Data API key:", self._api_key)
+        # Set when Google rejected the key (YouTubeService.api_key_problem()).
+        self._api_key_note = QLabel(youtube_api_key_note, page)
+        self._api_key_note.setWordWrap(True)
+        self._api_key_note.setStyleSheet("color: #c0392b; font-size: 9pt;")
+        self._api_key_note.setHidden(not youtube_api_key_note)
+        advanced.addRow("", self._api_key_note)
         own_client = QPushButton("Use Own Google Client…", page)
         own_client.setToolTip("Sign in through your own Google Cloud project's client_secrets.json")
         own_client.clicked.connect(self._on_use_own_youtube_client)

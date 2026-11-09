@@ -381,6 +381,9 @@ class MainWindow(QMainWindow):
             twitch_status=twitch_status,
             youtube_status=youtube_status,
             youtube_api_key="" if self._demo else (self._secrets.get("youtube_api_key") or ""),
+            youtube_api_key_note=(
+                "" if self._demo or self._youtube is None
+                else self._youtube.api_key_problem()),
             on_youtube_api_key=None if self._demo else self._save_youtube_api_key,
             connect_twitch=None if self._demo else self._connect_twitch,
             disconnect_twitch=None if self._demo else self._disconnect_twitch_account,

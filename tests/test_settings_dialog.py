@@ -340,3 +340,27 @@ def test_emotes_page_has_one_option(qapp, tmp_path):
     page = dialog._stack.widget(3)
     assert [box.text() for box in page.findChildren(QCheckBox)] == [
         "On YouTube, replace emotes with a matching emoji"]
+
+
+# -- API key note (YQB-26, YQB-43, YQB-44) -----------------------------------------------
+
+
+def test_api_key_note_shown_when_key_rejected_but_signed_in(qapp, tmp_path):
+    text = "API key not working — using your Google sign-in"  # YQB-26
+    dialog = SettingsDialog(Settings({}), tmp_path, youtube_api_key_note=text)
+    assert not dialog._api_key_note.isHidden()
+    assert dialog._api_key_note.text() == text
+
+
+def test_api_key_note_shown_when_key_rejected_and_signed_out(qapp, tmp_path):
+    text = "API key not working — YouTube reading paused"  # YQB-43
+    dialog = SettingsDialog(Settings({}), tmp_path, youtube_api_key_note=text)
+    assert not dialog._api_key_note.isHidden()
+    assert dialog._api_key_note.text() == text
+
+
+def test_api_key_note_hidden_when_key_is_fine(qapp, tmp_path):
+    # YQB-44: once the key works (or was replaced) there is no note.
+    dialog = SettingsDialog(Settings({}), tmp_path, youtube_api_key_note="")
+    assert dialog._api_key_note.isHidden()
+    assert _dialog(Settings({}), tmp_path)._api_key_note.isHidden()
