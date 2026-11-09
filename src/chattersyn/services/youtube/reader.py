@@ -21,10 +21,11 @@ import logging
 from collections.abc import Callable
 
 import grpc
+from google.rpc import error_details_pb2, status_pb2
 
 from . import stream_list_pb2 as pb
 from . import stream_list_pb2_grpc
-from .api import YouTubeApi
+from .api import KEY_INVALID_REASONS, YouTubeApi
 from .mapper import pb2_to_item
 
 log = logging.getLogger(__name__)
@@ -41,6 +42,20 @@ class StreamEnded(Exception):
     def __init__(self, reason: str):
         super().__init__(reason)
         self.reason = reason
+
+
+class ReadRefused(Exception):
+    """The credential was refused for this read. key_invalid: the API key
+    itself is bad (as opposed to the key merely not being allowed here)."""
+
+    def __init__(self, reason: str, *, key_invalid: bool):
+        super().__init__(reason)
+        self.reason = reason
+        self.key_invalid = key_invalid
+
+
+class ReadQuotaExceeded(Exception):
+    """The credential's daily quota is used up."""
 
 
 class GrpcReader:
@@ -127,14 +142,50 @@ class RestReader:
         return token
 
 
+def _error_info(exc: grpc.aio.AioRpcError) -> tuple[str, str]:
+    """(reason, domain) of the google.rpc.ErrorInfo in the error trailer."""
+    for key, value in exc.trailing_metadata() or ():
+        if key != "grpc-status-details-bin":
+            continue
+        try:
+            status = status_pb2.Status.FromString(value)
+        except Exception:
+            return "", ""
+        for detail in status.details:
+            info = error_details_pb2.ErrorInfo()
+            if detail.Unpack(info):
+                return info.reason, info.domain
+    return "", ""
+
+
+def error_reason(exc: grpc.aio.AioRpcError) -> str:
+    """The ErrorInfo reason (e.g. API_KEY_INVALID); "" when absent."""
+    return _error_info(exc)[0]
+
+
 def _translate(exc: grpc.aio.AioRpcError) -> Exception:
     code = exc.code()
     details = exc.details() or ""
+    reason, domain = _error_info(exc)
     if code is grpc.StatusCode.FAILED_PRECONDITION:
         return StreamEnded("chat ended or disabled (indistinguishable)")
-    if code in (grpc.StatusCode.UNAUTHENTICATED, grpc.StatusCode.PERMISSION_DENIED):
-        return StreamEnded(f"not authorized: {details}")
+    if code in (
+        grpc.StatusCode.UNAUTHENTICATED,
+        grpc.StatusCode.PERMISSION_DENIED,
+        grpc.StatusCode.INVALID_ARGUMENT,
+    ):
+        if reason in KEY_INVALID_REASONS:
+            return ReadRefused(reason, key_invalid=True)
+        if code is grpc.StatusCode.PERMISSION_DENIED:
+            return ReadRefused(f"not authorized: {details}", key_invalid=False)
+        # UNAUTHENTICATED / INVALID_ARGUMENT without a key reason: as before.
+        if code is grpc.StatusCode.UNAUTHENTICATED:
+            return StreamEnded(f"not authorized: {details}")
+        return exc
     if code is grpc.StatusCode.NOT_FOUND:
         return StreamEnded(f"live chat not found: {details}")
-    # RESOURCE_EXHAUSTED = reconnecting too fast: transient, back off harder.
+    # RESOURCE_EXHAUSTED without a quota reason = reconnecting too fast:
+    # transient, back off harder.
+    if code is grpc.StatusCode.RESOURCE_EXHAUSTED and "quota" in f"{reason} {domain}".lower():
+        return ReadQuotaExceeded(details)
     return exc  # transient (UNAVAILABLE, INTERNAL, ...) — caller backs off and retries

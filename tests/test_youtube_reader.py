@@ -6,11 +6,21 @@ import grpc
 import httpx
 import pytest
 import pytest_asyncio
+from google.protobuf import any_pb2
+from google.rpc import error_details_pb2, status_pb2
 
 from chattersyn.services.youtube import stream_list_pb2 as pb
 from chattersyn.services.youtube import stream_list_pb2_grpc
 from chattersyn.services.youtube.api import QuotaTracker, YouTubeApi
-from chattersyn.services.youtube.reader import GrpcReader, RestReader, StreamEnded
+from chattersyn.services.youtube.reader import (
+    GrpcReader,
+    ReadQuotaExceeded,
+    ReadRefused,
+    RestReader,
+    StreamEnded,
+    _translate,
+    error_reason,
+)
 
 
 def _pb_item(msg_id, text):
@@ -199,3 +209,71 @@ async def test_rest_reader_paces_by_server_interval():
     stop.set()
     await asyncio.wait_for(task, timeout=1.0)
     assert 2 <= polls <= 6
+
+
+# -- error classification --------------------------------------------------------------
+
+
+def _rpc_error(code, reason="", domain="googleapis.com"):
+    trailing = []
+    if reason or domain != "googleapis.com":
+        status = status_pb2.Status(code=code.value[0], message="x")
+        packed = any_pb2.Any()
+        packed.Pack(error_details_pb2.ErrorInfo(reason=reason, domain=domain))
+        status.details.append(packed)
+        trailing.append(("grpc-status-details-bin", status.SerializeToString()))
+    return grpc.aio.AioRpcError(
+        code, grpc.aio.Metadata(), grpc.aio.Metadata(*trailing),
+        details="nope", debug_error_string="dbg")
+
+
+def test_error_reason_reads_error_info_from_trailer():
+    exc = _rpc_error(grpc.StatusCode.INVALID_ARGUMENT, "API_KEY_INVALID")
+    assert error_reason(exc) == "API_KEY_INVALID"
+
+
+def test_error_reason_empty_without_details():
+    assert error_reason(_rpc_error(grpc.StatusCode.INVALID_ARGUMENT)) == ""
+
+
+@pytest.mark.parametrize("code", [
+    grpc.StatusCode.UNAUTHENTICATED,
+    grpc.StatusCode.PERMISSION_DENIED,
+    grpc.StatusCode.INVALID_ARGUMENT,
+])
+def test_translate_key_invalid_reason_is_refused_key_invalid(code):
+    out = _translate(_rpc_error(code, "API_KEY_INVALID"))
+    assert isinstance(out, ReadRefused)
+    assert out.key_invalid is True
+    assert out.reason == "API_KEY_INVALID"
+
+
+def test_translate_service_disabled_is_key_invalid():
+    out = _translate(_rpc_error(grpc.StatusCode.PERMISSION_DENIED, "SERVICE_DISABLED"))
+    assert isinstance(out, ReadRefused) and out.key_invalid is True
+
+
+def test_translate_other_permission_denied_is_refused_not_key_invalid():
+    out = _translate(_rpc_error(grpc.StatusCode.PERMISSION_DENIED, "SOMETHING_ELSE"))
+    assert isinstance(out, ReadRefused)
+    assert out.key_invalid is False
+
+
+def test_translate_resource_exhausted_with_quota_reason():
+    out = _translate(_rpc_error(grpc.StatusCode.RESOURCE_EXHAUSTED, "RATE_LIMIT_EXCEEDED",
+                                domain="youtube.quota"))
+    assert isinstance(out, ReadQuotaExceeded)
+    out = _translate(_rpc_error(grpc.StatusCode.RESOURCE_EXHAUSTED, "quotaExceeded"))
+    assert isinstance(out, ReadQuotaExceeded)
+
+
+def test_translate_resource_exhausted_without_quota_stays_transient():
+    exc = _rpc_error(grpc.StatusCode.RESOURCE_EXHAUSTED)
+    assert _translate(exc) is exc
+    exc = _rpc_error(grpc.StatusCode.RESOURCE_EXHAUSTED, "TOO_FAST")
+    assert _translate(exc) is exc
+
+
+def test_translate_unchanged_terminal_classes():
+    assert isinstance(_translate(_rpc_error(grpc.StatusCode.FAILED_PRECONDITION)), StreamEnded)
+    assert isinstance(_translate(_rpc_error(grpc.StatusCode.NOT_FOUND)), StreamEnded)

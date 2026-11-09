@@ -38,7 +38,8 @@ from .api import QUOTA, QuotaTracker, YouTubeApi, YoutubeApiError
 from .auth import YouTubeAuth
 from .mapper import map_item
 from .names import YouTubeNames
-from .reader import GrpcReader, RestReader, StreamEnded
+from .quota import Pool
+from .reader import GrpcReader, ReadQuotaExceeded, ReadRefused, RestReader, StreamEnded
 from .resolver import LiveChatResolver, Resolution, ResolveState, _parse_dt
 from .sender import YoutubeSender, YoutubeSendError
 
@@ -107,6 +108,7 @@ class _Watch:
     channel_title: str = ""
     viewers: int = 0
     started_at: dt.datetime | None = None
+    use_signin: bool = False  # key not allowed for this watch: read with the sign-in
 
 
 class YouTubeService:
@@ -252,7 +254,7 @@ class YouTubeService:
         return await self.sender.send(live_chat_id, text)
 
     def can_read(self) -> bool:
-        return bool(self._api_key or self.tokens)
+        return bool(self.api._usable_key() or self.tokens)
 
     def set_api_key(self, value: str) -> None:
         """Live refresh after Settings accept (the key lives in the keyring)."""
@@ -376,7 +378,9 @@ class YouTubeService:
                 if not watch.video_id:
                     continue
                 try:
-                    data = await self.api.videos(watch.video_id)
+                    data = await self.api.videos(
+                        watch.video_id,
+                        signin=_is_mine_target(watch.target) or watch.use_signin)
                 except YoutubeApiError as exc:
                     if exc.is_quota:
                         log.info("stats refresh stopped for %s: quota", watch.target)
@@ -416,8 +420,13 @@ class YouTubeService:
             try:
                 if use_grpc:
                     # streamList bills 5 units per (re)connection.
-                    self.quota.charge(QUOTA["list"])
-                    reader = GrpcReader(self._grpc_channel, self._grpc_metadata)
+                    metadata, pool = await self._grpc_metadata(watch)
+                    self.quota.charge(QUOTA["list"], pool)
+
+                    async def get_metadata(metadata=metadata):
+                        return metadata
+
+                    reader = GrpcReader(self._grpc_channel, get_metadata)
                     token, offline = await reader.read(
                         watch.live_chat_id, watch.read_page_token,
                         self._on_item(watch, stop_event), stop_event=stop_event)
@@ -442,6 +451,20 @@ class YouTubeService:
                 continue
             except StreamEnded as exc:
                 watch.detail = str(exc)
+                return "unavailable"
+            except ReadRefused as exc:
+                if exc.key_invalid:
+                    self.api.key_problem = exc.reason
+                    continue  # signed in: retry at once with Bearer; else the
+                    # top of the loop reports AUTH_REQUIRED
+                if self.tokens is not None:
+                    watch.use_signin = True
+                    continue
+                watch.detail = str(exc)
+                return "unavailable"
+            except ReadQuotaExceeded as exc:
+                self.quota.mark_exhausted(pool)
+                watch.detail = f"quota exhausted: {exc}"
                 return "unavailable"
             except YoutubeApiError as exc:
                 if exc.is_quota:
@@ -486,15 +509,20 @@ class YouTubeService:
             watch.backoff = BACKOFF_BASE
         watch.first_item_at = None
 
-    async def _grpc_metadata(self) -> tuple[tuple[str, str], ...]:
+    async def _grpc_metadata(
+        self, watch: _Watch
+    ) -> tuple[tuple[tuple[str, str], ...], Pool]:
+        """Credential for one stream connection and the pool it is billed to."""
         # Refresh in case the token expired mid-watch; fall back to the key.
         if self.auth.configured():
             self.tokens = await self.auth.ensure_valid()
-        if self.tokens is not None and self.tokens.token:
-            return (("authorization", f"Bearer {self.tokens.token}"),)
-        if self._api_key:
-            return (("x-goog-api-key", self._api_key),)
-        return ()
+        has_token = self.tokens is not None and bool(self.tokens.token)
+        signin = _is_mine_target(watch.target) or watch.use_signin
+        if has_token and (signin or not self.api._usable_key()):
+            return (("authorization", f"Bearer {self.tokens.token}"),), Pool.SHARED
+        if self._api_key and self.api._usable_key():
+            return (("x-goog-api-key", self._api_key),), Pool.KEY
+        return (), Pool.SHARED
 
     def _on_item(self, watch: _Watch, stop_event: asyncio.Event):
         def on_item(item: dict) -> None:

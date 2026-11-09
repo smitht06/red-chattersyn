@@ -14,7 +14,7 @@ from chattersyn.services.youtube import service as service_mod
 from chattersyn.services.youtube.api import YoutubeApiError
 from chattersyn.services.youtube.names import YouTubeNames
 from chattersyn.services.youtube.quota import Pool
-from chattersyn.services.youtube.reader import StreamEnded
+from chattersyn.services.youtube.reader import ReadRefused, StreamEnded
 from chattersyn.services.youtube.resolver import Resolution, ResolveState
 from chattersyn.services.youtube.service import WatchState, YouTubeService
 
@@ -76,7 +76,12 @@ class FakeReader:
 
     def __init__(self, *args):
         self.calls: list[tuple[str, str | None]] = []
+        self.metadata: tuple = ()
         type(self).instances.append(self)
+        if len(args) > 1 and callable(args[1]):
+            self._get_metadata = args[1]
+        else:
+            self._get_metadata = None
 
     async def read(self, live_chat_id, page_token, on_item, stop_event=None):
         self.calls.append((live_chat_id, page_token))
@@ -96,6 +101,8 @@ class FakeGrpcReader(FakeReader):
     instances: list = []
 
     async def read(self, live_chat_id, page_token, on_item, stop_event=None):
+        if self._get_metadata is not None:
+            self.metadata = await self._get_metadata()
         token = await super().read(live_chat_id, page_token, on_item, stop_event)
         return token, None
 
@@ -152,6 +159,8 @@ async def service():
         if api_key:
             store.set("youtube_api_key", api_key)
         svc = YouTubeService(Settings({}), store)
+        # No real keyring/network: tests set svc.tokens directly.
+        svc.auth.configured = lambda: False
         services.append(svc)
         return svc
 
@@ -569,7 +578,7 @@ async def test_stats_loop_emits_live_with_fresh_viewers(monkeypatch, service, si
                                live_chat_id="Cg0KC2Zvbw", channel_id="UC1",
                                title="A stream", channel_title="A channel")
 
-    async def fake_videos(video_id):
+    async def fake_videos(video_id, *, signin=False):
         return {"items": [{
             "liveStreamingDetails": {"concurrentViewers": "77",
                                      "actualStartTime": "2026-10-16T10:00:00Z"},
@@ -596,7 +605,7 @@ async def test_stats_loop_quota_stops_gracefully(monkeypatch, service, signals):
     watch = service_mod._Watch(target=VIDEO_URL, watch_key="k", video_id="vid1",
                                live_chat_id="Cg0KC2Zvbw")
 
-    async def fake_videos(video_id):
+    async def fake_videos(video_id, *, signin=False):
         raise YoutubeApiError(403, "quotaExceeded", "quota")
 
     svc.api.videos = fake_videos
@@ -633,3 +642,132 @@ async def test_legacy_settings_api_key_migrates_to_store(tmp_path):
         assert on_disk["youtube"].get("api_key") == ""
     finally:
         await svc.stop()
+
+
+# -- streaming credential (youtube-quota-budget 2.2) ---------------------------------
+
+
+MINE_URL = "mine:"
+
+
+async def test_yqb22_video_tab_streams_with_key_when_signed_in(
+        service, signals, fake_readers, fast):
+    svc = service(api_key="K")
+    svc.tokens = SimpleNamespace(token="tok")
+    events, _ = signals
+    svc.resolver = FakeResolver([LIVE])
+    FakeGrpcReader.script = [StreamEnded("chat ended or disabled (indistinguishable)")]
+    svc.watch(VIDEO_URL, "k1")
+    assert await wait_until(lambda: any(e.state is WatchState.UNAVAILABLE for e in events))
+    assert FakeGrpcReader.instances[0].metadata == (("x-goog-api-key", "K"),)
+    assert svc.quota.used_in(Pool.KEY) == 5
+    assert svc.quota.used_in(Pool.SHARED) == 0
+
+
+async def test_yqb24_mine_watch_streams_with_signin(service, signals, fake_readers, fast):
+    svc = service(api_key="K")
+    svc.tokens = SimpleNamespace(token="tok")
+    svc.resolver = FakeResolver([LIVE])
+    FakeGrpcReader.script = [StreamEnded("done")]
+    svc.watch(MINE_URL, "k1")
+    assert await wait_until(lambda: FakeGrpcReader.instances)
+    assert FakeGrpcReader.instances[0].metadata == (("authorization", "Bearer tok"),)
+    assert svc.quota.used_in(Pool.SHARED) == 5
+
+
+async def test_yqb24_stats_refresh_asks_for_signin(service, signals, fake_readers, fast,
+                                                   monkeypatch):
+    monkeypatch.setattr(service_mod, "STREAM_STATS_INTERVAL", 0.01)
+    svc = service(api_key="K")
+    svc.tokens = SimpleNamespace(token="tok")
+    svc.resolver = FakeResolver([LIVE])
+    calls = []
+
+    async def videos(video_id, *, signin=False):
+        calls.append(signin)
+        return None
+
+    svc.api.videos = videos
+    # keep the stream open long enough for a stats tick
+    class SlowGrpc(FakeGrpcReader):
+        async def read(self, *a, **k):
+            await asyncio.sleep(0.1)
+            raise StreamEnded("done")
+
+    monkeypatch.setattr(service_mod, "GrpcReader", SlowGrpc)
+    svc.watch(MINE_URL, "k1")
+    assert await wait_until(lambda: calls)
+    assert calls[0] is True
+
+
+async def test_yqb42_key_refused_falls_to_signin_without_blaming_key(
+        service, signals, fake_readers, fast):
+    svc = service(api_key="K")
+    svc.tokens = SimpleNamespace(token="tok")
+    events, _ = signals
+    svc.resolver = FakeResolver([LIVE])
+    FakeGrpcReader.script = [
+        ReadRefused("not authorized", key_invalid=False),
+        StreamEnded("chat ended or disabled (indistinguishable)"),
+    ]
+    svc.watch(VIDEO_URL, "k1")
+    assert await wait_until(lambda: any(e.state is WatchState.UNAVAILABLE for e in events))
+    assert FakeGrpcReader.instances[0].metadata == (("x-goog-api-key", "K"),)
+    assert FakeGrpcReader.instances[1].metadata == (("authorization", "Bearer tok"),)
+    assert svc.api.key_problem == ""
+
+
+async def test_key_invalid_sets_problem_and_retries_with_signin(
+        service, signals, fake_readers, fast):
+    svc = service(api_key="K")
+    svc.tokens = SimpleNamespace(token="tok")
+    events, _ = signals
+    svc.resolver = FakeResolver([LIVE])
+    FakeGrpcReader.script = [
+        ReadRefused("API_KEY_INVALID", key_invalid=True),
+        StreamEnded("chat ended or disabled (indistinguishable)"),
+    ]
+    svc.watch(VIDEO_URL, "k1")
+    assert await wait_until(lambda: any(e.state is WatchState.UNAVAILABLE for e in events))
+    assert svc.api.key_problem == "API_KEY_INVALID"
+    assert FakeGrpcReader.instances[1].metadata == (("authorization", "Bearer tok"),)
+
+
+async def test_key_invalid_without_signin_reports_auth_required(
+        service, signals, fake_readers, fast):
+    svc = service(api_key="K")
+    events, _ = signals
+    svc.resolver = FakeResolver([LIVE])
+    FakeGrpcReader.script = [ReadRefused("API_KEY_INVALID", key_invalid=True)]
+    svc.watch(VIDEO_URL, "k1")
+    assert await wait_until(lambda: any(e.state is WatchState.AUTH_REQUIRED for e in events))
+    assert svc.api.key_problem == "API_KEY_INVALID"
+
+
+async def test_yqb55_no_signin_refused_is_unavailable_and_keeps_key(
+        service, signals, fake_readers, fast):
+    svc = service(api_key="K")
+    events, _ = signals
+    svc.resolver = FakeResolver([LIVE])
+    FakeGrpcReader.script = [
+        ReadRefused("not authorized", key_invalid=False),
+        StreamEnded("done"),
+    ]
+    svc.watch(VIDEO_URL, "k1")
+    assert await wait_until(lambda: any(e.state is WatchState.UNAVAILABLE for e in events))
+    svc.watch("https://www.youtube.com/watch?v=abcdefghijk", "k2")
+    assert await wait_until(lambda: len(FakeGrpcReader.instances) >= 2)
+    assert FakeGrpcReader.instances[1].metadata == (("x-goog-api-key", "K"),)
+    assert svc.api.key_problem == ""
+
+
+async def test_quota_exceeded_marks_pool_exhausted(service, signals, fake_readers, fast):
+    from chattersyn.services.youtube.reader import ReadQuotaExceeded
+    svc = service(api_key="K")
+    events, _ = signals
+    svc.resolver = FakeResolver([LIVE])
+    FakeGrpcReader.script = [ReadQuotaExceeded("quota")]
+    svc.watch(VIDEO_URL, "k1")
+    assert await wait_until(lambda: any(e.state is WatchState.UNAVAILABLE for e in events))
+    assert svc.quota.exhausted(Pool.KEY)
+    assert not svc.quota.exhausted(Pool.SHARED)
