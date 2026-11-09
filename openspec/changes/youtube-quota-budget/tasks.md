@@ -36,7 +36,7 @@ MainWindow reports which tab is on screen and renders the quota-wait state.
 
 ## 1. Quota bookkeeping
 
-- [ ] 1.1 Per-pool quota tracker on Pacific time — verify: uv run pytest tests/test_youtube_quota.py tests/test_youtube_api.py -q passes
+- [x] 1.1 Per-pool quota tracker on Pacific time — verify: uv run pytest tests/test_youtube_quota.py tests/test_youtube_api.py -q passes
 
 Covers: YQB-31, YQB-32, YQB-33, YQB-34, YQB-50, YQB-51 · Test: scenario-first
 
