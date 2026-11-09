@@ -89,7 +89,7 @@ Interfaces:
 5. In names.py: replace `self._api.quota.exhausted()` with "the pool from `await self._api.read_pool()` is not exhausted".
 6. Change the async `get_key` fake in tests/test_youtube_api.py (`test_api_key_fallback_when_no_token`) to a plain function. Run the verify command. Expected: PASS.
 
-- [ ] 2.2 Streaming reader credential and error classes — verify: uv run pytest tests/test_youtube_reader.py tests/test_youtube_service.py -q passes
+- [x] 2.2 Streaming reader credential and error classes — verify: uv run pytest tests/test_youtube_reader.py tests/test_youtube_service.py -q passes
 
 Covers: YQB-22, YQB-24, YQB-42, YQB-55 · Test: scenario-first
 
