@@ -56,7 +56,7 @@ Interfaces:
 
 ## 2. Credentials
 
-- [ ] 2.1 Per-call credential choice in YouTubeApi — verify: uv run pytest tests/test_youtube_api.py tests/test_youtube_credentials.py tests/test_youtube_names.py -q passes
+- [x] 2.1 Per-call credential choice in YouTubeApi — verify: uv run pytest tests/test_youtube_api.py tests/test_youtube_credentials.py tests/test_youtube_names.py -q passes
 
 Covers: YQB-21, YQB-23, YQB-25, YQB-26, YQB-27, YQB-43, YQB-44, YQB-45 · Test: reproduce-first
 
