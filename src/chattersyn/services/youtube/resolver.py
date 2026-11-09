@@ -232,10 +232,10 @@ class LiveChatResolver:
         # Also refresh a watched video that has slipped off the newest page
         # (a long-running stream found by the deep scan).
         extra = [v["id"] for v in watching if v.get("id") not in ids]
-        wanted = [*ids, *extra]
-        videos: list[dict] = []
-        for start in range(0, len(wanted), BATCH):
-            videos.extend(await self._api.videos_batch(wanted[start:start + BATCH]))
+        # One videos.list call only (<= 50 ids): watched off-page ids first,
+        # the newest page fills the remaining slots.
+        wanted = [*extra[:BATCH], *ids][:BATCH]
+        videos = await self._api.videos_batch(wanted)
         videos.sort(key=lambda v: v.get("snippet", {}).get("publishedAt", ""), reverse=True)
         cache.page_ids = ids
         cache.videos = videos

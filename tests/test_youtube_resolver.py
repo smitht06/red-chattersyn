@@ -388,6 +388,7 @@ class CountingApi:
 
     async def videos_batch(self, ids):
         self.calls.append("videos_batch")
+        assert len(ids) <= 50, "videos.list takes 50 ids max"
         return [self.videos[i] for i in ids if i in self.videos]
 
     def names(self, name):
@@ -536,3 +537,16 @@ async def test_video_and_mine_fill_scheduled_starts():
     assert got.scheduled_starts == [dt.datetime(2026, 12, 1, 10, tzinfo=dt.UTC)]
     mine = await resolver.resolve("mine:")
     assert mine.scheduled_starts == [dt.datetime(2026, 12, 3, 10, tzinfo=dt.UTC)]
+
+
+async def test_recheck_with_live_off_page_stays_one_batch():
+    ids, videos = _offline_channel(pages=4)
+    live = ids[2][7]
+    videos[live] = _video(live, live="live", chat_id="CHAT")
+    api = CountingApi(ids, videos)
+    resolver = LiveChatResolver(api)
+    assert (await resolver.resolve("@forsen", deep=True)).video_id == live
+    api.calls.clear()
+    res = await resolver.resolve("@forsen")
+    assert res.resolved and res.video_id == live
+    assert api.calls == ["playlist_items", "videos_batch"]
