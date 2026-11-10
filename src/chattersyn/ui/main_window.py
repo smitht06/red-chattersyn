@@ -60,6 +60,7 @@ from ..services.twitch.auth import (
     TwitchAuthError,
 )
 from ..services.twitch.mapper import ClearChat, ClearMsg, RoomState, UserState
+from ..services.twitch.mod_commands import COMMAND_SCOPES, HelixCommand, run_helix_command
 from ..services.twitch.service import EXPIRED_MESSAGE, REJECTED_MESSAGE, TwitchService
 from ..services.youtube.auth import YouTubeAuthError
 from ..services.youtube.quota import Pool
@@ -1208,6 +1209,8 @@ class MainWindow(QMainWindow):
                 force_twitch_only=outcome.twitch_only)
         if outcome.twitch_mod is not None:
             asyncio.ensure_future(self._twitch_mod(tab, outcome.twitch_mod))
+        if outcome.twitch_helix is not None:
+            asyncio.ensure_future(self._twitch_helix_command(tab, outcome.twitch_helix))
 
     async def _twitch_mod(self, tab: Tab, action: ModAction) -> None:
         """Ban/timeout/unban through Helix (Twitch removed the IRC forms in
@@ -1245,6 +1248,47 @@ class MainWindow(QMainWindow):
             return
         if action.kind == "unban":
             self._twitch_note(tab, f"You removed the ban/timeout on {action.user}.")
+
+    async def _twitch_helix_command(self, tab: Tab, cmd: HelixCommand) -> None:
+        """Run one moderation/broadcaster command through Helix and show the
+        confirmation, the name list, or why it failed."""
+        twitch = self._twitch
+        helix = twitch.helix if twitch is not None else None
+        tokens = twitch.tokens if twitch is not None else None
+        if helix is None or tokens is None:
+            self._twitch_note(tab, "Connect a Twitch account to moderate.")
+            return
+        scope = COMMAND_SCOPES.get(cmd.name)
+        if scope is not None and scope not in tokens.scopes:
+            self._twitch_note(
+                tab, "Reconnect your Twitch account (Connect Twitch Account…) "
+                     f"to grant ChatterSyn permission for /{cmd.name}.")
+            return
+        try:
+            channel = await helix.user_by_login(tab.twitch_channel)
+            if not channel or not channel.get("id"):
+                self._twitch_note(tab, f"No Twitch channel named {tab.twitch_channel}.")
+                return
+            result = await run_helix_command(
+                helix, cmd, channel=tab.twitch_channel, broadcaster_id=channel["id"],
+                moderator_id=tokens.user_id, now=dt.datetime.now(dt.UTC))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._twitch_note(tab, f"Twitch /{cmd.name} failed: {exc}")
+            return
+        if result.names is not None:
+            self._show_user_list(tab, cmd.name, result.names)
+        elif result.row:
+            self._twitch_note(tab, result.row)
+
+    def _show_user_list(self, tab: Tab, name: str, names: list[str]) -> None:
+        """/mods and /vips result (a row until the popup lands)."""
+        label = "Moderators" if name == "mods" else "VIPs"
+        if not names:
+            self._twitch_note(tab, "No moderators." if name == "mods" else "No VIPs.")
+            return
+        self._twitch_note(tab, f"{label} ({len(names)}): {', '.join(names)}")
 
     def _twitch_note(self, tab: Tab, text: str) -> None:
         tab.add_message(Message.system(
