@@ -382,3 +382,57 @@ async def test_no_connect_failed_when_connection_drops_after_welcome():
     finally:
         await client.stop()
         await server.stop()
+
+
+# -- backoff reset / callback safety (final review) -------------------------------------
+
+
+async def test_backoff_grows_after_a_long_session_ends(monkeypatch, caplog):
+    """A session that lasted > 30 s resets the backoff once - the failed
+    attempts after it must grow again, not retry every second forever."""
+    import logging
+
+    from chattersyn.services.twitch import irc as irc_module
+
+    monkeypatch.setattr(irc_module.random, "uniform", lambda a, b: 1.0)
+    clock = [1000.0]
+    client = TwitchIrc(TwitchMapper(), nick="testuser", now=lambda: clock[0],
+                       backoff_base=0.001, backoff_cap=100.0)
+    calls = [0]
+
+    async def fake_connect():
+        calls[0] += 1
+        if calls[0] == 1:  # one welcomed session that lasts a minute
+            client._welcome_time = clock[0]
+            client._attempt_welcomed = True
+            clock[0] += 60.0
+            return
+        clock[0] += 0.5  # then Twitch is unreachable: quick failures
+        if calls[0] >= 5:
+            client._stop_evt.set()
+        raise OSError("unreachable")
+
+    monkeypatch.setattr(client, "_connect_and_read", fake_connect)
+    with caplog.at_level(logging.INFO, logger=irc_module.__name__):
+        client.start()
+        await asyncio.wait_for(client._run_task, 5)
+    delays = [r.args[0] for r in caplog.records if r.msg == "reconnecting in %.1fs"]
+    assert delays[:4] == pytest.approx([0.001, 0.002, 0.004, 0.008])
+
+
+async def test_raising_connect_failed_callback_keeps_retrying():
+    failed = []
+
+    def boom():
+        failed.append(1)
+        raise RuntimeError("callback bug")
+
+    client = TwitchIrc(
+        TwitchMapper(), nick="testuser", token="tok", ws_url=_closed_port_url(),
+        backoff_base=0.05, on_connect_failed=boom)
+    client.start()
+    try:
+        await wait_until(lambda: len(failed) >= 2)
+        assert not client._run_task.done()
+    finally:
+        await client.stop()

@@ -183,8 +183,14 @@ class TwitchIrc:
                 log.warning("IRC connection error", exc_info=True)
             self._report_attempt_end()
 
-            # A connection that survived a while gets the short backoff.
-            if self._welcome_time and self._now() - self._welcome_time > STABLE_RESET_AFTER:
+            # A connection that survived a while gets the short backoff. Only
+            # the attempt that just ended counts: an old session's welcome
+            # must not reset the backoff of every failed attempt after it.
+            if (
+                self._attempt_welcomed
+                and self._welcome_time is not None
+                and self._now() - self._welcome_time > STABLE_RESET_AFTER
+            ):
                 attempt = 0
             attempt += 1
             delay = min(self._backoff_cap, self._backoff_base * 2 ** (attempt - 1)) * random.uniform(0.8, 1.2)
@@ -201,7 +207,10 @@ class TwitchIrc:
         A refused login is the owner's re-login to handle, not an outage."""
         if self._attempt_welcomed or self._attempt_auth_failed or self._on_connect_failed is None:
             return
-        self._on_connect_failed()
+        try:
+            self._on_connect_failed()
+        except Exception:  # a callback bug must never end the reconnect loop
+            log.exception("on_connect_failed callback failed")
 
     async def _connect_and_read(self) -> None:
         self._connected.clear()
