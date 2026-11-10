@@ -294,3 +294,91 @@ async def test_stop_closes_socket():
     finally:
         await client.stop()
         await server.stop()
+
+
+# -- connect reporting (on_connected / on_connect_failed) -----------------------------
+
+
+def _closed_port_url() -> str:
+    import socket
+
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    return f"ws://127.0.0.1:{port}"  # nothing listens here once the socket closes
+
+
+async def test_on_connected_called_on_welcome():
+    server = FakeIrcServer()
+    await server.start()
+    connected, failed = [], []
+    client, _, _, _ = make_client(
+        server, nick="testuser",
+        on_connected=lambda: connected.append(1), on_connect_failed=lambda: failed.append(1))
+    client.start()
+    try:
+        await server.wait_for(lambda ln: ln.startswith("NICK"))
+        assert connected == []  # not before the 001
+        await welcome(server, "testuser")
+        await wait_until(lambda: connected)
+        assert connected == [1]
+        assert failed == []
+    finally:
+        await client.stop()
+        await server.stop()
+
+
+async def test_on_connect_failed_when_server_unreachable():
+    failed = []
+    client = TwitchIrc(
+        TwitchMapper(), nick="testuser", token="tok", ws_url=_closed_port_url(),
+        backoff_base=0.05, on_connect_failed=lambda: failed.append(1))
+    client.start()
+    try:
+        await wait_until(lambda: len(failed) >= 2)  # every attempt reports, not just the first
+    finally:
+        await client.stop()
+
+
+async def test_no_connect_failed_after_auth_notice():
+    """A refused login is the service's re-login to handle, not an
+    unreachable Twitch."""
+    server = FakeIrcServer()
+    await server.start()
+    connected, failed = [], []
+    client, _, _, auths = make_client(
+        server, nick="testuser", token="bad",
+        on_connected=lambda: connected.append(1), on_connect_failed=lambda: failed.append(1))
+    client.start()
+    try:
+        await server.wait_for(lambda ln: ln.startswith("NICK"))
+        await server.feed(":tmi.twitch.tv NOTICE * :Login authentication failed")
+        await wait_until(lambda: auths)
+        await server.close_all()  # Twitch closes the socket after the notice
+        # the reconnect means the refused attempt was fully handled
+        await wait_until(lambda: server.count(lambda ln: ln.startswith("NICK")) >= 2)
+        assert failed == []
+        assert connected == []
+    finally:
+        await client.stop()
+        await server.stop()
+
+
+async def test_no_connect_failed_when_connection_drops_after_welcome():
+    server = FakeIrcServer()
+    await server.start()
+    connected, failed = [], []
+    client, _, _, _ = make_client(
+        server, nick="testuser",
+        on_connected=lambda: connected.append(1), on_connect_failed=lambda: failed.append(1))
+    client.start()
+    try:
+        await server.wait_for(lambda ln: ln.startswith("NICK"))
+        await welcome(server, "testuser")
+        await wait_until(lambda: connected)
+        await server.close_all()
+        await wait_until(lambda: server.count(lambda ln: ln.startswith("NICK")) >= 2)
+        assert failed == []  # it had connected; only attempts that never got a 001 count
+    finally:
+        await client.stop()
+        await server.stop()

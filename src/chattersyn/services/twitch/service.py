@@ -11,12 +11,16 @@ from ...config.settings import Settings
 from ...core.bus import bridge
 from ...models.message import Author, Message
 from ...services.emotes.emote_registry import EmoteRegistry
-from .auth import DEFAULT_TWITCH_CLIENT_ID, TwitchAuth
+from .auth import DEFAULT_TWITCH_CLIENT_ID, TwitchAuth, TwitchUnreachable
 from .helix import Helix
 from .irc import MAX_CHANNELS, NotConnected, TwitchIrc
 from .mapper import AuthFailed, TwitchMapper, twitch_emote_urls
 
 log = logging.getLogger(__name__)
+
+LAUNCH_CHECK_TIMEOUT = 10.0  # seconds start() waits for the token check before connecting
+EXPIRED_MESSAGE = "Twitch sign-in expired — reconnect your account"
+REJECTED_MESSAGE = "Twitch rejected the sign-in — reconnect your account"
 
 
 class TwitchService:
@@ -39,21 +43,70 @@ class TwitchService:
         self.helix: Helix | None = None
         self.irc: TwitchIrc | None = None
         self.tokens = None  # TwitchTokens once validated
+        self._unreachable = False  # the last connect attempt / refresh could not reach Twitch
+        # The saved login is in use but its token check hasn't completed yet.
+        self._check_pending = False
+
+    @property
+    def unreachable(self) -> bool:
+        """True from a connect attempt or token refresh that couldn't reach
+        Twitch until chat next welcomes us."""
+        return self._unreachable
 
     # -- lifecycle ------------------------------------------------------------------
 
     async def start(self) -> None:
-        if self.auth.configured():
-            self.tokens = await self.auth.ensure_valid()
-            if self.tokens is None:
-                log.warning("stored Twitch tokens invalid — running read-only until re-auth")
-                bridge.auth_state.emit("twitch", False, "stored tokens invalid — reconnect account")
+        if self.auth.configured() and self.auth.load_tokens() is not None:
+            try:
+                # Stop *waiting* at the limit: wait_for cancels only this
+                # caller; an in-flight refresh runs on in the background and
+                # saves (its refresh token is single-use).
+                self.tokens = await asyncio.wait_for(self.auth.ensure_valid(), LAUNCH_CHECK_TIMEOUT)
+            except (TimeoutError, TwitchUnreachable) as exc:
+                log.warning("Twitch token check unfinished (%r) — connecting with the saved login", exc)
+                self.tokens = self.auth.load_tokens()
+                self._check_pending = self.tokens is not None
+                self._set_unreachable()
             else:
+                if self.tokens is None:
+                    log.warning("stored Twitch login rejected — running read-only until re-auth")
+                    await self._fall_back_read_only(EXPIRED_MESSAGE, delete=True)
+                    return
                 await self.ensure_helix()
 
         self.irc = self._make_irc()
         self.irc.start()
         self._join_desired()
+
+    async def _fall_back_read_only(self, message: str, *, delete: bool) -> None:
+        """Swap to an anonymous read-only connection and announce why.
+        `delete` also removes the saved login (when Twitch rejected it)."""
+        if delete:
+            self.auth.clear()
+        self.tokens = None
+        self._check_pending = False
+        if self.helix is not None:
+            await self.helix.close()
+            self.helix = None
+        if self.irc is not None:
+            await self.irc.stop()
+            self.irc = None
+        self.irc = self._make_irc()
+        self.irc.start()
+        self._join_desired()
+        bridge.auth_state.emit("twitch", False, message)
+
+    def _set_unreachable(self) -> None:
+        self._unreachable = True
+        self._emit_connection("unreachable", "")
+
+    def _emit_connection(self, state: str, detail: str) -> None:
+        bridge.connection_state.emit(
+            {"platform": "twitch", "channel_id": "", "state": state, "detail": detail})
+
+    def _on_irc_connected(self, signed_in: bool) -> None:
+        self._unreachable = False
+        self._emit_connection("connected", "signed_in" if signed_in else "anonymous")
 
     async def reconnect(self) -> bool:
         """Drop the IRC connection and start a fresh one — the recovery path
@@ -143,6 +196,8 @@ class TwitchService:
             on_message=self._on_message,
             on_event=self._on_event,
             on_auth=self._on_auth,
+            on_connected=functools.partial(self._on_irc_connected, self.tokens is not None),
+            on_connect_failed=self._set_unreachable,
         )
 
     async def stop(self) -> None:

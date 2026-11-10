@@ -73,6 +73,8 @@ class TwitchIrc:
         on_message=None,
         on_event=None,  # ClearChat | ClearMsg | RoomState | Names
         on_auth=None,  # AuthFailed
+        on_connected=None,  # called on every welcome (001)
+        on_connect_failed=None,  # a connect attempt ended before its 001 (not after a refused login)
         ws_url: str = WS_URL,
         now=None,
         backoff_base: float = BACKOFF_BASE,
@@ -85,6 +87,8 @@ class TwitchIrc:
         self._on_message = on_message
         self._on_event = on_event
         self._on_auth = on_auth
+        self._on_connected = on_connected
+        self._on_connect_failed = on_connect_failed
         self._ws_url = ws_url
         self._now = now or time.monotonic
         self._backoff_base = backoff_base
@@ -95,6 +99,8 @@ class TwitchIrc:
         self._run_task: asyncio.Task | None = None
         self._connected = asyncio.Event()
         self._welcome_time: float | None = None
+        self._attempt_welcomed = False  # this connect attempt got its 001
+        self._attempt_auth_failed = False  # this connect attempt saw an AuthFailed NOTICE
 
         self._channels: set[str] = set()  # desired channels (lowercase, no #)
         self._join_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -162,6 +168,8 @@ class TwitchIrc:
     async def _run(self) -> None:
         attempt = 0
         while not self._stop_evt.is_set():
+            self._attempt_welcomed = False
+            self._attempt_auth_failed = False
             try:
                 await self._connect_and_read()
                 if self._stop_evt.is_set():
@@ -173,6 +181,7 @@ class TwitchIrc:
                 log.info("server requested reconnect")
             except Exception:
                 log.warning("IRC connection error", exc_info=True)
+            self._report_attempt_end()
 
             # A connection that survived a while gets the short backoff.
             if self._welcome_time and self._now() - self._welcome_time > STABLE_RESET_AFTER:
@@ -186,6 +195,13 @@ class TwitchIrc:
             except TimeoutError:
                 pass
         self._connected.clear()
+
+    def _report_attempt_end(self) -> None:
+        """A connect attempt ended: tell the owner when it never reached 001.
+        A refused login is the owner's re-login to handle, not an outage."""
+        if self._attempt_welcomed or self._attempt_auth_failed or self._on_connect_failed is None:
+            return
+        self._on_connect_failed()
 
     async def _connect_and_read(self) -> None:
         self._connected.clear()
@@ -261,7 +277,10 @@ class TwitchIrc:
         if cmd == "001":
             self._connected.set()
             self._welcome_time = self._now()
+            self._attempt_welcomed = True
             self._requeue_joins()
+            if self._on_connected:
+                self._on_connected()
             return
         if cmd == "GLOBALUSERSTATE":
             self._capture_self(irc)
@@ -282,6 +301,7 @@ class TwitchIrc:
         elif isinstance(result, Reconnect):
             raise ForcedReconnect()
         elif isinstance(result, AuthFailed):
+            self._attempt_auth_failed = True
             if self._on_auth:
                 self._on_auth(result)
         elif isinstance(result, (ClearChat, ClearMsg, RoomState, Names, UserState)) and self._on_event:
