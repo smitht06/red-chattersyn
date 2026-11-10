@@ -47,7 +47,7 @@ Interfaces:
 
 ## 2. User card
 
-- [ ] 2.1 Independent lookups and the channel follow row — verify: uv run pytest tests/test_usercard.py tests/test_main_window_usercard_enrich.py -q passes
+- [x] 2.1 Independent lookups and the channel follow row — verify: uv run pytest tests/test_usercard.py tests/test_main_window_usercard_enrich.py -q passes
 
 Covers: TUF-1, TUF-2, TUF-3, TUF-4, TUF-5, TUF-6, TUF-7, TUF-8 · Test: scenario-first
 
