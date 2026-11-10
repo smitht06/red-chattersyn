@@ -544,7 +544,7 @@ def test_settitle_needs_text():
 
 def test_no_argument_commands_reject_arguments():
     for name in ("mods", "vips", "uptime", "clear", "unraid", "marker", "slowoff"):
-        assert _helix(f"/{name} extra").system.startswith("Usage: /")
+        assert _helix(f"/{name} extra").system == f"Usage: /{name}"
         assert _helix(f"/{name}").twitch_helix == HelixCommand(name)
 
 
@@ -593,3 +593,9 @@ def test_no_mod_command_is_sent_as_chat(name):
     outcome = _helix(f"/{name}{arg}")
     assert outcome.send_text == ""
     assert outcome.twitch_helix is not None and outcome.twitch_helix.name == name
+
+
+def test_followers_and_commercial_usage_texts():
+    assert _helix("/followers a b").system == (
+        "Usage: /followers [duration, e.g. 10m / 1h]")
+    assert _helix("/commercial a b").system == "Usage: /commercial [seconds]"

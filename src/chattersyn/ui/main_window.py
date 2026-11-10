@@ -981,15 +981,13 @@ class MainWindow(QMainWindow):
 
     def _on_delete_requested(self, tab: Tab, msg: Message) -> None:
         """'Moderate' > Delete message: YouTube = local hide of the one row;
-        Twitch's Helix delete needs channel:moderate and is deferred
-        (docs/m4.md)."""
+        Twitch runs /delete <id> (same scope check, failure row, Helix call)."""
         if msg.platform is Platform.YOUTUBE:
             tab.view.message_model.update_message(
                 msg.id, lambda m: setattr(m, "flags", m.flags | MessageFlags.DISABLED))
             return
-        tab.add_message(Message.system(
-            Platform.TWITCH, tab.twitch_channel,
-            "Delete message needs channel:moderate — not implemented yet"))
+        if msg.id:
+            self._run_command(tab, f"/delete {msg.id}")
 
     def _on_pin_requested(self, tab: Tab, msg: Message) -> None:
         tab.show_pin(msg)
@@ -1277,7 +1275,8 @@ class MainWindow(QMainWindow):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            self._twitch_note(tab, f"Twitch /{cmd.name} failed: {exc}")
+            reason = (str(exc).splitlines() or [""])[0].strip() or type(exc).__name__
+            self._twitch_note(tab, f"Twitch /{cmd.name} failed: {reason}")
             return
         if result.names is not None:
             self._show_user_list(tab, cmd.name, result.names)
@@ -1348,7 +1347,7 @@ class MainWindow(QMainWindow):
                 msg = Message.text(Platform.TWITCH, tab.twitch_channel,
                                    Author(name=login, login=login), "")
             msg.extra["synthetic"] = True  # no real row: no {msg.*} actions
-        self._show_usercard(msg, login)
+        self._show_usercard(msg, login, from_row=False)
 
     def _find_last_from(self, tab: Tab, login: str) -> Message | None:
         for msg in reversed(tab.view.message_model.all_messages()):
@@ -1780,8 +1779,10 @@ class MainWindow(QMainWindow):
         for tab in self._tabs:
             tab.refresh_visuals()
 
-    def _show_usercard(self, msg: Message, login: str) -> None:
-        """Username click: card at the cursor, Helix/YouTube data pushed in async."""
+    def _show_usercard(self, msg: Message, login: str, *, from_row: bool = True) -> None:
+        """Username click: card at the cursor, Helix/YouTube data pushed in async.
+        from_row=False: opened by name (/usercard, mods/VIPs list), so no
+        "Delete message" button even when the scrollback has a row."""
         if msg.author is None:
             return
         tabs = self._tabs_for_message(msg)
@@ -1823,8 +1824,9 @@ class MainWindow(QMainWindow):
             self._settings, target, recent, parent=self,
             self_is_mod=self_is_mod,
             custom_actions=self._usercard_custom_actions(tab, msg, target),
-            delete_message_id=(msg.id if msg.platform is Platform.TWITCH and self_is_mod
-                               and self._is_own_message(msg, target) else ""),
+            delete_message_id=(msg.id if from_row and msg.platform is Platform.TWITCH
+                               and self_is_mod and self._is_own_message(msg, target)
+                               else ""),
         )
         popup.action_requested.connect(
             functools.partial(self._on_usercard_action, tab, target))
@@ -1875,8 +1877,8 @@ class MainWindow(QMainWindow):
 
     def _on_usercard_action(self, tab: Tab, target: UsercardTarget, text: str) -> None:
         if target.platform is Platform.TWITCH:
-            # /ban /unban /timeout run through Helix (_twitch_mod); other
-            # mod commands still go out as IRC PRIVMSG.
+            # Twitch mod commands run through Helix (_twitch_mod /
+            # _twitch_helix_command) via the command controller.
             self._run_command(tab, text)
             return
         cmd = text.split()[0] if text.split() else ""

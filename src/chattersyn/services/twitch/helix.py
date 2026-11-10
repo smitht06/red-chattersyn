@@ -61,7 +61,7 @@ class Helix:
 
     async def _send(self, method: str, path: str, params: dict,
                     body: dict | None = None) -> dict:
-        """POST/PUT/PATCH/DELETE; failures raise HelixError carrying Twitch's
+        """GET/POST/PUT/PATCH/DELETE; failures raise HelixError carrying Twitch's
         message (e.g. "The user specified in the user_id field is already
         banned."). Returns the JSON body ({} when there is none)."""
         response = await self._call(method, path, params, body)
@@ -312,7 +312,7 @@ class Helix:
 
     async def search_categories(self, query: str) -> list[dict]:
         """[{id, name}] in Twitch's order."""
-        data = await self._get("/search/categories", {"query": query})
+        data = await self._send("GET", "/search/categories", {"query": query})
         return [{"id": r.get("id", ""), "name": r.get("name", "")}
                 for r in data.get("data", []) if r.get("id")]
 

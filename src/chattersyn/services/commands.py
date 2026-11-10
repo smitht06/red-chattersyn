@@ -122,6 +122,8 @@ _IRC_MOD_USAGE = {
     "settitle": "Usage: /settitle <title>",
     "setgame": "Usage: /setgame <category>",
     "delete": "Usage: /delete <message-id>",
+    "followers": "Usage: /followers [duration, e.g. 10m / 1h]",
+    "commercial": "Usage: /commercial [seconds]",
 }
 
 _HOSTING_RETIRED = "Twitch retired hosting — use /raid <channel> instead."
@@ -416,8 +418,8 @@ class CommandController:
     def _cmd_irc_mod(self, ctx: CommandContext, args: list[str], raw: str) -> CommandOutcome:
         """One of the server-side moderation commands: validate the user's
         arguments, then either hand ban/timeout/unban to the UI as a Helix
-        ModAction or send the literal command over PRIVMSG (Twitch-only) —
-        the server's NOTICE feedback comes back as a mapped system row."""
+        ModAction, or a Helix command (every other Twitch mod/broadcaster
+        command), after validating the user's arguments (Twitch-only)."""
         # Lowercase: the registry lookup lowercases, so "/Ban" must behave
         # exactly like "/ban" (all _IRC_MOD_* tables are keyed lowercase).
         name = raw.split()[0].lstrip("/.").lower()
@@ -425,8 +427,8 @@ class CommandController:
             return self._twitch_only(name)
         lo, hi = _IRC_MOD_SIG[name]
         if len(args) < lo or (hi is not None and len(args) > hi):
-            return CommandOutcome(True, system=_IRC_MOD_USAGE.get(
-                name, f"Usage: /{name} <username>"))
+            default = f"Usage: /{name}" if hi == 0 else f"Usage: /{name} <username>"
+            return CommandOutcome(True, system=_IRC_MOD_USAGE.get(name, default))
         out_args = list(args)
         if name in _IRC_MOD_USER_ARGS:
             out_args[0] = out_args[0].lstrip("@")

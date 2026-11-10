@@ -231,3 +231,87 @@ async def test_no_delete_button_from_usercard_command(win, monkeypatch):
     msg, _tab = _bob_message(win, synthetic=True)
     _popup, buttons = _open_card(win, msg, monkeypatch)
     assert "Ban" in buttons and "Delete message" not in buttons
+
+
+def _stub_card(win, monkeypatch):
+    from chattersyn.ui import usercard
+
+    async def no_enrich(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(usercard.UsercardPopup, "show_at_cursor", lambda self: None)
+    monkeypatch.setattr(win, "_enrich_usercard", no_enrich)
+    monkeypatch.setattr(win._moderation, "has_twitch_rights", lambda channel: True)
+
+
+async def test_no_delete_button_when_opened_by_name_with_rows(win, monkeypatch):
+    """THM-20: /usercard bob with bob already in the scrollback: no button."""
+    _stub_card(win, monkeypatch)
+    win._twitch = _Service(BASE_SCOPES)
+    msg, tab = _bob_message(win)
+    tab.add_message(msg)
+    tab.message_model.flush()
+    win._open_usercard_by_login(tab, "bob")
+    popup = win._usercard_popup
+    assert popup is not None
+    texts = {b.text() for b in popup._mod_buttons}
+    assert "Ban" in texts and "Delete message" not in texts
+
+
+async def test_list_click_card_has_no_delete_button(win, monkeypatch):
+    """THM-20: a click in the mods/VIPs popup opens a card without the button."""
+    from chattersyn.ui.user_list_popup import UserListPopup
+    monkeypatch.setattr(UserListPopup, "show_at_cursor", lambda self: None)
+    _stub_card(win, monkeypatch)
+    win._twitch = _Service(BASE_SCOPES)
+    msg, tab = _bob_message(win)
+    tab.add_message(msg)
+    tab.message_model.flush()
+    win._show_user_list(tab, "mods", ["bob"])
+    win._user_list_popup.user_clicked.emit("bob")
+    popup = win._usercard_popup
+    assert popup is not None
+    texts = {b.text() for b in popup._mod_buttons}
+    assert "Ban" in texts and "Delete message" not in texts
+
+
+async def test_right_click_delete_runs_helix_delete(win):
+    """Right-click Moderate > Delete message sends DELETE /moderation/chat."""
+    msg, tab = _bob_message(win)
+    with respx.mock:
+        _users_route()
+        route = respx.delete(f"{BASE}/moderation/chat").mock(return_value=httpx.Response(204))
+        win._twitch = _Service([*BASE_SCOPES, auth.CHAT_MESSAGES_SCOPE])
+        win._commands = CommandController(win._settings, [])
+        win._on_delete_requested(tab, msg)
+        for _ in range(200):
+            if route.called:
+                break
+            await asyncio.sleep(0.01)
+        assert route.called
+        assert route.calls.last.request.url.params["message_id"] == "m-1"
+        assert not any("not implemented" in r for r in _rows(tab))
+
+
+async def test_shoutout_moderator_is_token_user(win):
+    """Review focus 3: moderator_id is the signed-in user."""
+    with respx.mock:
+        _users_route()
+        route = respx.post(f"{BASE}/chat/shoutouts").mock(return_value=httpx.Response(204))
+        win._twitch = _Service([*BASE_SCOPES, auth.SHOUTOUTS_SCOPE])
+        tab = win._tabs[0]
+        await win._twitch_helix_command(tab, HelixCommand("shoutout", user="bob"))
+        params = route.calls.last.request.url.params
+        assert params["moderator_id"] == win._twitch.tokens.user_id == "7"
+
+
+async def test_setgame_search_400_shows_twitch_message(win):
+    """Minor 4: a failing GET shows Twitch's message, not httpx text."""
+    with respx.mock:
+        _users_route()
+        respx.get(f"{BASE}/search/categories").mock(return_value=httpx.Response(
+            400, json={"message": "bad query"}))
+        win._twitch = _Service([*BASE_SCOPES, auth.BROADCAST_SCOPE])
+        tab = win._tabs[0]
+        await win._twitch_helix_command(tab, HelixCommand("setgame", text="x"))
+        assert _rows(tab) == ["Twitch /setgame failed: bad query"]
