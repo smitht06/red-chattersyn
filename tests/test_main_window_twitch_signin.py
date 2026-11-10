@@ -94,10 +94,17 @@ async def test_connect_without_retrying_keeps_status(win):
     assert _status(win) == "something else"
 
 
-async def test_anonymous_connect_keeps_retrying_text(win):
+async def test_anonymous_connect_after_retrying_shows_read_only(win):
     win._on_connection_state(_event("unreachable"))
     win._on_connection_state(_event("connected", "anonymous"))
-    assert _status(win) == RETRYING
+    assert _status(win) == "Twitch connected (read-only — connect an account to send)"
+    assert not win._twitch_retrying
+
+
+async def test_anonymous_connect_without_retrying_keeps_status(win):
+    win.statusBar().showMessage("something else")
+    win._on_connection_state(_event("connected", "anonymous"))
+    assert _status(win) == "something else"
 
 
 async def test_other_platform_events_are_ignored(win):

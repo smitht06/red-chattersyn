@@ -1000,6 +1000,12 @@ class MainWindow(QMainWindow):
                 self.statusBar().showMessage("Twitch connected")
             self._twitch_retrying = False
             self._twitch_auth_problem = ""
+        elif state == "connected" and detail == "anonymous" and self._twitch_retrying:
+            # A read-only connection is back too. An announced rejection has
+            # already cleared the flag, so its text stays.
+            self.statusBar().showMessage(
+                "Twitch connected (read-only — connect an account to send)", 8000)
+            self._twitch_retrying = False
 
     def _on_auth_state(self, platform: str, ok: bool, detail: str) -> None:
         if ok:
