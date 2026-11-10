@@ -27,14 +27,15 @@ from pathlib import Path
 from typing import Any
 
 from ..models.message import Message, Platform
+from .twitch.mod_commands import HelixCommand
 
 log = logging.getLogger(__name__)
 
 _RECURSION_LIMIT = 5
 
 # Inputs passed through to Twitch (the server handles them): /me renders the
-# ACTION, /help /disconnect /host /unhost are answered by a server NOTICE.
-_PASSTHROUGH_COMMANDS = ("me", "help", "disconnect", "host", "unhost")
+# ACTION, /help /disconnect are answered by a server NOTICE.
+_PASSTHROUGH_COMMANDS = ("me", "help", "disconnect")
 
 # Placeholder grammar, exact Chatterino regex:
 # {N} = word N after the trigger; {N+} = words N..end; {var;fallback} used
@@ -49,9 +50,9 @@ _PLACEHOLDER_RE = re.compile(r"(^|[^{])({{)*{(\d+\+?|([a-zA-Z.-]+)(?:;(.+?))?)}"
 _ESCAPED_RE = re.compile(r"({+)({\d+\+?}|{[a-zA-Z.-]+(?:;[^}]*)?})")
 _ESCAPE_SENTINEL = "\x00"
 
-# Moderation/broadcaster chat commands sent verbatim over PRIVMSG: the server
-# acts and answers with a NOTICE (msg-id feedback mapped in the IRC mapper).
-# Everything here is a documented Twitch IRC chat command (docs/m4.md).
+# Moderation/broadcaster commands. ban/timeout/unban become a ModAction; the
+# rest become a HelixCommand (Twitch removed the IRC forms). Arguments are
+# validated here, the UI runs them.
 _IRC_MOD_COMMANDS = (
     "ban", "banid", "timeout", "untimeout", "unban", "warn",
     "mod", "unmod", "vip", "unvip",
@@ -63,14 +64,15 @@ _IRC_MOD_COMMANDS = (
     "marker", "clear",
 )
 
-# Helix-only / client-side-feature commands — honest stubs until later work
-# (/delete is deliberately deferred: Helix Delete Chat Messages needs the
-# channel:moderate scope; see docs/m4.md decisions).
+# Further Twitch commands that run through Helix.
+_HELIX_ONLY_COMMANDS = ("delete", "mods", "vips", "settitle", "setgame", "uptime")
+
+# Helix-only / client-side-feature commands — honest stubs until later work.
 _MOD_STUB_COMMANDS = (
-    "delete", "monitor", "restrict", "unmonitor", "unrestrict", "mods", "vips",
+    "monitor", "restrict", "unmonitor", "unrestrict",
     "clip", "poll", "cancelpoll", "endpoll",
     "prediction", "lockprediction", "cancelprediction", "completeprediction",
-    "pin", "unpin", "settitle", "setgame", "uptime", "streamlink",
+    "pin", "unpin", "streamlink",
     "requests", "lowtrust", "raw",
 )
 
@@ -92,6 +94,8 @@ _IRC_MOD_SIG: dict[str, tuple[int, int | None]] = {
     "r9kbeta": (0, 0), "r9kbetaoff": (0, 0),
     "shield": (0, 0), "shieldoff": (0, 0),
     "commercial": (0, 1), "marker": (0, 0),
+    "delete": (1, 1), "mods": (0, 0), "vips": (0, 0), "uptime": (0, 0),
+    "settitle": (1, None), "setgame": (1, None),
     "announce": (1, None), "announceblue": (1, None), "announcegreen": (1, None),
     "announceorange": (1, None), "announcepurple": (1, None),
 }
@@ -115,7 +119,13 @@ _IRC_MOD_USAGE = {
     "announceorange": "Usage: /announceorange <message>",
     "announcepurple": "Usage: /announcepurple <message>",
     "slow": "Usage: /slow [seconds]",
+    "settitle": "Usage: /settitle <title>",
+    "setgame": "Usage: /setgame <category>",
+    "delete": "Usage: /delete <message-id>",
 }
+
+_HOSTING_RETIRED = "Twitch retired hosting — use /raid <channel> instead."
+FOLLOWERS_MAX_MINUTES = 129600  # Twitch's 3-month cap
 
 # IRC mod commands whose argument is a username (strip a leading @).
 _IRC_MOD_USER_ARGS = {"ban", "unban", "timeout", "untimeout", "warn",
@@ -273,6 +283,7 @@ class CommandOutcome:
     reply_parent_id: str = ""
     reply_parent_login: str = ""
     twitch_mod: ModAction | None = None     # Helix moderation call to run
+    twitch_helix: HelixCommand | None = None  # Helix mod/broadcaster command to run
 
 
 class CommandController:
@@ -374,8 +385,12 @@ class CommandController:
         })
         for name in _IRC_MOD_COMMANDS:
             self._builtins[name] = self._cmd_irc_mod
+        for name in _HELIX_ONLY_COMMANDS:
+            self._builtins[name] = self._cmd_irc_mod
         for name in _MOD_STUB_COMMANDS:
             self._builtins[name] = self._cmd_stub
+        for name in ("host", "unhost"):
+            self._builtins[name] = self._cmd_hosting
 
     def _cmd_reply(self, ctx: CommandContext, args: list[str], raw: str) -> CommandOutcome:
         if not ctx.twitch_channel:
@@ -436,8 +451,50 @@ class CommandController:
             return CommandOutcome(True, twitch_mod=ModAction("ban", out_args[0], by_id=True))
         if name in ("unban", "untimeout"):
             return CommandOutcome(True, twitch_mod=ModAction("unban", out_args[0]))
-        return CommandOutcome(
-            True, send_text=f"/{name} {' '.join(out_args)}".strip(), twitch_only=True)
+        return self._helix_outcome(name, out_args)
+
+    def _helix_outcome(self, name: str, args: list[str]) -> CommandOutcome:
+        def bad(what: str, value: str) -> CommandOutcome:
+            return CommandOutcome(True, system=f"Invalid {what}: {value}")
+
+        cmd = HelixCommand(name)
+        if name in ("slow", "commercial"):
+            seconds = 30
+            if args:
+                value = args[0]
+                if not (_DURATION_RE.fullmatch(value) or (value.isascii() and value.isdigit())):
+                    return bad("slow duration" if name == "slow" else "commercial length", value)
+                seconds = _duration_seconds(value)
+                if name == "commercial" and not value.isdigit():
+                    return bad("commercial length", value)
+                if seconds < 1:
+                    return bad("slow duration" if name == "slow" else "commercial length", value)
+            cmd.seconds = seconds
+        elif name == "followers":
+            if args:
+                value = args[0]
+                if value.isascii() and value.isdigit():
+                    minutes = int(value) if len(value) < 10 else -1
+                elif _DURATION_RE.fullmatch(value):
+                    seconds = _duration_seconds(value)
+                    minutes = seconds // 60 if seconds % 60 == 0 and seconds >= 0 else -1
+                else:
+                    minutes = -1
+                if not 0 <= minutes <= FOLLOWERS_MAX_MINUTES:
+                    return bad("followers duration", value)
+                cmd.seconds = minutes * 60
+        elif name in ("settitle", "setgame") or name.startswith("announce"):
+            cmd.text = " ".join(args)
+        elif name == "warn":
+            cmd.user, cmd.text = args[0], " ".join(args[1:])
+        elif name in ("mod", "unmod", "vip", "unvip", "raid", "shoutout"):
+            cmd.user = args[0]
+        elif name == "delete":
+            cmd.message_id = args[0]
+        return CommandOutcome(True, twitch_helix=cmd)
+
+    def _cmd_hosting(self, ctx: CommandContext, args: list[str], raw: str) -> CommandOutcome:
+        return CommandOutcome(True, system=_HOSTING_RETIRED)
 
     def _cmd_usercard(self, ctx: CommandContext, args: list[str], raw: str) -> CommandOutcome:
         user = args[0].lstrip("@") if args else ""

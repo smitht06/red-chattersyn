@@ -16,6 +16,7 @@ from chattersyn.services.commands import (
     load_user_commands,
     save_user_commands,
 )
+from chattersyn.services.twitch.mod_commands import HelixCommand
 
 WORDS = ["alpha", "beta"]
 VARS = {"channel.name": "forsen", "my.name": "", "my.id": "me123"}
@@ -172,8 +173,8 @@ def test_clear_sends_server_command_twitch_only():
     ctrl = _controller()
     outcome = ctrl.dispatch("/clear", _ctx())
     assert outcome.handled
-    assert outcome.send_text == "/clear"
-    assert outcome.twitch_only
+    assert outcome.send_text == ""
+    assert outcome.twitch_helix == HelixCommand("clear")
 
 
 def test_clear_twitch_only_guard():
@@ -243,7 +244,7 @@ def test_user_opens_profile():
     assert opened == ["https://www.twitch.tv/bob"]
 
 
-@pytest.mark.parametrize("name", ["poll", "prediction", "mods", "pin"])
+@pytest.mark.parametrize("name", ["poll", "prediction", "pin"])
 def test_mod_stubs(name):
     ctrl = _controller()
     outcome = ctrl.dispatch(f"/{name} somebody", _ctx())
@@ -251,14 +252,17 @@ def test_mod_stubs(name):
     assert outcome.system == f"The /{name} command is not implemented yet."
 
 
-@pytest.mark.parametrize("name", ["announcepurple", "slow"])
-def test_irc_mod_commands_pass_through(name):
-    """Non-ban moderation builtins go out as IRC PRIVMSG (Twitch-only)."""
-    ctrl = _controller()
-    outcome = ctrl.dispatch(f"/{name} somebody", _ctx())
+@pytest.mark.parametrize("text, expected", [
+    ("/announcepurple hi all", HelixCommand("announcepurple", text="hi all")),
+    ("/slow 10", HelixCommand("slow", seconds=10)),
+    ("/raid @somebody", HelixCommand("raid", user="somebody")),
+])
+def test_irc_mod_commands_become_helix(text, expected):
+    """Non-ban moderation builtins become Helix commands, never chat text."""
+    outcome = _controller().dispatch(text, _ctx())
     assert outcome.handled
-    assert outcome.send_text == f"/{name} somebody"
-    assert outcome.twitch_only
+    assert outcome.twitch_helix == expected
+    assert outcome.send_text == ""
 
 
 def test_irc_mod_commands_accept_mixed_case():
@@ -271,7 +275,7 @@ def test_irc_mod_commands_accept_mixed_case():
         outcome = ctrl.dispatch(text, _ctx())
         assert outcome.handled
         assert outcome.twitch_mod == expected
-    assert ctrl.dispatch("/Slow 30", _ctx()).send_text == "/slow 30"
+    assert ctrl.dispatch("/Slow 30", _ctx()).twitch_helix == HelixCommand("slow", seconds=30)
 
 
 def test_ban_family_becomes_helix_actions():
@@ -321,8 +325,10 @@ def test_timeout_accepts_combined_durations():
 
 def test_warn_and_commercial_accept_documented_args():
     ctrl = _controller()
-    assert ctrl.dispatch("/warn bob spam", _ctx()).send_text == "/warn bob spam"
-    assert ctrl.dispatch("/commercial 60", _ctx()).send_text == "/commercial 60"
+    assert (ctrl.dispatch("/warn bob spam", _ctx()).twitch_helix
+            == HelixCommand("warn", user="bob", text="spam"))
+    assert (ctrl.dispatch("/commercial 60", _ctx()).twitch_helix
+            == HelixCommand("commercial", seconds=60))
     assert ctrl.dispatch("/ban bob annoying", _ctx()).twitch_mod == ModAction(
         "ban", "bob", reason="annoying")
 
@@ -335,8 +341,8 @@ def test_mod_commands_accept_multi_word_reasons():
             == ModAction("ban", "bob", duration=600, reason="Bad word detected"))
     assert (ctrl.dispatch("/ban bob annoying more words", _ctx()).twitch_mod
             == ModAction("ban", "bob", reason="annoying more words"))
-    assert (ctrl.dispatch("/warn bob spam spam spam", _ctx()).send_text
-            == "/warn bob spam spam spam")
+    assert (ctrl.dispatch("/warn bob spam spam spam", _ctx()).twitch_helix
+            == HelixCommand("warn", user="bob", text="spam spam spam"))
 
 
 def test_timeout_duration_range_validated():
@@ -391,7 +397,8 @@ def test_warn_requires_reason():
     ctrl = _controller()
     assert ctrl.dispatch("/warn bob", _ctx()).system == \
         "Usage: /warn <username> <reason>"
-    assert ctrl.dispatch("/warn bob stop it", _ctx()).send_text == "/warn bob stop it"
+    assert (ctrl.dispatch("/warn bob stop it", _ctx()).twitch_helix
+            == HelixCommand("warn", user="bob", text="stop it"))
 
 
 def test_mod_stubs_registered_for_autocomplete():
@@ -408,7 +415,7 @@ def test_unknown_command_blocked():
 
 
 @pytest.mark.parametrize("text", [
-    "/me dances", ".me dances", "/help", "/disconnect", "/host foo", "/unhost foo",
+    "/me dances", ".me dances", "/help", "/disconnect",
 ])
 def test_pass_through_to_twitch(text):
     outcome = _controller().dispatch(text, _ctx())
@@ -478,3 +485,111 @@ def test_from_json_requires_name_and_func():
     assert UserCommand.from_json({}) is None
     assert UserCommand.from_json({"name": "", "func": "x"}) is None
     assert UserCommand.from_json({"name": "a", "func": "x"}) == UserCommand("a", "x")
+
+
+def _helix(text, **ctx):
+    return _controller().dispatch(text, _ctx(**ctx))
+
+
+def test_slow_becomes_helix_command():
+    outcome = _helix("/slow 10")
+    assert outcome.twitch_helix == HelixCommand("slow", seconds=10)
+    assert outcome.send_text == ""
+
+
+def test_slow_default_30():
+    assert _helix("/slow").twitch_helix == HelixCommand("slow", seconds=30)
+    assert _helix("/slow 1m").twitch_helix == HelixCommand("slow", seconds=60)
+    assert _helix("/slow soon").system == "Invalid slow duration: soon"
+
+
+def test_commercial_default_30():
+    assert _helix("/commercial").twitch_helix == HelixCommand("commercial", seconds=30)
+    assert _helix("/commercial abc").system == "Invalid commercial length: abc"
+
+
+def test_followers_duration():
+    assert _helix("/followers 1h").twitch_helix == HelixCommand("followers", seconds=3600)
+    assert _helix("/followers 10").twitch_helix == HelixCommand("followers", seconds=600)
+    assert _helix("/followers").twitch_helix == HelixCommand("followers", seconds=0)
+    assert _helix("/followers 1d").twitch_helix == HelixCommand("followers", seconds=86400)
+    assert _helix("/followers 129600").twitch_helix.seconds == 129600 * 60
+
+
+def test_followers_rejects_bad_durations():
+    for bad in ("30s", "90s", "soon", "129601", "13w"):
+        assert _helix(f"/followers {bad}").system == f"Invalid followers duration: {bad}"
+
+
+def test_vip_strips_at():
+    assert _helix("/vip @bob").twitch_helix == HelixCommand("vip", user="bob")
+    assert (_helix("/shoutout @bob").twitch_helix
+            == HelixCommand("shoutout", user="bob"))
+
+
+def test_delete_takes_one_id():
+    assert _helix("/delete abc-123").twitch_helix == HelixCommand("delete", message_id="abc-123")
+    assert _helix("/delete").system == "Usage: /delete <message-id>"
+    assert _helix("/delete a b").system == "Usage: /delete <message-id>"
+
+
+def test_settitle_needs_text():
+    """THM-26"""
+    assert _helix("/settitle").system == "Usage: /settitle <title>"
+    assert _helix("/setgame").system == "Usage: /setgame <category>"
+    assert (_helix("/settitle Playing  games").twitch_helix
+            == HelixCommand("settitle", text="Playing games"))
+    assert _helix("/setgame Just Chatting").twitch_helix.text == "Just Chatting"
+
+
+def test_no_argument_commands_reject_arguments():
+    for name in ("mods", "vips", "uptime", "clear", "unraid", "marker", "slowoff"):
+        assert _helix(f"/{name} extra").system.startswith("Usage: /")
+        assert _helix(f"/{name}").twitch_helix == HelixCommand(name)
+
+
+def test_host_explains_raid():
+    """THM-22"""
+    outcome = _helix("/host foo")
+    assert outcome.handled
+    assert outcome.system == "Twitch retired hosting — use /raid <channel> instead."
+    assert outcome.send_text == ""
+    assert outcome.twitch_helix is None
+
+
+def test_unhost_explains_raid():
+    """THM-25"""
+    outcome = _helix("/unhost")
+    assert outcome.system == "Twitch retired hosting — use /raid <channel> instead."
+    assert outcome.send_text == ""
+
+
+def test_poll_still_stub():
+    """THM-27"""
+    assert _helix("/poll x").system == "The /poll command is not implemented yet."
+
+
+def test_helix_commands_need_a_twitch_channel():
+    outcome = _helix("/slow 10", twitch_channel="")
+    assert outcome.system == "The /slow command only works in Twitch channels."
+    assert outcome.twitch_helix is None
+
+
+HELIX_NAMES = [
+    "warn", "mod", "unmod", "vip", "unvip", "announce", "announceblue",
+    "announcegreen", "announceorange", "announcepurple", "slow", "slowoff",
+    "followers", "followersoff", "emoteonly", "emoteonlyoff", "subscribers",
+    "subscribersoff", "uniquechat", "r9kbeta", "uniquechatoff", "r9kbetaoff",
+    "raid", "unraid", "shoutout", "commercial", "shield", "shieldoff", "marker",
+    "clear", "delete", "mods", "vips", "settitle", "setgame", "uptime",
+]
+
+
+@pytest.mark.parametrize("name", HELIX_NAMES)
+def test_no_mod_command_is_sent_as_chat(name):
+    arg = {"delete": " id1", "settitle": " t", "setgame": " g", "warn": " bob why"}.get(
+        name, " bob" if name in ("mod", "unmod", "vip", "unvip", "raid", "shoutout")
+        else " hi" if name.startswith("announce") else "")
+    outcome = _helix(f"/{name}{arg}")
+    assert outcome.send_text == ""
+    assert outcome.twitch_helix is not None and outcome.twitch_helix.name == name
