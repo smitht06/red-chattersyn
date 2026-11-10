@@ -1851,7 +1851,7 @@ class MainWindow(QMainWindow):
         self._usercard_popup = None
 
     async def _enrich_usercard(self, popup: UsercardPopup, target: UsercardTarget,
-                               channel: str = "", self_is_mod: bool = False) -> None:
+                               channel: str, self_is_mod: bool) -> None:
         """Helix/YouTube field expansion; the popup may have closed meanwhile.
         `channel` is the Twitch channel of the tab the card came from."""
         try:
@@ -1863,37 +1863,54 @@ class MainWindow(QMainWindow):
             log.debug("usercard enrichment failed: %s", exc)
 
     async def _enrich_twitch_usercard(self, popup: UsercardPopup, target: UsercardTarget,
-                                      channel: str = "", self_is_mod: bool = False) -> None:
+                                      channel: str, self_is_mod: bool) -> None:
         """Each detail is its own lookup and fills its own row as it answers,
         so one failing lookup never hides the others. The follow date is
         about `channel` and only its broadcaster and mods may ask for it."""
         if self._twitch is None or self._twitch.helix is None:
             return  # anonymous read: Author fields only
         helix = self._twitch.helix
-        user = await helix.user_by_login(target.login)
-        if user is None or self._usercard_popup is not popup:
-            return
-        popup.set_details(created_at=user.get("created_at", ""),
-                          avatar_url=user.get("profile_image_url") or None)
-        user_id = user.get("id") or target.user_id
-        if not user_id:
-            return
+        user_id = target.user_id
         try:
-            followers = await helix.channel_followers(user_id)
+            user = await helix.user_by_login(target.login)
+        except Exception as exc:  # keep going with the id from the chat row
+            log.debug("usercard user lookup failed: %s", exc)
+        else:
+            if user is None:
+                return  # no such Twitch user (renamed or deleted)
+            if self._usercard_popup is not popup:
+                return
+            popup.set_details(created_at=user.get("created_at", ""),
+                              avatar_url=user.get("profile_image_url") or None)
+            user_id = user.get("id") or user_id
+        if not user_id or self._usercard_popup is not popup:
+            return
+        await asyncio.gather(
+            self._usercard_follower_total(popup, user_id),
+            self._usercard_follow_date(popup, user_id, channel, self_is_mod),
+        )
+
+    async def _usercard_follower_total(self, popup: UsercardPopup, user_id: str) -> None:
+        try:
+            followers = await self._twitch.helix.channel_followers(user_id)
         except Exception as exc:
             log.debug("usercard follower count failed: %s", exc)
-        else:
-            if followers is not None and self._usercard_popup is popup:
-                popup.set_details(followers=followers)
+            return
+        if followers is not None and self._usercard_popup is popup:
+            popup.set_details(followers=followers)
+
+    async def _usercard_follow_date(self, popup: UsercardPopup, user_id: str,
+                                    channel: str, self_is_mod: bool) -> None:
         tokens = self._twitch.tokens
         if not (self_is_mod and channel and tokens is not None
                 and FOLLOWERS_SCOPE in tokens.scopes):
             return
         try:
-            broadcaster = await helix.user_by_login(channel)
+            broadcaster = await self._twitch.helix.user_by_login(channel)
             if broadcaster is None or not broadcaster.get("id") or broadcaster["id"] == user_id:
                 return  # unknown channel, or the broadcaster's own card
-            followed_at = await helix.channel_follower_since(broadcaster["id"], user_id)
+            followed_at = await self._twitch.helix.channel_follower_since(
+                broadcaster["id"], user_id)
         except Exception as exc:
             log.debug("usercard follow lookup failed: %s", exc)
             return

@@ -1,5 +1,7 @@
 """TUF-1..8: MainWindow fills a signed-in Twitch user card, one lookup at a time."""
 
+import asyncio
+
 import httpx
 import pytest
 import respx
@@ -200,3 +202,92 @@ async def test_late_answer_after_card_replaced_is_dropped(win):
     assert not _shown(old._created_row)
     assert not _shown(old._followers_row)
     assert not _shown(old._followage_row)
+
+
+@respx.mock
+async def test_failed_user_lookup_keeps_other_rows(win):
+    """TUF-2/3: a failing /users lookup hides only its own details."""
+    respx.get(f"{BASE}/users", params={"login": "alice"}).mock(
+        return_value=httpx.Response(200, json={"data": [USERS["alice"]]}))
+    respx.get(f"{BASE}/users", params={"login": "bob"}).mock(
+        return_value=httpx.Response(503, json={}))
+    _total_route()
+    _follow_route()
+    win._twitch = _Service(ALL_SCOPES)
+    target = UsercardTarget(platform=Platform.TWITCH, login="bob", display_name="Bob",
+                            user_id="1", channel_id="alice")
+    popup = UsercardPopup(win._settings, target, [], self_is_mod=True, parent=win)
+    win._usercard_popup = popup
+    await win._enrich_usercard(popup, target, "alice", True)
+    assert not _shown(popup._created_row)
+    assert popup._followers_value.text() == "4,321"
+    assert popup._followage_value.text() == "2024-03-05"
+
+
+@respx.mock
+async def test_follow_row_does_not_wait_for_follower_count(win):
+    """TUF-1: each row fills as its own lookup answers."""
+    _users_route()
+    release = asyncio.Event()
+
+    async def slow_total(request):
+        await release.wait()
+        return httpx.Response(200, json={"total": 5})
+    respx.get(f"{BASE}/channels/followers", params={"broadcaster_id": "1"}).mock(
+        side_effect=slow_total)
+    _follow_route()
+    win._twitch = _Service(ALL_SCOPES)
+    target = UsercardTarget(platform=Platform.TWITCH, login="bob", display_name="Bob",
+                            user_id="1", channel_id="alice")
+    popup = UsercardPopup(win._settings, target, [], self_is_mod=True, parent=win)
+    win._usercard_popup = popup
+    task = asyncio.ensure_future(win._enrich_usercard(popup, target, "alice", True))
+    try:
+        for _ in range(50):
+            if _shown(popup._followage_row):
+                break
+            await asyncio.sleep(0.01)
+        assert _shown(popup._followage_row)
+        assert not _shown(popup._followers_row)
+    finally:
+        release.set()
+        await task
+    assert popup._followers_value.text() == "5"
+
+
+@respx.mock
+async def test_card_replaced_mid_lookup_gets_no_late_rows(win):
+    """Review Focus 1: the card is replaced while the follower lookup runs."""
+    _users_route()
+    target = UsercardTarget(platform=Platform.TWITCH, login="bob", display_name="Bob",
+                            user_id="1", channel_id="alice")
+    win._twitch = _Service(ALL_SCOPES)
+    old = UsercardPopup(win._settings, target, [], self_is_mod=True, parent=win)
+    win._usercard_popup = old
+
+    def replace_then_answer(request):
+        win._usercard_popup = UsercardPopup(win._settings, target, [], parent=win)
+        return httpx.Response(200, json={"total": 5})
+    respx.get(f"{BASE}/channels/followers", params={"broadcaster_id": "1"}).mock(
+        side_effect=replace_then_answer)
+    _follow_route()
+    await win._enrich_usercard(old, target, "alice", True)
+    assert _shown(old._created_row)  # answered before the swap
+    assert not _shown(old._followers_row)
+    assert not _shown(old._followage_row)
+
+
+async def test_show_usercard_passes_tab_channel_and_mod_rights(win, monkeypatch):
+    """The card-opening code hands the tab's channel and mod rights on."""
+    from chattersyn.models.message import Message
+    seen = {}
+
+    async def fake_enrich(popup, target, channel, self_is_mod):
+        seen.update(channel=channel, self_is_mod=self_is_mod)
+    monkeypatch.setattr(win, "_enrich_usercard", fake_enrich)
+    win._moderation.set_twitch_mod("alice", True)
+    msg = Message.text(Platform.TWITCH, "alice", Author(name="Bob", login="bob", user_id="1"), "hi")
+    win._show_usercard(msg, "bob")
+    await asyncio.sleep(0)
+    assert seen == {"channel": "alice", "self_is_mod": True}
+    win._usercard_popup.close()

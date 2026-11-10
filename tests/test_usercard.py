@@ -105,6 +105,25 @@ def test_followage_label_names_the_channel(popup):
     assert not popup._followage_row.isHidden()
 
 
+def test_long_channel_name_is_not_cut_off(qapp, popup):
+    """A 25-character login (Twitch's maximum) still shows the whole label,
+    also at the larger macOS system font (13 pt)."""
+    font = popup._followage_key.font()
+    font.setPointSizeF(13)
+    popup._followage_key.setFont(font)
+    popup.set_details(followage="2024-03-05T10:00:00Z", followage_channel="a" * 25)
+    # Lay out the way a visible card would (conftest: widgets are never shown).
+    popup.adjustSize()
+    popup.layout().activate()
+    row = popup._followage_row
+    row.layout().setGeometry(row.rect())  # a hidden row's resize event is deferred
+    key = popup._followage_key
+    if key.wordWrap():
+        assert key.heightForWidth(key.width()) <= key.height()
+    else:
+        assert key.fontMetrics().horizontalAdvance(key.text()) <= key.width()
+
+
 def test_details_arrive_one_at_a_time(popup):
     """TUF-1: each lookup fills its own row; earlier rows stay."""
     popup.set_details(created_at="2021-03-04T05:06:07Z")

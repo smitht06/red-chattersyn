@@ -197,8 +197,21 @@ class UsercardPopup(BasePopup):
         self._created_row, self._created_value = self._add_row("Created:")
         self._followers_row, self._followers_value = self._add_row(
             "Subscribers:" if target.platform is Platform.YOUTUBE else "Followers:")
+        # Placeholder label: set_details always names the card's channel
+        # ("Followed <channel> since:"); this text is also the key-column
+        # width yardstick in _add_row.
         self._followage_row, self._followage_value = self._add_row("Follows you since:")
         self._followage_key = self._followage_row.findChild(QLabel)
+        # Long channel names wrap instead of clipping: the key takes the
+        # row's spare width (the value is a 10-character date) and the row
+        # grows to the key's wrapped height.
+        self._followage_key.setWordWrap(True)
+        row_layout = self._followage_row.layout()
+        row_layout.setStretch(0, 1)
+        row_layout.setStretch(1, 0)
+        policy = self._followage_row.sizePolicy()
+        policy.setHeightForWidth(True)
+        self._followage_row.setSizePolicy(policy)
 
         layout.addWidget(self._divider())
 
