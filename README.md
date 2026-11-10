@@ -320,20 +320,18 @@ REST (send); Qt model/delegate chat rendering. See the plan in
 `~/.claude/plans/i-want-an-app-idempotent-pebble.md` for the full design.
 
 <!-- release-notes:start -->
-## Latest release: v0.10.3 (2026-11-09)
-
-### New
-- **API key status.** Settings → Accounts now tells you when your YouTube API key isn't working. ChatterSyn then reads with your Google sign-in instead, or pauses YouTube reading if you're not signed in.
+## Latest release: v0.10.4 (2026-11-10)
 
 ### Improved
-- **Much lighter on YouTube quota.** YouTube tabs check far less often whether an offline channel has gone live. An idle channel tab now uses about 300 quota units a day instead of up to 30,000. A tab you aren't looking at, or a minimized window, checks every 15 minutes and catches up as soon as you switch to it. Your own Stream tab still checks every 2 minutes.
-- **Scheduled streams.** A tab waiting for a scheduled stream checks every 15 minutes until shortly before the start, then every 30 seconds until 15 minutes after it.
-- **Your API key pays for reading.** If you've set your own YouTube Data API key (Settings → Accounts), it's now used for reading public chats and checking channels even while you're signed in with Google. Sending, bans and your own Stream tab still use your Google account, and members-only chats switch to it automatically.
+- **Clearer Twitch status.** While Twitch can't be reached, the status bar shows "Twitch: can't reach Twitch — retrying…" instead of an error row in every tab, and "Twitch connected" once it's back.
+- **Sign-in problems explained.** When Twitch really rejects your sign-in, chat keeps running read-only, and the status bar, each tab and Settings → Accounts say "Twitch sign-in expired — reconnect your account" (or "Twitch rejected the sign-in — reconnect your account").
 
 ### Fixed
-- **Stuck after the quota ran out.** When YouTube's daily quota ran out, tabs stopped until you restarted the app. They now show "YouTube quota used up · resumes at HH:MM" and come back on their own shortly after midnight Pacific Time. Meanwhile YouTube sending is switched off, and Twitch keeps working.
-- **API key without Google sign-in.** YouTube tabs never connected if you had set an API key but weren't signed in with Google.
-- **Channels with no videos.** A channel tab for a channel with no public videos kept showing an error and retrying every minute. It now shows the channel as offline.
+- **Signed out by a Twitch outage.** A Twitch server error, rate limit, timeout or network drop while ChatterSyn renewed your token deleted your saved Twitch login. Now it's only removed when Twitch says it's no longer valid.
+- **Twitch dead after an offline launch.** Starting without network (or behind a hotel or captive-portal login page) left Twitch chat disconnected until a restart. Chat now connects with your saved account as soon as the network is back, and user cards, bans, the live status, badges and emotes catch up on their own.
+- **Endless reconnects with an expired login.** After a few hours, a dropped Twitch chat connection could keep retrying with an expired login. ChatterSyn now renews the login and reconnects.
+- **Badges and emotes missing after an outage.** Channels opened while Twitch was unreachable stayed without their Twitch badges and emotes.
+- **Misleading launch message.** People who never signed in to Twitch saw "stored tokens invalid — reconnect account" at every launch.
 
 Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
 <!-- release-notes:end -->
