@@ -112,7 +112,7 @@ Interfaces:
 3. Run the verify command, then `uv run pytest -q`. Expected: PASS.
 4. Commit `fix(twitch): re-login when chat refuses an expired token`.
 
-- [ ] 2.4 Account features during an outage — verify: uv run pytest tests/test_twitch_service.py -q passes
+- [x] 2.4 Account features during an outage — verify: uv run pytest tests/test_twitch_service.py -q passes
 
 Covers: TSR-20, TSR-4 · Test: scenario-first
 
