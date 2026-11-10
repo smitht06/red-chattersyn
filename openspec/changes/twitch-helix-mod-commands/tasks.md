@@ -105,7 +105,7 @@ Interfaces:
 
 ## 3. Popups
 
-- [ ] 3.1 Mods/VIPs list popup — verify: uv run pytest tests/test_user_list_popup.py tests/test_main_window_mod_commands.py -q passes
+- [x] 3.1 Mods/VIPs list popup — verify: uv run pytest tests/test_user_list_popup.py tests/test_main_window_mod_commands.py -q passes
 
 Covers: THM-16, THM-17, THM-18, THM-24 · Test: scenario-first
 
