@@ -11,4 +11,5 @@ This repository uses grillspec phases (grill → spec → plan → execute); run
 - [gotcha] Twitch IRC checks the token only at connect: an expired token keeps a live connection, then gets "Login authentication failed" on the next reconnect (twitch-signin-resilience)
 - [constraint] Twitch public-client refresh tokens are single-use: never cancel a refresh mid-flight; every token save must check the store is unchanged (twitch-signin-resilience)
 - [gotcha] Helix /users/follows is gone: follow checks use /channels/followers?user_id=, need moderator:read:followers and broadcaster/mod rights (twitch-usercard-follows)
+- [gotcha] Helix lists of moderators (/moderation/moderators) and VIPs (/channels/vips) answer only the broadcaster's token; mods get a refusal (twitch-helix-mod-commands)
 <!-- grillspec:memory:end -->

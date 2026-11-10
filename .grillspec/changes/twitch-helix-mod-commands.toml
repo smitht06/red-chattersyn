@@ -1,0 +1,7 @@
+version = 1
+executor = "subagent"
+grilled = 2026-11-10
+plan_approved = 2026-11-10
+plan_hash = "sha256:5dbf8a2944a62a3a1c0b9d0d6b15b8d105ac16ac627813f1854e808e4b3b3c86"
+spec_approved = 2026-11-10
+spec_hash = "sha256:a9fc0c3791bc1542d5fb7256f2a334eb924969fd428100c0197c105a37a9273a"
