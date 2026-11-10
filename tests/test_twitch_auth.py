@@ -606,3 +606,62 @@ async def test_check_during_inflight_refresh_reuses_it():
         await auth.close()
     assert refresh_route.call_count == 1
     assert tokens is not None and tokens.access_token == "acc-2"
+
+
+@respx.mock
+async def test_refresh_finishing_during_another_check_keeps_new_login():
+    """Caller A gives up waiting (launch limit); B loads the old tokens and is
+    mid-validate when A's background refresh saves the new ones. B's 401 must
+    not spend the already-used refresh token (Twitch answers 400) and delete
+    the good login."""
+    store = stored_store()
+    release_refresh = asyncio.Event()
+    refresh_started = asyncio.Event()
+    b_validating = asyncio.Event()
+    release_b_validate = asyncio.Event()
+    spent: set[str] = set()
+
+    async def validate(request):
+        token = request.headers["Authorization"].removeprefix("OAuth ")
+        if token != "acc-1":
+            return VALIDATE_OK
+        if refresh_started.is_set():  # caller B: slow answer for the old token
+            b_validating.set()
+            await release_b_validate.wait()
+        await asyncio.sleep(0)
+        return httpx.Response(401)
+
+    async def refresh(request):
+        refresh_token = request.url.params["refresh_token"]
+        if refresh_token in spent:
+            return httpx.Response(400)  # single-use refresh token
+        spent.add(refresh_token)
+        refresh_started.set()
+        await release_refresh.wait()
+        return REFRESH_OK
+
+    respx.get(VALIDATE_URL).mock(side_effect=validate)
+    refresh_route = respx.post(TOKEN_URL).mock(side_effect=refresh)
+    auth = make_auth(store)
+    try:
+        a = asyncio.ensure_future(asyncio.wait_for(auth.ensure_valid(), timeout=0.1))
+        await refresh_started.wait()
+        with pytest.raises(TimeoutError):
+            await a
+        b = asyncio.ensure_future(auth.ensure_valid())
+        await b_validating.wait()
+        release_refresh.set()
+        for _ in range(100):
+            if TwitchTokens.from_json(store.get(TOKEN_KEY)).access_token == "acc-2":
+                break
+            await asyncio.sleep(0.01)
+        release_b_validate.set()
+        tokens = await asyncio.wait_for(b, timeout=2)
+    finally:
+        release_refresh.set()
+        release_b_validate.set()
+        await auth.close()
+    assert refresh_route.call_count == 1
+    assert store.deleted == []
+    assert tokens is not None and tokens.access_token == "acc-2"
+    assert TwitchTokens.from_json(store.get(TOKEN_KEY)).access_token == "acc-2"

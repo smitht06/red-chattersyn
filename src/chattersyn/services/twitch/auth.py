@@ -199,31 +199,50 @@ class TwitchAuth:
         validate and return the current tokens.
         """
         async with self._lock:
-            tokens = self.load_tokens()
-            if tokens is None:
-                return None
-            if rejected_token is not None and tokens.access_token == rejected_token:
-                info = None  # Twitch's chat already refused it - don't ask again
-            else:
-                info = await self.validate(tokens.access_token)
-            if info is None:
-                if not tokens.refresh_token:
-                    self.clear()
+            while True:
+                tokens = self.load_tokens()
+                if tokens is None:
                     return None
-                refreshed = await self._refresh_shielded(tokens)
-                if refreshed is None:
-                    return None
-                tokens = refreshed
-                info = await self.validate(tokens.access_token)
+                if rejected_token is not None and tokens.access_token == rejected_token:
+                    info = None  # Twitch's chat already refused it - don't ask again
+                else:
+                    info = await self.validate(tokens.access_token)
                 if info is None:
-                    self.clear()
-                    return None
-            tokens.login = info.get("login", "")
-            tokens.user_id = info.get("user_id", "")
-            if "scopes" in info:  # what the token actually grants today
-                tokens.scopes = list(info.get("scopes") or [])
-            self.save_tokens(tokens)
-            return tokens
+                    if not tokens.refresh_token:
+                        self._clear_if_saved(tokens)
+                        return None
+                    saved = self.load_tokens()
+                    if saved is None:
+                        return None
+                    if saved.access_token != tokens.access_token:
+                        # a refresh finished while we were validating; its
+                        # refresh token is spent - check the new tokens instead
+                        continue
+                    refreshed = await self._refresh_shielded(tokens)
+                    if refreshed is None:
+                        return None
+                    tokens = refreshed
+                    info = await self.validate(tokens.access_token)
+                    if info is None:
+                        self._clear_if_saved(tokens)
+                        return None
+                tokens.login = info.get("login", "")
+                tokens.user_id = info.get("user_id", "")
+                if "scopes" in info:  # what the token actually grants today
+                    tokens.scopes = list(info.get("scopes") or [])
+                self.save_tokens(tokens)
+                return tokens
+
+    def _clear_if_saved(self, tokens: TwitchTokens) -> None:
+        """Delete the saved login only if it is still the one that was
+        rejected - a newer login saved meanwhile must survive."""
+        saved = self.load_tokens()
+        if (
+            saved is not None
+            and saved.access_token == tokens.access_token
+            and saved.refresh_token == tokens.refresh_token
+        ):
+            self.clear()
 
     async def _refresh_shielded(self, tokens: TwitchTokens) -> TwitchTokens | None:
         """Refresh and save in a task the caller's cancellation can't stop.
@@ -241,9 +260,12 @@ class TwitchAuth:
         return await asyncio.shield(task)
 
     async def _refresh_and_save(self, tokens: TwitchTokens) -> TwitchTokens | None:
+        spent = (tokens.access_token, tokens.refresh_token)  # refresh() mutates tokens
         refreshed = await self.refresh(tokens)
         if refreshed is None or not refreshed.access_token:
-            self.clear()
+            saved = self.load_tokens()
+            if saved is not None and (saved.access_token, saved.refresh_token) == spent:
+                self.clear()
             return None
         self.save_tokens(refreshed)
         return refreshed
