@@ -1,0 +1,7 @@
+version = 1
+executor = "inline"
+grilled = 2026-11-10
+plan_approved = 2026-11-10
+plan_hash = "sha256:db3d93c18a37d3206c4db5f3f531fa22a63f1574b63fbd7456de2ccc427c7696"
+spec_approved = 2026-11-10
+spec_hash = "sha256:998cbf0e53ab8a1ea76e5994346f9c1ae44ace4f00fa2d80ecdd76e3034610e0"
