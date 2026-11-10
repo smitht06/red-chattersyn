@@ -30,7 +30,7 @@ its label from the card's channel.
 
 ## 1. Helix and scopes
 
-- [ ] 1.1 Follow lookup on /channels/followers and the new scope — verify: uv run pytest tests/test_helix.py tests/test_twitch_auth.py -q passes
+- [x] 1.1 Follow lookup on /channels/followers and the new scope — verify: uv run pytest tests/test_helix.py tests/test_twitch_auth.py -q passes
 
 Covers: TUF-9 · Test: scenario-first
 
