@@ -37,7 +37,7 @@ The user card's "Delete message" button sends "/delete <id>" through the same pa
 
 ## 1. Twitch API
 
-- [ ] 1.1 Helix endpoints and the new scopes — verify: uv run pytest tests/test_helix.py tests/test_twitch_auth.py -q passes
+- [x] 1.1 Helix endpoints and the new scopes — verify: uv run pytest tests/test_helix.py tests/test_twitch_auth.py -q passes
 
 Covers: THM-7 · Test: scenario-first
 
