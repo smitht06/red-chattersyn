@@ -140,3 +140,40 @@ async def test_raid_resolves_target_channel_id(win):
         params = route.calls.last.request.url.params
         assert params["from_broadcaster_id"] == "2"
         assert params["to_broadcaster_id"] == "1"
+
+
+async def test_click_opens_usercard(win, monkeypatch):
+    """THM-16/18: the popup opens titled, and a click opens that user's card."""
+    from chattersyn.ui.user_list_popup import UserListPopup
+    monkeypatch.setattr(UserListPopup, "show_at_cursor", lambda self: None)
+    opened = []
+    monkeypatch.setattr(win, "_open_usercard_by_login",
+                        lambda tab, login: opened.append((tab, login)))
+    tab = win._tabs[0]
+    win._show_user_list(tab, "mods", ["carol", "bob"])
+    popup = win._user_list_popup
+    assert popup.title_text() == "Moderators (2)"
+    assert popup.visible_names() == ["bob", "carol"]
+    popup.user_clicked.emit("bob")
+    assert opened == [(tab, "bob")]
+
+
+async def test_empty_vips_popup_text(win, monkeypatch):
+    from chattersyn.ui.user_list_popup import UserListPopup
+    monkeypatch.setattr(UserListPopup, "show_at_cursor", lambda self: None)
+    win._show_user_list(win._tabs[0], "vips", [])
+    assert win._user_list_popup.title_text() == "VIPs (0)"
+    assert win._user_list_popup.empty_label.text() == "No VIPs."
+
+
+async def test_mod_refused_shows_row_no_popup(win):
+    """THM-24: a refused /vips is a failure row and no popup."""
+    with respx.mock:
+        _users_route()
+        respx.get(f"{BASE}/channels/vips").mock(return_value=httpx.Response(
+            403, json={"message": "Only the broadcaster can view VIPs."}))
+        win._twitch = _Service([*BASE_SCOPES, auth.VIPS_SCOPE])
+        tab = win._tabs[0]
+        await win._twitch_helix_command(tab, HelixCommand("vips"))
+        assert win._user_list_popup is None
+        assert _rows(tab) == ["Twitch /vips failed: Only the broadcaster can view VIPs."]

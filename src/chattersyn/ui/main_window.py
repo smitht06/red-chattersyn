@@ -80,6 +80,7 @@ from .notebook import Notebook
 from .search_popup import SearchPopup
 from .settings_dialog import SettingsDialog
 from .tab import Tab
+from .user_list_popup import UserListPopup
 from .usercard import UsercardPopup, UsercardTarget, recent_messages_for
 
 log = logging.getLogger(__name__)
@@ -143,6 +144,7 @@ class MainWindow(QMainWindow):
         self._search_popup: SearchPopup | None = None
         self._highlights: HighlightController | None = None
         self._mentions_popup: MentionsPopup | None = None
+        self._user_list_popup: UserListPopup | None = None
         self._usercard_popup: UsercardPopup | None = None
         self._chat_index: ChatIndex | None = None
         self._emote_picker: EmotePickerPopup | None = None
@@ -1283,12 +1285,21 @@ class MainWindow(QMainWindow):
             self._twitch_note(tab, result.row)
 
     def _show_user_list(self, tab: Tab, name: str, names: list[str]) -> None:
-        """/mods and /vips result (a row until the popup lands)."""
-        label = "Moderators" if name == "mods" else "VIPs"
-        if not names:
-            self._twitch_note(tab, "No moderators." if name == "mods" else "No VIPs.")
-            return
-        self._twitch_note(tab, f"{label} ({len(names)}): {', '.join(names)}")
+        """/mods and /vips result: the filterable list popup at the cursor."""
+        if name == "mods":
+            title, empty = f"Moderators ({len(names)})", "No moderators."
+        else:
+            title, empty = f"VIPs ({len(names)})", "No VIPs."
+        if self._user_list_popup is not None:
+            self._user_list_popup.close()
+        popup = UserListPopup(title, names, empty, parent=self)
+        popup.user_clicked.connect(lambda login: self._open_usercard_by_login(tab, login))
+        popup.closed.connect(self._on_user_list_closed)
+        self._user_list_popup = popup
+        popup.show_at_cursor()
+
+    def _on_user_list_closed(self) -> None:
+        self._user_list_popup = None
 
     def _twitch_note(self, tab: Tab, text: str) -> None:
         tab.add_message(Message.system(
