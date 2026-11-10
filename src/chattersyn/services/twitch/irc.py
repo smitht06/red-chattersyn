@@ -1,9 +1,10 @@
 """Twitch IRC over WebSocket: connect/caps/join pacing, reconnect with backoff,
-rate-limited send with client-nonce echo dedupe."""
+rate-limited send; own messages take their real id from Twitch's USERSTATE."""
 
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import datetime as dt
 import logging
@@ -38,7 +39,7 @@ JOIN_SPACING = 0.6  # seconds between JOINs (~16/10 s, Twitch allows 18)
 MAX_CHANNELS = 90  # total joined channels cap
 WELCOME_TIMEOUT = 15.0  # waiting for 001 before joins are released
 STABLE_RESET_AFTER = 30.0  # connected this long -> backoff resets on drop
-NONCE_TTL = 60.0  # pending echo nonce lifetime
+NONCE_TTL = 60.0  # how long a sent message waits for Twitch's USERSTATE id
 
 BACKOFF_BASE = 1.0
 BACKOFF_CAP = 15.0
@@ -108,7 +109,11 @@ class TwitchIrc:
 
         self._bucket = TokenBucket(SEND_CAPACITY, SEND_REFILL)
         self._send_spacing = MinInterval(send_spacing)
-        self._pending_nonces: dict[str, Message] = {}
+        # Sent messages waiting for their real id, per channel in send order.
+        # Twitch never echoes our own PRIVMSG; it answers each accepted one
+        # with USERSTATE carrying `id`, and each refused one with a msg_*
+        # NOTICE (both in send order).
+        self._waiting: dict[str, collections.deque[tuple[float, Message]]] = {}
 
         # Self identity from GLOBALUSERSTATE (for optimistic send rows).
         self.self_user_id: str | None = None
@@ -296,6 +301,7 @@ class TwitchIrc:
             return
 
         channel = self._channel_of(irc)
+        self._settle_waiting_send(irc, channel)
         try:
             result = self._mapper.map(irc, channel)
         except ForcedReconnect:
@@ -338,17 +344,31 @@ class TwitchIrc:
             self.badges = self._mapper.parse_self_badges(tags)
 
     def _handle_message(self, irc, msg: Message) -> None:
-        nonce = irc.tags.get("client-nonce", "")
-        if nonce and nonce in self._pending_nonces:
-            # Our own send echoed back: already shown optimistically; adopt the
-            # server-assigned id so /reply and logging reference the real one.
-            optimistic = self._pending_nonces.pop(nonce)
-            if msg.id:
-                optimistic.id = msg.id
-            log.debug("echo deduped for nonce %s", nonce)
-            return
         if self._on_message:
             self._on_message(msg)
+
+    def _settle_waiting_send(self, irc, channel: str) -> None:
+        """Give the oldest waiting send in `channel` Twitch's id (USERSTATE
+        with `id`), or drop it when Twitch refused it (a msg_* NOTICE)."""
+        if irc.command == "USERSTATE":
+            msg_id = irc.tags.get("id", "")
+            if not msg_id:
+                return  # the USERSTATE sent on JOIN carries no message id
+        elif irc.command == "NOTICE" and irc.tags.get("msg-id", "").startswith("msg_"):
+            msg_id = ""
+        else:
+            return
+        waiting = self._waiting.get(channel.lower())
+        if not waiting:
+            return
+        cutoff = self._now() - NONCE_TTL
+        while waiting and waiting[0][0] < cutoff:
+            waiting.popleft()  # never answered: keeps its placeholder id
+        if not waiting:
+            return
+        _, msg = waiting.popleft()
+        if msg_id:
+            msg.id = msg_id
 
     # -- outbound ----------------------------------------------------------------
 
@@ -375,11 +395,13 @@ class TwitchIrc:
         action: bool | None = None,
     ) -> Message:
         """Rate-limited PRIVMSG; returns the optimistic Message (already shown
-        by the caller — the echo is deduped). ``/me`` sends an ACTION.
+        by the caller). ``/me`` sends an ACTION. The Message waits for
+        Twitch's USERSTATE answer, which replaces its placeholder id with the
+        real one.
 
-        `optimistic`: when given, THAT Message object is registered for the
-        echo (its id is adopted on echo) and returned — callers show it
-        instantly instead of waiting for the rate bucket.
+        `optimistic`: when given, THAT Message object is the one that waits
+        (and gets the real id) and is returned — callers show it instantly
+        instead of waiting for the rate bucket.
         `action`: override the /me detection — the coordinator already
         stripped the prefix, so re-parsing would lose it.
         """
@@ -406,8 +428,6 @@ class TwitchIrc:
             tags.append(f"reply-parent-msg-id={reply_parent_id}")
         if reply_parent_login:
             tags.append(f"reply-parent-user-login={reply_parent_login}")
-        await ws.send(f"@{';'.join(tags)} PRIVMSG #{channel.lstrip('#')} :{payload}")
-
         msg = optimistic if optimistic is not None else Message(
             id=nonce,
             platform=Platform.TWITCH,
@@ -418,8 +438,15 @@ class TwitchIrc:
             plain=body,
             flags=MessageFlags.ACTION if is_action else MessageFlags.NONE,
         )
-        self._pending_nonces[nonce] = msg
-        asyncio.get_running_loop().call_later(
-            NONCE_TTL, lambda: self._pending_nonces.pop(nonce, None)
-        )
+        # Queue it BEFORE the line goes out: Twitch's USERSTATE answer can be
+        # read while ws.send is still awaiting.
+        key = channel.lstrip("#").lower()
+        entry = (self._now(), msg)
+        self._waiting.setdefault(key, collections.deque()).append(entry)
+        try:
+            await ws.send(f"@{';'.join(tags)} PRIVMSG #{channel.lstrip('#')} :{payload}")
+        except BaseException:
+            with contextlib.suppress(ValueError):
+                self._waiting[key].remove(entry)  # never sent: nothing will answer
+            raise
         return msg

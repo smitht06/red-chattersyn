@@ -14,7 +14,7 @@ from PySide6.QtCore import QSettings
 from chattersyn.config.settings import Settings
 from chattersyn.models.message import Author, Badge, Message, MessageFlags, Platform
 from chattersyn.services.commands import CommandController, ModAction
-from chattersyn.services.twitch.mapper import ClearChat, RoomState, UserState
+from chattersyn.services.twitch.mapper import ClearChat, ClearMsg, RoomState, UserState
 from chattersyn.services.youtube.service import WatchState, YoutubeState
 from chattersyn.ui.main_window import MainWindow
 from chattersyn.ui.usercard import UsercardTarget
@@ -870,3 +870,18 @@ async def test_usercard_drops_message_actions_without_targets_message(win, monke
     synthetic = _tw_msg()
     synthetic.extra["synthetic"] = True
     assert [a["name"] for a in win._usercard_custom_actions(tab, synthetic, target)] == ["Purge"]
+
+
+# -- own messages (OMI-6) ------------------------------------------------------------
+
+
+async def test_mod_delete_marks_own_row(win):
+    """OMI-6: once the own row holds Twitch's id, a CLEARMSG for it greys it out."""
+    tab = win._tabs[0]
+    own = Message.text(Platform.TWITCH, "redcyberdragon29",
+                       Author(name="Me", login="me"), "hello", id="optimistic-1")
+    tab.add_message(own)
+    tab._flush()
+    own.id = "abc-1"  # what TwitchIrc does when USERSTATE answers
+    win._on_bridge_event(ClearMsg(channel="redcyberdragon29", target_msg_id="abc-1", login="me"))
+    assert own.flags & MessageFlags.DELETED

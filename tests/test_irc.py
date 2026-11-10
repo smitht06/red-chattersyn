@@ -8,7 +8,7 @@ import time
 import pytest
 from fakeirc import FakeIrcServer
 
-from chattersyn.models.message import MessageFlags
+from chattersyn.models.message import Author, Message, MessageFlags, Platform
 from chattersyn.services.twitch.irc import NotAuthenticated, TwitchIrc
 from chattersyn.services.twitch.mapper import AuthFailed, TwitchMapper
 
@@ -115,7 +115,7 @@ async def test_token_sends_pass_and_anonymous_cannot_send():
 # -- send ---------------------------------------------------------------------------
 
 
-async def test_send_optimistic_with_nonce_and_echo_dedupe():
+async def test_send_optimistic_with_nonce():
     server = FakeIrcServer()
     await server.start()
     client, msgs, _, _ = make_client(server, nick="testuser", token="tok")
@@ -132,22 +132,149 @@ async def test_send_optimistic_with_nonce_and_echo_dedupe():
 
         line = await server.wait_for(lambda ln: "PRIVMSG #forsen :hello world" in ln)
         nonce = NONCE_RE.search(line).group(1)
-        assert msg.id == nonce
+        assert msg.id == nonce  # placeholder until Twitch's USERSTATE answers
 
-        # Server echoes our message back with the nonce + a real id: deduped.
-        await server.feed(
-            f"@badges=;color=#0D4200;client-nonce={nonce};display-name=TestUser;emotes=;"
-            f"id=server-42;mod=0;room-id=1;subscriber=0;tmi-sent-ts=1620000000000;"
-            f"turbo=0;user-id=999;user-type= "
-            f":testuser!testuser@testuser.tmi.twitch.tv PRIVMSG #forsen :hello world"
-        )
-        await wait_until(lambda: msg.id == "server-42")
-        assert msgs == []  # nothing double-published
-
-        # Unrelated message still surfaces.
+        # Other people's messages still surface.
         await server.feed(PRIVMSG_VIEWER)
         await wait_until(lambda: msgs)
         assert msgs[0].id == "m1"
+    finally:
+        await client.stop()
+        await server.stop()
+
+
+# -- own message ids (USERSTATE answers) ---------------------------------------------------
+
+
+def _userstate(channel, msg_id=None):
+    tags = "badges=;color=#0D4200;display-name=TestUser;emote-sets=0;mod=0;subscriber=0;user-type="
+    if msg_id:
+        tags = f"{tags};id={msg_id}"
+    return f"@{tags} :tmi.twitch.tv USERSTATE #{channel}"
+
+
+async def _signed_in(**kwargs):
+    server = FakeIrcServer()
+    await server.start()
+    client, msgs, events, _ = make_client(server, nick="testuser", token="tok", **kwargs)
+    client.start()
+    await server.wait_for(lambda ln: ln.startswith("NICK"))
+    await welcome(server, "testuser")
+    await wait_until(lambda: client.display_name == "TestUser")
+    return server, client, events
+
+
+async def _sent(server, client, channel, text):
+    msg = await client.send(channel, text)
+    await server.wait_for(lambda ln: f"PRIVMSG #{channel} :{text}" in ln)
+    return msg
+
+
+async def test_userstate_id_adopted():
+    """OMI-1."""
+    server, client, _ = await _signed_in()
+    try:
+        msg = await _sent(server, client, "alice", "hello")
+        await server.feed(_userstate("alice", "abc-1"))
+        await wait_until(lambda: msg.id == "abc-1")
+    finally:
+        await client.stop()
+        await server.stop()
+
+
+async def test_two_sends_in_order():
+    """OMI-2."""
+    server, client, _ = await _signed_in()
+    try:
+        one = await _sent(server, client, "alice", "one")
+        two = await _sent(server, client, "alice", "two")
+        await server.feed(_userstate("alice", "id-1"))
+        await server.feed(_userstate("alice", "id-2"))
+        await wait_until(lambda: two.id == "id-2")
+        assert one.id == "id-1"
+    finally:
+        await client.stop()
+        await server.stop()
+
+
+async def test_refusal_consumes_oldest():
+    """OMI-3."""
+    server, client, _ = await _signed_in()
+    try:
+        one = await _sent(server, client, "alice", "one")
+        placeholder = one.id
+        two = await _sent(server, client, "alice", "two")
+        await server.feed(
+            "@msg-id=msg_duplicate :tmi.twitch.tv NOTICE #alice "
+            ":Your message was not sent because it is identical to the previous one you sent.")
+        await server.feed(_userstate("alice", "id-2"))
+        await wait_until(lambda: two.id == "id-2")
+        assert one.id == placeholder
+    finally:
+        await client.stop()
+        await server.stop()
+
+
+async def test_join_userstate_ignored():
+    """OMI-4."""
+    server, client, _ = await _signed_in()
+    try:
+        msg = await _sent(server, client, "alice", "hello")
+        placeholder = msg.id
+        await server.feed(_userstate("alice"))
+        await asyncio.sleep(0.05)
+        assert msg.id == placeholder
+        await server.feed(_userstate("alice", "abc-1"))
+        await wait_until(lambda: msg.id == "abc-1")
+    finally:
+        await client.stop()
+        await server.stop()
+
+
+async def test_channels_kept_apart():
+    """OMI-5."""
+    server, client, _ = await _signed_in()
+    try:
+        msg = await _sent(server, client, "alice", "hi")
+        placeholder = msg.id
+        await server.feed(_userstate("bob", "b-1"))
+        await asyncio.sleep(0.05)
+        assert msg.id == placeholder
+        await server.feed(_userstate("alice", "a-1"))
+        await wait_until(lambda: msg.id == "a-1")
+    finally:
+        await client.stop()
+        await server.stop()
+
+
+async def test_userstate_id_lands_on_the_shown_row():
+    """Review Focus 1: the id goes onto the very Message object the tab shows."""
+    server, client, _ = await _signed_in()
+    try:
+        shown = Message.text(Platform.TWITCH, "alice", Author(name="TestUser", login="testuser"),
+                             "hello", id="optimistic-1")
+        returned = await client.send("alice", "hello", optimistic=shown)
+        assert returned is shown
+        await server.wait_for(lambda ln: "PRIVMSG #alice :hello" in ln)
+        await server.feed(_userstate("alice", "abc-1"))
+        await wait_until(lambda: shown.id == "abc-1")
+    finally:
+        await client.stop()
+        await server.stop()
+
+
+async def test_waiting_send_expires():
+    """A send with no answer within 60 s stops waiting and keeps its placeholder."""
+    clock = [1000.0]
+    server, client, _ = await _signed_in(now=lambda: clock[0])
+    try:
+        old = await _sent(server, client, "alice", "old")
+        placeholder = old.id
+        clock[0] += 61
+        new = await _sent(server, client, "alice", "new")
+        await server.feed(_userstate("alice", "n-1"))
+        await wait_until(lambda: new.id == "n-1")
+        assert old.id == placeholder
     finally:
         await client.stop()
         await server.stop()
