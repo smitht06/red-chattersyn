@@ -137,11 +137,13 @@ async def test_delete_requested_youtube_hides_one_row(win):
     assert msg.flags & MessageFlags.DISABLED
 
 
-async def test_delete_requested_twitch_is_deferred(win):
+async def test_delete_requested_twitch_runs_delete_command(win, monkeypatch):
     tab = win._tabs[0]
-    win._on_delete_requested(tab, _tw_msg())
-    tab._flush()
-    assert "channel:moderate" in _system_rows(win)[-1].plain
+    ran = []
+    monkeypatch.setattr(win, "_run_command", lambda t, text: ran.append((t, text)))
+    msg = _tw_msg()
+    win._on_delete_requested(tab, msg)
+    assert ran == [(tab, f"/delete {msg.id}")]
 
 
 async def test_pin_requested_shows_banner(win):
