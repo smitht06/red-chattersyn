@@ -61,6 +61,11 @@ class ForcedReconnect(Exception):
     """The server told us to reconnect (:tmi.twitch.tv RECONNECT)."""
 
 
+def _is_server_command(body: str) -> bool:
+    """'/help', '.disconnect' — not '...lol' or '/ '; /me is resolved earlier."""
+    return len(body) >= 2 and body[0] in "/." and body[1].isalpha()
+
+
 class TwitchIrc:
     """One WebSocket connection to Twitch chat carrying any number of joined
     channels. Callbacks are plain callables invoked on the event loop."""
@@ -238,6 +243,10 @@ class TwitchIrc:
                 pacer.cancel()
                 watchdog.cancel()
                 self._ws = None
+                # Answers are per connection: whatever still waits can't be
+                # answered on the next one and would take a later send's id.
+                for waiting in self._waiting.values():
+                    waiting.clear()
 
     async def _welcome_watchdog(self) -> None:
         """Close the socket if 001 never arrives, so _run reconnects."""
@@ -364,6 +373,7 @@ class TwitchIrc:
         cutoff = self._now() - NONCE_TTL
         while waiting and waiting[0][0] < cutoff:
             waiting.popleft()  # never answered: keeps its placeholder id
+            log.debug("send in #%s got no answer within %ss", channel, NONCE_TTL)
         if not waiting:
             return
         _, msg = waiting.popleft()
@@ -440,13 +450,18 @@ class TwitchIrc:
         )
         # Queue it BEFORE the line goes out: Twitch's USERSTATE answer can be
         # read while ws.send is still awaiting.
+        # A server command (/help, /disconnect, …) creates no chat message:
+        # Twitch answers it with its own NOTICE, never a message id.
         key = channel.lstrip("#").lower()
         entry = (self._now(), msg)
-        self._waiting.setdefault(key, collections.deque()).append(entry)
+        if is_action or not _is_server_command(body):
+            self._waiting.setdefault(key, collections.deque()).append(entry)
         try:
             await ws.send(f"@{';'.join(tags)} PRIVMSG #{channel.lstrip('#')} :{payload}")
         except BaseException:
             with contextlib.suppress(ValueError):
-                self._waiting[key].remove(entry)  # never sent: nothing will answer
+                waiting = self._waiting.get(key)
+                if waiting is not None:
+                    waiting.remove(entry)  # never sent: nothing will answer
             raise
         return msg

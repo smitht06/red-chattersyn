@@ -15,7 +15,8 @@ Responsibilities (plan M3):
   the only protection
 - echo adoption: the YouTube insert-response id replaces the optimistic
   message id and is registered so the reader's echo can be deduped
-  (note_echo); Twitch's echo dedupe stays inside IRC (client-nonce)
+  (note_echo); Twitch never echoes, and IRC gives the optimistic message
+  its real id from Twitch's USERSTATE answer
 
 The coordinator is UI-agnostic: it emits SendResult on bridge.send_result;
 MainWindow renders chips/system rows and shows the returned optimistic

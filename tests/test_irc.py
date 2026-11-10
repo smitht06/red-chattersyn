@@ -1,5 +1,5 @@
 """TwitchIrc against the in-process fake IRC server: connect/join, send with
-nonce dedupe, ACTION/reply tags, PING, reconnect + rejoin, backoff, caps."""
+own-message ids, ACTION/reply tags, PING, reconnect + rejoin, backoff, caps."""
 
 import asyncio
 import re
@@ -258,6 +258,83 @@ async def test_userstate_id_lands_on_the_shown_row():
         await server.wait_for(lambda ln: "PRIVMSG #alice :hello" in ln)
         await server.feed(_userstate("alice", "abc-1"))
         await wait_until(lambda: shown.id == "abc-1")
+    finally:
+        await client.stop()
+        await server.stop()
+
+
+async def test_dropped_connection_clears_waiting_sends():
+    """A send whose answer died with the old connection must not take the id
+    of a later message (final review, Important 1)."""
+    server, client, _ = await _signed_in()
+    try:
+        a = await _sent(server, client, "alice", "a")
+        placeholder = a.id
+        before = server.count(lambda ln: ln.startswith("NICK"))
+        await server.close_all()
+        await wait_until(lambda: server.count(lambda ln: ln.startswith("NICK")) > before)
+        await welcome(server, "testuser")
+        await wait_until(lambda: client._connected.is_set())
+        b = await _sent(server, client, "alice", "b")
+        await server.feed(_userstate("alice", "id-b"))
+        await wait_until(lambda: b.id == "id-b")
+        assert a.id == placeholder
+    finally:
+        await client.stop()
+        await server.stop()
+
+
+async def test_server_command_is_not_queued():
+    """/help gets a NOTICE (cmds_available), never a message id: a later
+    send must still get its own id (final review, Important 2)."""
+    server, client, _ = await _signed_in()
+    try:
+        await _sent(server, client, "alice", "/help")
+        await server.feed(
+            "@msg-id=cmds_available :tmi.twitch.tv NOTICE #alice :Commands available to you…")
+        b = await _sent(server, client, "alice", "b")
+        await server.feed(_userstate("alice", "id-b"))
+        await wait_until(lambda: b.id == "id-b")
+    finally:
+        await client.stop()
+        await server.stop()
+
+
+async def test_dot_text_and_me_are_still_queued():
+    """'...lol' is chat, and /me is a chat message too: both wait for an id."""
+    server, client, _ = await _signed_in()
+    try:
+        dots = await _sent(server, client, "alice", "...lol")
+        me = await client.send("alice", "/me waves")
+        await server.wait_for(lambda ln: "ACTION waves" in ln)
+        await server.feed(_userstate("alice", "id-dots"))
+        await server.feed(_userstate("alice", "id-me"))
+        await wait_until(lambda: me.id == "id-me")
+        assert dots.id == "id-dots"
+    finally:
+        await client.stop()
+        await server.stop()
+
+
+async def test_failed_send_is_not_left_waiting(monkeypatch):
+    """A send whose write fails is removed, so the next send gets the next id."""
+    server, client, _ = await _signed_in()
+    try:
+        ws = client._ws
+        real_send = ws.send
+        calls = {"n": 0}
+
+        async def flaky(line):
+            if "PRIVMSG" in line and calls["n"] == 0:
+                calls["n"] += 1
+                raise ConnectionError("boom")
+            return await real_send(line)
+        monkeypatch.setattr(ws, "send", flaky)
+        with pytest.raises(ConnectionError):
+            await client.send("alice", "lost")
+        ok = await _sent(server, client, "alice", "ok")
+        await server.feed(_userstate("alice", "id-ok"))
+        await wait_until(lambda: ok.id == "id-ok")
     finally:
         await client.stop()
         await server.stop()
