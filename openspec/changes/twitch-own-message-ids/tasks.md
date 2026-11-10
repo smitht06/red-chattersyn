@@ -27,7 +27,7 @@ mapped and dispatched as today. The dead echo path in `_handle_message` goes.
 
 ## 1. Chat connection
 
-- [ ] 1.1 Waiting sends take USERSTATE ids — verify: uv run pytest tests/test_irc.py tests/test_main_window_moderation.py -q passes
+- [x] 1.1 Waiting sends take USERSTATE ids — verify: uv run pytest tests/test_irc.py tests/test_main_window_moderation.py -q passes
 
 Covers: OMI-1, OMI-2, OMI-3, OMI-4, OMI-5, OMI-6 · Test: scenario-first
 
