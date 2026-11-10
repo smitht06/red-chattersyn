@@ -88,7 +88,7 @@ Interfaces:
 3. Run the verify command, then `uv run pytest -q`. Expected: PASS.
 4. Commit `feat(commands): moderation commands become Helix commands`.
 
-- [ ] 2.2 Run Helix commands from MainWindow — verify: uv run pytest tests/test_main_window_mod_commands.py -q passes
+- [x] 2.2 Run Helix commands from MainWindow — verify: uv run pytest tests/test_main_window_mod_commands.py -q passes
 
 Covers: THM-5, THM-6, THM-8, THM-11 · Test: scenario-first
 
