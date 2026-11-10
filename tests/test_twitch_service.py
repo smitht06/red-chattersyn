@@ -10,8 +10,14 @@ from fakeirc import FakeIrcServer
 from chattersyn.config.settings import Settings
 from chattersyn.core.bus import bridge
 from chattersyn.services.twitch import service as service_module
-from chattersyn.services.twitch.auth import TOKEN_KEY, TOKEN_URL, VALIDATE_URL, TwitchTokens
-from chattersyn.services.twitch.helix import BASE
+from chattersyn.services.twitch.auth import (
+    TOKEN_KEY,
+    TOKEN_URL,
+    VALIDATE_URL,
+    TwitchTokens,
+    TwitchUnreachable,
+)
+from chattersyn.services.twitch.helix import BASE, Helix, HelixError
 from chattersyn.services.twitch.irc import TwitchIrc
 from chattersyn.services.twitch.mapper import AuthFailed
 from chattersyn.services.twitch.service import EXPIRED_MESSAGE, REJECTED_MESSAGE, TwitchService
@@ -1037,3 +1043,152 @@ async def test_stale_and_anonymous_refusals_are_ignored(launch):
     assert refresh.call_count == 0
     assert service._relogin_task is None
     assert auth == []
+
+
+# -- account features during an outage ----------------------------------------------------------
+
+
+def _expired_validate(request):
+    """Validate answers 401 for the saved token (it needs a refresh)."""
+    return httpx.Response(401)
+
+
+@respx.mock
+async def test_ban_during_outage_fails_only_that_action(launch):
+    """TSR-20"""
+    make, _, auth = launch
+    service, store = make()
+    service.tokens = service.auth.load_tokens()
+    service.helix = Helix("cid", service._user_token)
+    respx.get(VALIDATE_URL).mock(side_effect=_expired_validate)
+    refresh = respx.post(TOKEN_URL).mock(return_value=httpx.Response(503))
+    ban = respx.post(f"{BASE}/moderation/bans").mock(return_value=httpx.Response(200, json={"data": []}))
+    before = store.get(TOKEN_KEY)
+    try:
+        with pytest.raises(TwitchUnreachable):
+            await service.helix.ban_user("1", "2", "3")
+        assert refresh.call_count == 1
+        # Only that action failed: login kept, tokens untouched, no read-only fallback.
+        assert store.get(TOKEN_KEY) == before
+        assert store.deleted == []
+        assert service.tokens is not None and service.tokens.access_token == "acc-1"
+        assert service._expired_task is None
+        assert auth == []
+        # The next action asks Twitch again (the refresh answers this time).
+        refresh.mock(return_value=_refreshed("acc-2", "ref-2"))
+        respx.get(VALIDATE_URL).mock(side_effect=lambda req: (
+            httpx.Response(401) if req.headers["Authorization"] == "OAuth acc-1" else _validate_ok()))
+        await service.helix.ban_user("1", "2", "3")
+        assert refresh.call_count == 2
+        assert ban.call_count == 1
+    finally:
+        await service.stop()
+
+
+@respx.mock
+async def test_helix_definite_rejection_falls_back(launch):
+    """Review Focus 4 / TSR-4"""
+    make, _, auth = launch
+    service, store = make()
+    respx.get(VALIDATE_URL).mock(return_value=_validate_ok())
+    _mock_helix_globals()
+    await service.start()
+    signed_in = _LaunchIrc.built[-1]
+    assert not signed_in.is_anonymous
+    # Concurrent Helix calls all see the rejection; only one fall-back runs.
+    respx.get(VALIDATE_URL).mock(side_effect=_expired_validate)
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(400))
+    helix = service.helix
+    helix.invalidate_token()  # the cached access token has lapsed
+    try:
+        results = await asyncio.gather(
+            helix.user_by_login("a"), helix.user_by_login("b"), return_exceptions=True)
+        assert all(isinstance(r, HelixError) for r in results)
+        assert service._expired_task is not None
+        await service._expired_task
+        read_only = _LaunchIrc.built[-1]
+        assert signed_in.stopped
+        assert read_only is not signed_in and read_only.is_anonymous and read_only.started
+        assert service.irc is read_only
+        assert service.tokens is None
+        assert service.helix is None
+        assert store.get(TOKEN_KEY) is None
+        assert auth == [("twitch", False, EXPIRED_MESSAGE)]
+        assert len(_LaunchIrc.built) == 2
+    finally:
+        await service.stop()
+
+
+@respx.mock
+async def test_reconnect_unreachable_keeps_connection(launch):
+    make, _, auth = launch
+    service, store = make()
+    respx.get(VALIDATE_URL).mock(return_value=_validate_ok())
+    _mock_helix_globals()
+    await service.start()
+    current = service.irc
+    respx.get(VALIDATE_URL).mock(side_effect=_expired_validate)
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(503))
+    try:
+        assert await service.reconnect() is False
+        assert service.irc is current
+        assert not current.stopped
+        assert len(_LaunchIrc.built) == 1
+    finally:
+        await service.stop()
+    assert store.get(TOKEN_KEY) is not None
+    assert auth == [("twitch", False,
+                     "sign-in succeeded but the token refresh failed — try connecting again")]
+
+
+@respx.mock
+async def test_sign_out_cancels_running_relogin(launch):
+    make, _, auth = launch
+    service, store = make()
+    respx.get(VALIDATE_URL).mock(return_value=_validate_ok())
+    _mock_helix_globals()
+    await service.start()
+    signed_in = _LaunchIrc.built[-1]
+    release, asked = asyncio.Event(), asyncio.Event()
+
+    async def slow_refresh(request):
+        asked.set()
+        await release.wait()
+        return _refreshed("acc-2", "ref-2")
+
+    respx.post(TOKEN_URL).mock(side_effect=slow_refresh)
+    signed_in.kwargs["on_auth"](AuthFailed("Login authentication failed"))
+    await asyncio.wait_for(asked.wait(), 5)  # the re-login waits on the slow refresh
+    relogin = service._relogin_task
+    service._relogin_spent = True
+    try:
+        await service.disconnect()
+        assert relogin.done()
+        assert service._relogin_task is None
+        assert service._relogin_spent is False
+        anonymous = _LaunchIrc.built[-1]
+        assert anonymous.is_anonymous and service.irc is anonymous
+        release.set()
+        await asyncio.sleep(0.1)  # the finished refresh must not swap the connection back
+        assert service.irc is anonymous
+        assert len(_LaunchIrc.built) == 2
+        assert service.tokens is None
+        assert auth == []
+    finally:
+        release.set()
+        await service.stop()
+
+
+@respx.mock
+async def test_connect_account_resets_spent_relogin(launch):
+    make, _, _ = launch
+    service, store = make()
+    respx.get(VALIDATE_URL).mock(return_value=_validate_ok())
+    _mock_helix_globals()
+    await service.start()
+    service._relogin_spent = True
+    try:
+        assert await service.reconnect() is True
+    finally:
+        await service.stop()
+    assert service._relogin_spent is False

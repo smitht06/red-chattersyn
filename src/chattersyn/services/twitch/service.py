@@ -52,6 +52,8 @@ class TwitchService:
         # to a rebuilt connection, cleared by that connection's welcome.
         self._relogin_task: asyncio.Task | None = None
         self._relogin_spent = False
+        # The fall-back a Helix call's definite rejection scheduled (once).
+        self._expired_task: asyncio.Task | None = None
 
     @property
     def unreachable(self) -> bool:
@@ -161,7 +163,13 @@ class TwitchService:
         anonymous/old connection and every desired channel re-joins.
         False = the swap did not happen (the caller must not report the
         account as connected)."""
-        tokens = await self.auth.ensure_valid()
+        await self._cancel_relogin()
+        self._relogin_spent = False
+        try:
+            tokens = await self.auth.ensure_valid()
+        except TwitchUnreachable as exc:
+            log.warning("token refresh unreachable after sign-in (%r) — keeping the current connection", exc)
+            tokens = None
         if tokens is None:
             # A refresh failure right after sign-in must not silently swap
             # the connection for an anonymous justinfan one while the UI
@@ -187,6 +195,8 @@ class TwitchService:
     async def disconnect(self) -> None:
         """Sign out: clear the stored tokens and swap the connection back to
         anonymous read-only (justinfan), re-joining every desired channel."""
+        await self._cancel_relogin()
+        self._relogin_spent = False
         self.auth.clear()
         self.tokens = None
         if self.helix is not None:
@@ -202,11 +212,21 @@ class TwitchService:
     async def _user_token(self) -> str | None:
         """Validated/refreshed access token for Helix's TokenProvider; None
         when re-authorization is needed. Syncs self.tokens so the IRC
-        mapper's self_user_id follows a Helix-triggered refresh."""
-        self.tokens = await self.auth.ensure_valid()
-        if self.tokens is None:
+        mapper's self_user_id follows a Helix-triggered refresh.
+
+        TwitchUnreachable propagates: only that Helix action fails, the saved
+        login and self.tokens stay as they are. A definite rejection also
+        drops the signed-in connection (once, however many calls see it)."""
+        tokens = await self.auth.ensure_valid()
+        if tokens is None:
+            if self.tokens is not None and (self._expired_task is None or self._expired_task.done()):
+                log.warning("Twitch login rejected on an account action — running read-only until re-auth")
+                self._expired_task = asyncio.ensure_future(
+                    self._fall_back_read_only(EXPIRED_MESSAGE, delete=True))
+            self.tokens = None
             return None
-        return self.tokens.access_token
+        self.tokens = tokens
+        return tokens.access_token
 
     async def ensure_helix(self) -> None:
         """Create the Helix client when a user token exists (start() or a
