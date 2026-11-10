@@ -72,7 +72,7 @@ Interfaces:
 
 ## 2. Commands
 
-- [ ] 2.1 Parse commands into HelixCommand; hosting and usage rows — verify: uv run pytest tests/test_commands.py -q passes
+- [x] 2.1 Parse commands into HelixCommand; hosting and usage rows — verify: uv run pytest tests/test_commands.py -q passes
 
 Covers: THM-22, THM-25, THM-26, THM-27 · Test: scenario-first
 
