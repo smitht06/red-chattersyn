@@ -54,6 +54,9 @@ class TwitchService:
         self._relogin_spent = False
         # The fall-back a Helix call's definite rejection scheduled (once).
         self._expired_task: asyncio.Task | None = None
+        # Read-only fall-backs run one at a time: two interleaved swaps
+        # would leave an orphaned anonymous client running.
+        self._fall_back_lock = asyncio.Lock()
 
     @property
     def unreachable(self) -> bool:
@@ -66,15 +69,16 @@ class TwitchService:
     async def start(self) -> None:
         if self.auth.configured() and self.auth.load_tokens() is not None:
             try:
-                # Stop *waiting* at the limit: wait_for cancels only this
-                # caller; an in-flight refresh runs on in the background and
-                # saves (its refresh token is single-use).
+                # Stop *waiting* at the limit: wait_for cancels ensure_valid's
+                # waiting, while the shielded refresh inside TwitchAuth keeps
+                # running and saves (its refresh token is single-use).
                 self.tokens = await asyncio.wait_for(self.auth.ensure_valid(), LAUNCH_CHECK_TIMEOUT)
             except (TimeoutError, TwitchUnreachable) as exc:
                 log.warning("Twitch token check unfinished (%r) — connecting with the saved login", exc)
-                self.tokens = self.auth.load_tokens()
-                self._check_pending = self.tokens is not None
-                self._set_unreachable()
+                self._connect_unchecked()
+            except Exception:
+                log.exception("Twitch token check failed — connecting with the saved login")
+                self._connect_unchecked()
             else:
                 if self.tokens is None:
                     log.warning("stored Twitch login rejected — running read-only until re-auth")
@@ -86,33 +90,51 @@ class TwitchService:
         self.irc.start()
         self._join_desired()
 
+    def _connect_unchecked(self) -> None:
+        """The launch check couldn't finish: use the saved login as it is
+        and check it on the next signed-in welcome."""
+        self.tokens = self.auth.load_tokens()
+        self._check_pending = self.tokens is not None
+        self._set_unreachable()
+
     async def _fall_back_read_only(self, message: str, *, delete: bool) -> None:
         """Swap to an anonymous read-only connection and announce why.
         `delete` also removes the saved login (when Twitch rejected it)."""
-        await self._cancel_relogin()
         if delete:
             self.auth.clear()
-        self.tokens = None
-        self._check_pending = False
-        self._relogin_spent = False
-        if self.helix is not None:
-            await self.helix.close()
-            self.helix = None
-        if self.irc is not None:
-            await self.irc.stop()
-            self.irc = None
-        self.irc = self._make_irc()
-        self.irc.start()
-        self._join_desired()
-        bridge.auth_state.emit("twitch", False, message)
+        await self._cancel_tasks()  # supersedes an older fall-back too
+        async with self._fall_back_lock:
+            self.tokens = None
+            self._check_pending = False
+            self._relogin_spent = False
+            if self.helix is not None:
+                helix, self.helix = self.helix, None
+                await helix.close()
+            if self.irc is not None:
+                irc, self.irc = self.irc, None
+                await irc.stop()
+            self.irc = self._make_irc()
+            self.irc.start()
+            self._join_desired()
+            bridge.auth_state.emit("twitch", False, message)
 
-    async def _cancel_relogin(self) -> None:
-        """Stop a running re-login (never the calling one). Safe mid-refresh:
-        the token refresh itself is shielded and finishes on its own."""
-        task, self._relogin_task = self._relogin_task, None
-        if task is not None and not task.done() and task is not asyncio.current_task():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+    async def _cancel_tasks(self) -> None:
+        """Stop every token-work task the service owns - catch-up, re-login,
+        read-only fall-back - but never the calling one. Safe mid-refresh:
+        the token refresh itself is shielded and finishes on its own, and
+        TwitchAuth won't save it over a changed login."""
+        current = asyncio.current_task()
+        pending = []
+        for name in ("_catch_up_task", "_relogin_task", "_expired_task"):
+            task = getattr(self, name)
+            if task is None or task is current:
+                continue
+            setattr(self, name, None)
+            if not task.done():
+                task.cancel()
+                pending.append(task)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
 
     def _set_unreachable(self) -> None:
         self._unreachable = True
@@ -122,25 +144,30 @@ class TwitchService:
         bridge.connection_state.emit(
             {"platform": "twitch", "channel_id": "", "state": state, "detail": detail})
 
-    def _on_irc_connected(self, signed_in: bool) -> None:
+    def _on_irc_connected(self, signed_in: bool, source: TwitchIrc | None = None) -> None:
         self._unreachable = False
         if signed_in:
             self._relogin_spent = False
         self._emit_connection("connected", "signed_in" if signed_in else "anonymous")
         if signed_in and (self._catch_up_task is None or self._catch_up_task.done()):
-            self._catch_up_task = asyncio.ensure_future(self._catch_up())
+            self._catch_up_task = asyncio.ensure_future(
+                self._catch_up(source if source is not None else self.irc))
 
-    async def _catch_up(self) -> None:
-        """Run on each signed-in welcome: finish everything an outage or an
-        offline launch left undone — the token check, the Helix client, the
-        global badges/emotes and each channel's badges/emotes. Steps that
-        already succeeded are not repeated."""
+    async def _catch_up(self, source: TwitchIrc | None) -> None:
+        """Run on each signed-in welcome of `source`: finish everything an
+        outage or an offline launch left undone — the token check, the Helix
+        client, the global badges/emotes and each channel's badges/emotes.
+        Steps that already succeeded are not repeated. Stops as soon as
+        `source` is no longer the live connection (sign-out, reconnect,
+        read-only swap)."""
         try:
             if self._check_pending:
                 try:
                     tokens = await self.auth.ensure_valid()
                 except TwitchUnreachable:
                     return  # stay pending; the next welcome tries again
+                if self.irc is not source:
+                    return
                 if tokens is None:
                     await self._fall_back_read_only(EXPIRED_MESSAGE, delete=True)
                     return
@@ -150,6 +177,8 @@ class TwitchService:
                 await self.ensure_helix()  # also loads the global badges/emotes
             elif not self._global_badges_loaded:
                 await self._load_global_badges()
+            if self.irc is not source:
+                return
             for name in list(self._desired):
                 self._kick_metadata(name)  # skips channels that already loaded
         except asyncio.CancelledError:
@@ -163,7 +192,7 @@ class TwitchService:
         anonymous/old connection and every desired channel re-joins.
         False = the swap did not happen (the caller must not report the
         account as connected)."""
-        await self._cancel_relogin()
+        await self._cancel_tasks()
         self._relogin_spent = False
         try:
             tokens = await self.auth.ensure_valid()
@@ -180,6 +209,7 @@ class TwitchService:
                 "sign-in succeeded but the token refresh failed — try connecting again")
             return False
         self.tokens = tokens
+        self._check_pending = False  # just checked
         if self.helix is None:
             await self.ensure_helix()
         else:
@@ -195,8 +225,9 @@ class TwitchService:
     async def disconnect(self) -> None:
         """Sign out: clear the stored tokens and swap the connection back to
         anonymous read-only (justinfan), re-joining every desired channel."""
-        await self._cancel_relogin()
+        await self._cancel_tasks()
         self._relogin_spent = False
+        self._check_pending = False
         self.auth.clear()
         self.tokens = None
         if self.helix is not None:
@@ -265,18 +296,14 @@ class TwitchService:
             on_message=self._on_message,
             on_event=self._on_event,
             on_auth=lambda event: self._on_auth(event, born[0], token),
-            on_connected=functools.partial(self._on_irc_connected, token is not None),
+            on_connected=lambda: self._on_irc_connected(token is not None, born[0]),
             on_connect_failed=self._set_unreachable,
         )
         born.append(irc)
         return irc
 
     async def stop(self) -> None:
-        await self._cancel_relogin()
-        task = self._catch_up_task
-        if task is not None and not task.done() and task is not asyncio.current_task():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        await self._cancel_tasks()
         if self.irc is not None:
             await self.irc.stop()
             self.irc = None

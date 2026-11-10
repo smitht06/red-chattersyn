@@ -527,7 +527,7 @@ async def test_irc_reports_reach_state_to_the_bridge(launch):
     service, _ = make(DictStore())
     service.tokens = TwitchTokens(**tokens_json(login="saveduser"))
 
-    async def no_catch_up():  # the welcome's catch-up has its own tests
+    async def no_catch_up(source):  # the welcome's catch-up has its own tests
         pass
 
     service._catch_up = no_catch_up
@@ -776,7 +776,7 @@ async def test_catch_up_runs_once_at_a_time(catch_up_env):
     release = asyncio.Event()
     started = []
 
-    async def slow_catch_up():
+    async def slow_catch_up(source):
         started.append(1)
         await release.wait()
 
@@ -1192,3 +1192,226 @@ async def test_connect_account_resets_spent_relogin(launch):
     finally:
         await service.stop()
     assert service._relogin_spent is False
+
+
+# -- final review: sign-out sticks while token work is in flight ---------------------------------
+
+
+@respx.mock
+async def test_sign_out_during_relogin_refresh_keeps_store_empty(launch):
+    make, _, auth = launch
+    service, store = make()
+    respx.get(VALIDATE_URL).mock(return_value=_validate_ok())
+    _mock_helix_globals()
+    await service.start()
+    signed_in = _LaunchIrc.built[-1]
+    release, asked = asyncio.Event(), asyncio.Event()
+
+    async def slow_refresh(request):
+        asked.set()
+        await release.wait()
+        return _refreshed("acc-2", "ref-2")
+
+    respx.post(TOKEN_URL).mock(side_effect=slow_refresh)
+    signed_in.kwargs["on_auth"](AuthFailed("Login authentication failed"))
+    await asyncio.wait_for(asked.wait(), 5)
+    try:
+        await service.disconnect()
+        assert TOKEN_KEY not in store.data
+        release.set()
+        await asyncio.sleep(0.1)  # the shielded refresh finishes in the background
+        assert TOKEN_KEY not in store.data, "the login came back after sign-out"
+        assert service.tokens is None
+        assert service.helix is None
+        assert service.irc.is_anonymous
+    finally:
+        release.set()
+        await service.stop()
+
+
+@respx.mock
+async def test_sign_out_during_catch_up_check_keeps_store_empty(launch):
+    make, _, auth = launch
+    service, store = make()
+    respx.get(VALIDATE_URL).mock(side_effect=httpx.ConnectError("offline"))
+    await service.start()
+    assert service._check_pending
+    release, asked = asyncio.Event(), asyncio.Event()
+
+    async def slow_validate(request):
+        asked.set()
+        await release.wait()
+        return _validate_ok()
+
+    respx.get(VALIDATE_URL).mock(side_effect=slow_validate)
+    _mock_helix_globals()
+    _LaunchIrc.built[-1].kwargs["on_connected"]()
+    await asyncio.wait_for(asked.wait(), 5)
+    catch_up = service._catch_up_task
+    try:
+        await service.disconnect()
+        assert catch_up.done()
+        assert service._check_pending is False
+        release.set()
+        await asyncio.sleep(0.1)
+        assert TOKEN_KEY not in store.data
+        assert service.tokens is None
+        assert service.helix is None
+        assert service.irc.is_anonymous
+    finally:
+        release.set()
+        await service.stop()
+
+
+@respx.mock
+async def test_catch_up_bails_when_the_connection_was_replaced(launch):
+    make, _, _ = launch
+    service, store = make()
+    respx.get(VALIDATE_URL).mock(side_effect=httpx.ConnectError("offline"))
+    await service.start()
+    release, asked = asyncio.Event(), asyncio.Event()
+
+    async def slow_validate(request):
+        asked.set()
+        await release.wait()
+        return _validate_ok()
+
+    respx.get(VALIDATE_URL).mock(side_effect=slow_validate)
+    _mock_helix_globals()
+    welcomed = _LaunchIrc.built[-1]
+    welcomed.kwargs["on_connected"]()
+    await asyncio.wait_for(asked.wait(), 5)
+    catch_up = service._catch_up_task
+    replacement = _LaunchIrc(None, token=None)  # some swap that doesn't own the catch-up
+    service.irc = replacement
+    service.tokens = None
+    try:
+        release.set()
+        await asyncio.wait_for(catch_up, 5)
+        assert service.tokens is None
+        assert service.helix is None
+        assert service.irc is replacement
+    finally:
+        await service.stop()
+
+
+async def _parked():
+    await asyncio.sleep(30)
+
+
+@pytest.mark.parametrize("action", ["disconnect", "reconnect", "stop", "fall_back"])
+@respx.mock
+async def test_service_actions_cancel_every_owned_task(launch, action):
+    make, _, _ = launch
+    service, _ = make()
+    respx.get(VALIDATE_URL).mock(return_value=_validate_ok())
+    _mock_helix_globals()
+    await service.start()
+    tasks = {name: asyncio.ensure_future(_parked())
+             for name in ("_catch_up_task", "_relogin_task", "_expired_task")}
+    for name, task in tasks.items():
+        setattr(service, name, task)
+    service._check_pending = True
+    try:
+        if action == "fall_back":
+            await service._fall_back_read_only(REJECTED_MESSAGE, delete=False)
+        else:
+            await getattr(service, action)()
+        for name, task in tasks.items():
+            assert task.cancelled(), f"{name} survived {action}()"
+        if action in ("disconnect", "reconnect", "fall_back"):
+            assert service._check_pending is False
+    finally:
+        for task in tasks.values():
+            task.cancel()
+        await service.stop()
+
+
+@respx.mock
+async def test_fall_back_never_cancels_its_own_task(launch):
+    make, _, auth = launch
+    service, _ = make()
+    respx.get(VALIDATE_URL).mock(return_value=_validate_ok())
+    _mock_helix_globals()
+    await service.start()
+    try:
+        service._expired_task = asyncio.ensure_future(
+            service._fall_back_read_only(EXPIRED_MESSAGE, delete=True))
+        await asyncio.wait_for(service._expired_task, 5)
+        assert not service._expired_task.cancelled()
+        assert service.irc.is_anonymous
+        assert auth == [("twitch", False, EXPIRED_MESSAGE)]
+    finally:
+        await service.stop()
+
+
+class _SlowStopIrc(_LaunchIrc):
+    async def stop(self):
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        self.stopped = True
+
+
+@respx.mock
+async def test_concurrent_fall_backs_leave_one_live_connection(launch, monkeypatch):
+    make, _, _ = launch
+    monkeypatch.setattr(service_module, "TwitchIrc", _SlowStopIrc)
+    service, _ = make()
+    respx.get(VALIDATE_URL).mock(return_value=_validate_ok())
+    _mock_helix_globals()
+    await service.start()
+    try:
+        await asyncio.gather(
+            service._fall_back_read_only(EXPIRED_MESSAGE, delete=True),
+            service._fall_back_read_only(REJECTED_MESSAGE, delete=False))
+        live = [irc for irc in _LaunchIrc.built if irc.started and not irc.stopped]
+        assert live == [service.irc], "a fall-back left an orphaned connection running"
+    finally:
+        await service.stop()
+
+
+# -- final review: odd launch-check answers take the saved-login path ------------------------------
+
+
+@pytest.mark.parametrize("response", [
+    httpx.Response(302, headers={"location": "http://portal.example/"}),
+    httpx.Response(200, text="<html>portal</html>"),
+])
+@respx.mock
+async def test_launch_behind_captive_portal_connects_with_saved_login(launch, response):
+    make, conn, auth = launch
+    service, store = make()
+    respx.get(VALIDATE_URL).mock(return_value=response)
+    try:
+        await service.start()
+        irc = _LaunchIrc.built[-1]
+        assert irc.started
+        assert irc.kwargs["token"] == "acc-1"
+        assert irc.kwargs["nick"] == "saveduser"
+        assert service._check_pending is True
+        assert len(_unreachable_events(conn)) == 1
+    finally:
+        await service.stop()
+    assert store.deleted == []
+    assert auth == []
+
+
+@respx.mock
+async def test_launch_unexpected_check_error_connects_with_saved_login(launch, monkeypatch, caplog):
+    make, conn, auth = launch
+    service, store = make()
+
+    async def broken(**kwargs):
+        raise RuntimeError("surprise")
+
+    monkeypatch.setattr(service.auth, "ensure_valid", broken)
+    try:
+        with caplog.at_level("ERROR", logger=service_module.__name__):
+            await service.start()
+        irc = _LaunchIrc.built[-1]
+        assert irc.started and irc.kwargs["token"] == "acc-1"
+        assert service._check_pending is True
+        assert any(r.exc_info and r.levelname == "ERROR" for r in caplog.records)
+    finally:
+        await service.stop()
+    assert store.deleted == []
