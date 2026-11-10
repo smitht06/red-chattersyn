@@ -130,7 +130,7 @@ Interfaces:
 
 ## 3. Main window
 
-- [ ] 3.1 Render reachability and rejections — verify: uv run pytest tests/test_main_window_twitch_signin.py -q passes
+- [x] 3.1 Render reachability and rejections — verify: uv run pytest tests/test_main_window_twitch_signin.py -q passes
 
 Covers: TSR-10, TSR-11, TSR-25 · Test: scenario-first
 
