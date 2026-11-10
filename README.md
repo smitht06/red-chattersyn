@@ -320,16 +320,21 @@ REST (send); Qt model/delegate chat rendering. See the plan in
 `~/.claude/plans/i-want-an-app-idempotent-pebble.md` for the full design.
 
 <!-- release-notes:start -->
-## Latest release: v0.10.5 (2026-11-10)
+## Latest release: v0.10.6 (2026-11-10)
 
 ### Action needed
-- **Reconnect Twitch once.** To see when chatters followed a channel on the user card, reconnect your Twitch account in Settings → Accounts to grant the new follower permission. Everything else works without it.
+- **Reconnect Twitch once.** The moderation and broadcaster commands below need new Twitch permissions. Reconnect your account in Settings → Accounts; until you do, those commands tell you to reconnect instead of running.
 
 ### New
-- **Follow date on the user card.** On a channel you own or moderate, a chatter's user card shows "Followed <channel> since: <date>".
+- **Mods and VIPs list.** /mods and /vips open a list you can filter by name; clicking a name opens that person's user card. Twitch only shows these lists to the broadcaster.
+- **Delete message on the user card.** Opening a user card from one of their chat messages shows a "Delete message" button when you're the broadcaster or a mod.
+- **Command suggestions.** Typing / or . and a letter at the start of a message shows matching commands; Tab or Enter picks one, and Enter sends a command you've typed in full.
+- **Title, category and uptime.** /settitle, /setgame (picks the closest category and says which) and /uptime work.
 
 ### Fixed
-- **Empty user cards when signed in.** Twitch user cards showed no avatar, account age or follower count while you were signed in to Twitch. They fill in again, and each detail now shows up on its own even if another one can't be loaded.
+- **Moderation commands did nothing.** /warn, /mod, /unmod, /vip, /unvip, /announce (all colours), /slow, /followers, /emoteonly, /subscribers, /uniquechat (and their "off" forms), /shield, /clear, /delete, /raid, /unraid, /shoutout, /commercial and /marker work again. Each shows a short confirmation, or Twitch's reason when it fails.
+- **Right-click "Delete message".** It said it wasn't supported; it now deletes the message.
+- **/host and /unhost.** They now explain that Twitch retired hosting and point to /raid.
 
 Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
 <!-- release-notes:end -->

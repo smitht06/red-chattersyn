@@ -225,6 +225,16 @@ class InputWidget(QWidget):
     def _popup_visible(self) -> bool:
         return self._completion_popup is not None and self._completion_popup.isVisible()
 
+    def _typed_full_command(self) -> bool:
+        """The highlighted dropdown entry is a command the user already typed
+        in full (ignoring case) — Enter should send, not complete again."""
+        popup = self._completion_popup
+        candidate = popup.current() if popup is not None else None
+        if candidate is None or candidate.sub != "command":
+            return False
+        start, end = popup.replace_range()
+        return self._edit.text()[start:end].lower() == candidate.name.lower()
+
     def _accept_popup(self) -> bool:
         popup = self._completion_popup
         if popup is None or not popup.isVisible():
@@ -298,6 +308,9 @@ class InputWidget(QWidget):
                     self._completion_popup.move_selection(
                         -1 if key == Qt.Key.Key_Up else 1)
                     return True
+                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self._typed_full_command():
+                    self._close_popup()  # "/slowoff" typed in full: Enter sends it
+                    return False
                 if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Tab):
                     return self._accept_popup()  # accept, don't send
                 if key == Qt.Key.Key_Escape:

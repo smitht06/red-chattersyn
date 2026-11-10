@@ -190,3 +190,55 @@ def test_history_up_still_works_after_completion(qapp, monkeypatch):
     widget._submit()
     QTest.keyClick(widget._edit, Qt.Key.Key_Up)
     assert widget.text() == "hello"
+
+
+# -- command dropdown -------------------------------------------------------------------
+
+
+def test_slash_letter_opens_command_popup(qapp, monkeypatch):
+    widget = _make_input(monkeypatch, commands=("/slow", "/slowoff", "/ban"))
+    widget.set_text("/s")
+    assert widget._popup_visible()
+    assert [c.name for c in widget._completion.candidates] == ["/slow", "/slowoff"]
+
+
+def test_dot_letter_opens_command_popup(qapp, monkeypatch):
+    widget = _make_input(monkeypatch, commands=("/ban",))
+    widget.set_text(".b")
+    assert widget._popup_visible()
+
+
+def test_enter_inserts_partial_command(qapp, monkeypatch):
+    widget = _make_input(monkeypatch, commands=("/slowoff",))
+    sent = _send_spy(widget)
+    widget.set_text("/slowo")
+    QTest.keyClick(widget._edit, Qt.Key.Key_Return)
+    assert widget.text() == "/slowoff "
+    assert sent == []
+
+
+def test_enter_sends_fully_typed_command(qapp, monkeypatch):
+    """A command typed in full is sent by Enter, not completed a second time."""
+    widget = _make_input(monkeypatch, commands=("/slow", "/slowoff"))
+    sent = _send_spy(widget)
+    widget.set_text("/slowoff")
+    QTest.keyClick(widget._edit, Qt.Key.Key_Return)
+    assert sent == ["/slowoff"]
+
+
+def test_enter_sends_typed_command_even_when_longer_ones_match(qapp, monkeypatch):
+    """'/slow' is highlighted first, before '/slowoff', and Enter sends it as typed."""
+    widget = _make_input(monkeypatch, commands=("/slow", "/slowoff"))
+    sent = _send_spy(widget)
+    widget.set_text("/slow")
+    QTest.keyClick(widget._edit, Qt.Key.Key_Return)
+    assert sent == ["/slow"]
+
+
+def test_tab_still_inserts_fully_typed_command(qapp, monkeypatch):
+    widget = _make_input(monkeypatch, commands=("/slowoff",))
+    sent = _send_spy(widget)
+    widget.set_text("/slowoff")
+    QTest.keyClick(widget._edit, Qt.Key.Key_Tab)
+    assert widget.text() == "/slowoff "
+    assert sent == []

@@ -3,8 +3,9 @@ completion popup, Tab cycling and the tests.
 
 Chatterino parity (docs/m4.md "Autocomplete"): the POPUP serves `:` emotes
 (case-insensitive contains, exact match hoisted, `~` = zero-width only) and
-emojis, plus `@` users (prefix-only); it never serves `/`-commands. TAB
-cycling adds first-word `/`/`.`→commands, first-word unified emote+user+
+emojis, plus `@` users (prefix-only), plus first-word `/`/`.` commands once a
+letter follows the sigil (ChatterSyn addition). TAB cycling also serves
+first-word commands, first-word unified emote+user+
 command and mid-message emote+user matching (start-of-word for emotes).
 A reply prefix (`@Name `) is ignored for first-word detection. Hard cap
 200 candidates.
@@ -156,7 +157,9 @@ def build_candidates(
                                 sub="command")
             for name in match_commands(prefix[1:], commands)
         ]
-        popup = False
+        # The dropdown opens once a letter follows the sigil ("/b", ".b"),
+        # so a bare "/" or "..." in normal chat stays quiet.
+        popup = len(prefix) >= 2
     else:
         candidates = _plain_word_candidates(
             prefix, users, emotes, commands, include_commands=first_word)

@@ -128,10 +128,11 @@ def test_colon_tilde_zero_width_in_popup():
     assert [c.name for c in result.candidates] == ["OOO"]
 
 
-def test_slash_command_first_word_no_popup():
+def test_slash_command_first_word_opens_popup():
+    """Typing '/' plus a letter opens the dropdown (user request 2026-11-10)."""
     result = build_candidates(
         "/b", 2, users=[], emotes=[], commands=["/ban", "/timeout"], emojis=())
-    assert result is not None and not result.popup
+    assert result is not None and result.popup
     assert [(c.name, c.insert, c.sub) for c in result.candidates] == [
         ("/ban", "/ban ", "command")]
 
@@ -141,6 +142,21 @@ def test_dot_command_first_word():
         ".b", 2, users=[], emotes=[], commands=[".ban"], emojis=())
     assert result is not None
     assert [c.name for c in result.candidates] == [".ban"]
+    assert result.popup  # '.' commands open the dropdown too
+
+
+def test_bare_sigil_opens_no_popup():
+    """Just '/' or '.' (no letter yet) opens nothing: '...' and '/' alone stay quiet."""
+    for text in ("/", "."):
+        result = build_candidates(
+            text, 1, users=[], emotes=[], commands=["/ban", ".ban"], emojis=())
+        assert result is None or not result.popup
+
+
+def test_command_popup_only_for_first_word():
+    result = build_candidates(
+        "hi /b", 5, users=[], emotes=[], commands=["/ban"], emojis=())
+    assert result is None or not result.popup
 
 
 def test_plain_word_unified_first_word():
@@ -195,7 +211,7 @@ def test_reply_prefix_ignored_for_first_word_and_offsets():
         "@Forsen /b", 10, users=[], emotes=[],
         commands=["/ban"], emojis=(), reply_prefix="@Forsen ")
     # the "/b" is still treated as first word, indices refer to the original text
-    assert result is not None and not result.popup
+    assert result is not None and result.popup
     assert (result.start, result.end) == (8, 10)
     assert [c.name for c in result.candidates] == ["/ban"]
 
