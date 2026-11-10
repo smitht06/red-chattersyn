@@ -40,7 +40,7 @@ signal and real rejections on `bridge.auth_state`; MainWindow renders both.
 
 ## 1. Token outcomes
 
-- [ ] 1.1 Classify refresh/validate results and serialize checks — verify: uv run pytest tests/test_twitch_auth.py -q passes
+- [x] 1.1 Classify refresh/validate results and serialize checks — verify: uv run pytest tests/test_twitch_auth.py -q passes
 
 Covers: TSR-1, TSR-2, TSR-3, TSR-4, TSR-5, TSR-23, TSR-24 · Test: scenario-first
 
