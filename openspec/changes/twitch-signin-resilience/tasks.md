@@ -94,7 +94,7 @@ Interfaces:
 3. Run the verify command, then `uv run pytest -q`. Expected: PASS.
 4. Commit `fix(twitch): catch up account features and channel loads when chat connects`.
 
-- [ ] 2.3 Re-login on an IRC auth refusal, read-only fallbacks — verify: uv run pytest tests/test_twitch_service.py -q passes
+- [x] 2.3 Re-login on an IRC auth refusal, read-only fallbacks — verify: uv run pytest tests/test_twitch_service.py -q passes
 
 Covers: TSR-15, TSR-16, TSR-17, TSR-18, TSR-19 · Test: scenario-first
 
