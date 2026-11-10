@@ -151,6 +151,11 @@ class MainWindow(QMainWindow):
         self._roomstate_text: dict[str, str] = {}  # twitch channel -> last chat-mode label
         self._twitch_live: dict[str, dt.datetime] = {}  # channel -> last poll saw it live
         self._twitch_offline_since: dict[str, dt.datetime] = {}  # channel -> went down at
+        # "Twitch: can't reach Twitch — retrying…" is up in the status bar.
+        self._twitch_retrying = False
+        # The last announced Twitch sign-in problem; shown in the Settings
+        # account row until chat next connects signed in.
+        self._twitch_auth_problem = ""
 
         self.setWindowTitle("ChatterSyn")
         self.resize(1080, 720)
@@ -211,6 +216,7 @@ class MainWindow(QMainWindow):
             bridge.message.connect(self._on_usercard_live)
             bridge.event.connect(self._on_bridge_event)
             bridge.auth_state.connect(self._on_auth_state)
+            bridge.connection_state.connect(self._on_connection_state)
             bridge.send_result.connect(self._on_send_result)
             asyncio.ensure_future(self._start_services())
 
@@ -365,12 +371,19 @@ class MainWindow(QMainWindow):
         if isinstance(widget, Tab):
             self._on_search_requested(widget, "", False)
 
+    def _twitch_account_status(self) -> str:
+        """The Twitch account row of Settings → Accounts."""
+        tokens = self._twitch.tokens if self._twitch is not None else None
+        if tokens is not None:
+            return f"Connected as {tokens.login}" if tokens.login else "Connected"
+        if self._twitch_auth_problem:
+            return f"Not connected — {self._twitch_auth_problem}"
+        return "Not connected"
+
     def _open_settings(self) -> None:
         twitch_status, youtube_status = "Not connected", "Not connected"
         if not self._demo:
-            if self._twitch is not None and self._twitch.tokens is not None:
-                login = self._twitch.tokens.login or ""
-                twitch_status = f"Connected as {login}" if login else "Connected"
+            twitch_status = self._twitch_account_status()
             if self._youtube is not None and self._youtube.tokens is not None:
                 youtube_status = "Connected"
             elif (self._youtube is not None and self._youtube.auth.configured()
@@ -467,8 +480,11 @@ class MainWindow(QMainWindow):
         assert self._twitch is not None
         try:
             await self._twitch.start()
-            self.statusBar().showMessage(
-                "Twitch connected (read-only — connect an account to send)", 8000)
+            # Not over the "retrying…" text start() may have set, nor over an
+            # announced sign-in problem.
+            if not self._twitch.unreachable and not self._twitch_auth_problem:
+                self.statusBar().showMessage(
+                    "Twitch connected (read-only — connect an account to send)", 8000)
         except Exception as exc:
             log.error("Twitch service start failed: %s", exc)
             self.statusBar().showMessage(f"Twitch: {exc}")
@@ -970,10 +986,26 @@ class MainWindow(QMainWindow):
     def _on_pin_requested(self, tab: Tab, msg: Message) -> None:
         tab.show_pin(msg)
 
+    def _on_connection_state(self, info: dict) -> None:
+        """Twitch reachability (bridge.connection_state). "unreachable" repeats
+        on every failed attempt, so it only re-shows the one status text."""
+        if info.get("platform") != "twitch":
+            return
+        state, detail = info.get("state"), info.get("detail")
+        if state == "unreachable":
+            self._twitch_retrying = True
+            self.statusBar().showMessage("Twitch: can't reach Twitch — retrying…")
+        elif state == "connected" and detail == "signed_in":
+            if self._twitch_retrying:
+                self.statusBar().showMessage("Twitch connected")
+            self._twitch_retrying = False
+            self._twitch_auth_problem = ""
+
     def _on_auth_state(self, platform: str, ok: bool, detail: str) -> None:
         if ok:
             self.statusBar().showMessage(f"{platform} authenticated", 5000)
             if platform == "twitch":
+                self._twitch_auth_problem = ""
                 self._bind_streamer_tabs()
             elif platform == "youtube":
                 if self._shared_pool_resume_at is None:
@@ -983,7 +1015,13 @@ class MainWindow(QMainWindow):
                 # 60-120 s poll sleep of the existing watch loop.
                 self._rewatch_streamer_tabs()
             return
-        self.statusBar().showMessage(f"{platform}: {detail}")
+        text = f"{platform}: {detail}"
+        if platform == "twitch":
+            self._twitch_retrying = False
+            self._twitch_auth_problem = detail
+            if detail.startswith("Twitch"):
+                text = detail  # the new texts already name Twitch
+        self.statusBar().showMessage(text)
         if platform == "youtube":
             # The service cleared the identity — drop every recorded
             # ownership entry or user cards would keep offering mod actions.
@@ -993,7 +1031,7 @@ class MainWindow(QMainWindow):
         for tab in self._tabs:
             tab.add_message(Message.system(
                 Platform.TWITCH if platform == "twitch" else Platform.SYSTEM,
-                tab.twitch_channel, f"{platform}: {detail}"))
+                tab.twitch_channel, text))
 
     # -- send path ------------------------------------------------------------------------
 
