@@ -59,16 +59,26 @@ class Helix:
         response.raise_for_status()
         return response.json()
 
-    async def _write(self, method: str, path: str, params: dict, body: dict | None = None) -> None:
-        """POST/DELETE; failures raise HelixError carrying Twitch's message
-        (e.g. "The user specified in the user_id field is already banned.")."""
+    async def _send(self, method: str, path: str, params: dict,
+                    body: dict | None = None) -> dict:
+        """POST/PUT/PATCH/DELETE; failures raise HelixError carrying Twitch's
+        message (e.g. "The user specified in the user_id field is already
+        banned."). Returns the JSON body ({} when there is none)."""
         response = await self._call(method, path, params, body)
         if response.is_error:
             try:
                 message = response.json().get("message", "")
-            except ValueError:
+            except (ValueError, AttributeError):
                 message = ""
             raise HelixError(message or f"HTTP {response.status_code}")
+        try:
+            data = response.json()
+        except ValueError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    async def _write(self, method: str, path: str, params: dict, body: dict | None = None) -> None:
+        await self._send(method, path, params, body)
 
     async def _call(self, method: str, path: str, params: dict,
                     body: dict | None = None) -> httpx.Response:
@@ -195,6 +205,116 @@ class Helix:
             "DELETE", "/moderation/bans",
             {"broadcaster_id": broadcaster_id, "moderator_id": moderator_id,
              "user_id": user_id})
+
+    # -- moderation commands (m = the token's own user id) -----------------------------
+
+    async def warn_user(self, broadcaster_id: str, moderator_id: str, user_id: str,
+                        reason: str) -> None:
+        await self._write(
+            "POST", "/moderation/warnings",
+            {"broadcaster_id": broadcaster_id, "moderator_id": moderator_id},
+            {"data": {"user_id": user_id, "reason": reason}})
+
+    async def send_announcement(self, broadcaster_id: str, moderator_id: str,
+                                message: str, color: str = "primary") -> None:
+        await self._write(
+            "POST", "/chat/announcements",
+            {"broadcaster_id": broadcaster_id, "moderator_id": moderator_id},
+            {"message": message, "color": color})
+
+    async def update_chat_settings(self, broadcaster_id: str, moderator_id: str,
+                                   **fields) -> None:
+        """PATCH exactly the given fields; others stay as they are."""
+        await self._write(
+            "PATCH", "/chat/settings",
+            {"broadcaster_id": broadcaster_id, "moderator_id": moderator_id}, dict(fields))
+
+    async def send_shoutout(self, broadcaster_id: str, moderator_id: str, to_id: str) -> None:
+        await self._write(
+            "POST", "/chat/shoutouts",
+            {"from_broadcaster_id": broadcaster_id, "to_broadcaster_id": to_id,
+             "moderator_id": moderator_id})
+
+    async def set_shield_mode(self, broadcaster_id: str, moderator_id: str,
+                              active: bool) -> None:
+        await self._write(
+            "PUT", "/moderation/shield_mode",
+            {"broadcaster_id": broadcaster_id, "moderator_id": moderator_id},
+            {"is_active": active})
+
+    async def delete_chat_messages(self, broadcaster_id: str, moderator_id: str,
+                                   message_id: str | None = None) -> None:
+        """Delete one message, or clear the whole chat when no id is given."""
+        params = {"broadcaster_id": broadcaster_id, "moderator_id": moderator_id}
+        if message_id:
+            params["message_id"] = message_id
+        await self._write("DELETE", "/moderation/chat", params)
+
+    # -- broadcaster commands ----------------------------------------------------------
+
+    async def add_moderator(self, broadcaster_id: str, user_id: str) -> None:
+        await self._write("POST", "/moderation/moderators",
+                          {"broadcaster_id": broadcaster_id, "user_id": user_id})
+
+    async def remove_moderator(self, broadcaster_id: str, user_id: str) -> None:
+        await self._write("DELETE", "/moderation/moderators",
+                          {"broadcaster_id": broadcaster_id, "user_id": user_id})
+
+    async def add_vip(self, broadcaster_id: str, user_id: str) -> None:
+        await self._write("POST", "/channels/vips",
+                          {"broadcaster_id": broadcaster_id, "user_id": user_id})
+
+    async def remove_vip(self, broadcaster_id: str, user_id: str) -> None:
+        await self._write("DELETE", "/channels/vips",
+                          {"broadcaster_id": broadcaster_id, "user_id": user_id})
+
+    async def _list_logins(self, path: str, broadcaster_id: str) -> list[str]:
+        """user_login of every row, following pagination.cursor to the end."""
+        logins: list[str] = []
+        params: dict = {"broadcaster_id": broadcaster_id, "first": 100}
+        while True:
+            data = await self._send("GET", path, params)
+            logins += [r["user_login"] for r in data.get("data", []) if r.get("user_login")]
+            cursor = (data.get("pagination") or {}).get("cursor")
+            if not cursor:
+                return logins
+            params = {**params, "after": cursor}
+
+    async def list_moderators(self, broadcaster_id: str) -> list[str]:
+        return await self._list_logins("/moderation/moderators", broadcaster_id)
+
+    async def list_vips(self, broadcaster_id: str) -> list[str]:
+        return await self._list_logins("/channels/vips", broadcaster_id)
+
+    async def start_raid(self, broadcaster_id: str, to_id: str) -> None:
+        await self._write("POST", "/raids",
+                          {"from_broadcaster_id": broadcaster_id, "to_broadcaster_id": to_id})
+
+    async def cancel_raid(self, broadcaster_id: str) -> None:
+        await self._write("DELETE", "/raids", {"broadcaster_id": broadcaster_id})
+
+    async def start_commercial(self, broadcaster_id: str, length: int) -> None:
+        await self._write("POST", "/channels/commercial", {},
+                          {"broadcaster_id": broadcaster_id, "length": length})
+
+    async def create_marker(self, user_id: str) -> None:
+        """Stream marker on the live stream of user_id (the broadcaster)."""
+        await self._write("POST", "/streams/markers", {}, {"user_id": user_id})
+
+    async def modify_channel(self, broadcaster_id: str, *, title: str | None = None,
+                             game_id: str | None = None) -> None:
+        body: dict = {}
+        if title is not None:
+            body["title"] = title
+        if game_id is not None:
+            body["game_id"] = game_id
+        await self._write("PATCH", "/channels", {"broadcaster_id": broadcaster_id}, body)
+
+    async def search_categories(self, query: str) -> list[dict]:
+        """[{id, name}] in Twitch's order."""
+        data = await self._get("/search/categories", {"query": query})
+        return [{"id": r.get("id", ""), "name": r.get("name", "")}
+                for r in data.get("data", []) if r.get("id")]
 
     # -- streams -----------------------------------------------------------------------
 

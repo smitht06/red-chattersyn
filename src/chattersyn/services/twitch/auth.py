@@ -27,7 +27,25 @@ VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
 MODERATION_SCOPE = "moderator:manage:banned_users"
 # The user card's "Followed <channel> since" row (/channels/followers?user_id=).
 FOLLOWERS_SCOPE = "moderator:read:followers"
-SCOPES = ["chat:read", "chat:edit", MODERATION_SCOPE, FOLLOWERS_SCOPE]
+# Helix moderation / broadcaster commands (/warn, /announce, /slow, /shoutout,
+# /shield, /delete, /mod, /vip, /raid, /commercial, /marker, /settitle ...).
+WARNINGS_SCOPE = "moderator:manage:warnings"
+ANNOUNCEMENTS_SCOPE = "moderator:manage:announcements"
+CHAT_SETTINGS_SCOPE = "moderator:manage:chat_settings"
+SHOUTOUTS_SCOPE = "moderator:manage:shoutouts"
+SHIELD_SCOPE = "moderator:manage:shield_mode"
+CHAT_MESSAGES_SCOPE = "moderator:manage:chat_messages"
+MODERATORS_SCOPE = "channel:manage:moderators"
+VIPS_SCOPE = "channel:manage:vips"
+RAIDS_SCOPE = "channel:manage:raids"
+COMMERCIAL_SCOPE = "channel:edit:commercial"
+BROADCAST_SCOPE = "channel:manage:broadcast"
+SCOPES = [
+    "chat:read", "chat:edit", MODERATION_SCOPE, FOLLOWERS_SCOPE,
+    WARNINGS_SCOPE, ANNOUNCEMENTS_SCOPE, CHAT_SETTINGS_SCOPE, SHOUTOUTS_SCOPE,
+    SHIELD_SCOPE, CHAT_MESSAGES_SCOPE, MODERATORS_SCOPE, VIPS_SCOPE, RAIDS_SCOPE,
+    COMMERCIAL_SCOPE, BROADCAST_SCOPE,
+]
 TOKEN_KEY = "twitch_token"
 FLOW_TIMEOUT = 300.0  # user has 5 minutes to complete the browser flow
 
