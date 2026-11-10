@@ -46,6 +46,8 @@ class TwitchService:
         self._unreachable = False  # the last connect attempt / refresh could not reach Twitch
         # The saved login is in use but its token check hasn't completed yet.
         self._check_pending = False
+        self._global_badges_loaded = False
+        self._catch_up_task: asyncio.Task | None = None
 
     @property
     def unreachable(self) -> bool:
@@ -107,6 +109,35 @@ class TwitchService:
     def _on_irc_connected(self, signed_in: bool) -> None:
         self._unreachable = False
         self._emit_connection("connected", "signed_in" if signed_in else "anonymous")
+        if signed_in and (self._catch_up_task is None or self._catch_up_task.done()):
+            self._catch_up_task = asyncio.ensure_future(self._catch_up())
+
+    async def _catch_up(self) -> None:
+        """Run on each signed-in welcome: finish everything an outage or an
+        offline launch left undone — the token check, the Helix client, the
+        global badges/emotes and each channel's badges/emotes. Steps that
+        already succeeded are not repeated."""
+        try:
+            if self._check_pending:
+                try:
+                    tokens = await self.auth.ensure_valid()
+                except TwitchUnreachable:
+                    return  # stay pending; the next welcome tries again
+                if tokens is None:
+                    await self._fall_back_read_only(EXPIRED_MESSAGE, delete=True)
+                    return
+                self._check_pending = False
+                self.tokens = tokens
+            if self.helix is None:
+                await self.ensure_helix()  # also loads the global badges/emotes
+            elif not self._global_badges_loaded:
+                await self._load_global_badges()
+            for name in list(self._desired):
+                self._kick_metadata(name)  # skips channels that already loaded
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Twitch catch-up failed")
 
     async def reconnect(self) -> bool:
         """Drop the IRC connection and start a fresh one — the recovery path
@@ -201,6 +232,10 @@ class TwitchService:
         )
 
     async def stop(self) -> None:
+        task = self._catch_up_task
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         if self.irc is not None:
             await self.irc.stop()
             self.irc = None
@@ -285,9 +320,14 @@ class TwitchService:
             self.registry.set_twitch_global_emotes(await self.helix.global_emotes())
         except Exception as exc:
             log.warning("global Twitch emotes failed: %s", exc)
+            return
+        self._global_badges_loaded = True
 
     async def _load_channel_metadata(self, name: str) -> None:
-        """Badges + Twitch emotes + third-party emotes for one channel."""
+        """Badges + Twitch emotes + third-party emotes for one channel. A Helix
+        failure takes the channel out of `_metadata_loaded` so the next
+        catch-up (chat welcome) redoes it; a channel Twitch reports as missing
+        counts as loaded."""
         broadcaster_id: str | None = None
         try:
             user = await self.helix.user_by_login(name)
@@ -303,6 +343,7 @@ class TwitchService:
             self.registry.set_twitch_emotes(name, id_to_name)
         except Exception as exc:
             log.warning("Helix metadata for %s failed: %s", name, exc)
+            self._metadata_loaded.discard(name)
         if broadcaster_id is None:
             return
         try:

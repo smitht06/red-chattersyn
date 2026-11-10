@@ -517,6 +517,11 @@ async def test_irc_reports_reach_state_to_the_bridge(launch):
     make, conn, _ = launch
     service, _ = make(DictStore())
     service.tokens = TwitchTokens(**tokens_json(login="saveduser"))
+
+    async def no_catch_up():  # the welcome's catch-up has its own tests
+        pass
+
+    service._catch_up = no_catch_up
     try:
         signed_in = service._make_irc()
         anonymous_service, _ = make(DictStore())
@@ -531,3 +536,253 @@ async def test_irc_reports_reach_state_to_the_bridge(launch):
         await anonymous_service.stop()
     states = [(e["state"], e["detail"]) for e in conn]
     assert states == [("unreachable", ""), ("connected", "signed_in"), ("connected", "anonymous")]
+
+
+# -- catch-up on a signed-in welcome ----------------------------------------------------------
+
+
+@pytest.fixture
+def catch_up_env(launch, monkeypatch):
+    """A launched-online service with channel metadata routes whose answers
+    the test controls; third-party emote loads are recorded, not fetched."""
+    make, conn, auth = launch
+    state = {"badges": 200, "users": 200, "emote_loads": []}
+
+    def users(request):
+        if state["users"] == "offline":
+            raise httpx.ConnectError("offline")
+        if state["users"] != 200:
+            return httpx.Response(state["users"])
+        return httpx.Response(200, json={"data": [{"id": "77", "login": "chan"}]})
+
+    def channel_badges(request):
+        if state["badges"] != 200:
+            return httpx.Response(state["badges"])
+        return httpx.Response(200, json={"data": []})
+
+    routes = {
+        "users": respx.get(f"{BASE}/users").mock(side_effect=users),
+        "badges": respx.get(f"{BASE}/chat/badges", params={"broadcaster_id": "77"}).mock(
+            side_effect=channel_badges),
+        "emotes": respx.get(f"{BASE}/chat/emotes", params={"broadcaster_id": "77"}).mock(
+            return_value=httpx.Response(200, json={"data": []})),
+        "global_badges": respx.get(f"{BASE}/chat/badges/global").mock(
+            return_value=httpx.Response(200, json={"data": []})),
+        "global_emotes": respx.get(f"{BASE}/chat/emotes/global").mock(
+            return_value=httpx.Response(200, json={"data": []})),
+        "validate": respx.get(VALIDATE_URL).mock(return_value=_validate_ok()),
+    }
+
+    def make_service_(store=None):
+        service, store = make(store)
+
+        async def load_channel(name, broadcaster_id):
+            state["emote_loads"].append(name)
+
+        monkeypatch.setattr(service.registry, "load_channel", load_channel)
+        return service, store
+
+    return make_service_, routes, state, conn, auth
+
+
+async def _until(predicate, timeout=5.0):
+    async with asyncio.timeout(timeout):
+        while not predicate():
+            await asyncio.sleep(0.01)
+
+
+async def _welcome(service):
+    """Simulate IRC's signed-in 001 and wait for the catch-up it starts."""
+    _LaunchIrc.built[-1].kwargs["on_connected"]()
+    task = service._catch_up_task
+    if task is not None:
+        await asyncio.wait_for(task, 5)
+
+
+@respx.mock
+async def test_catch_up_after_offline_launch(catch_up_env):
+    """TSR-12"""
+    make, routes, state, _, _ = catch_up_env
+    service, store = make()
+    routes["validate"].mock(side_effect=httpx.ConnectError("offline"))
+    await service.join_channel("chan")
+    try:
+        await service.start()
+        assert service.helix is None
+        assert routes["global_badges"].call_count == 0
+        calls_while_offline = routes["validate"].call_count
+
+        routes["validate"].mock(side_effect=None, return_value=_validate_ok())  # network is back
+        await _welcome(service)
+        await _until(lambda: routes["emotes"].call_count == 1)
+    finally:
+        await service.stop()
+    assert routes["validate"].call_count > calls_while_offline
+    assert service._check_pending is False
+    assert service.tokens.login == "testuser"
+    assert service.helix is not None
+    assert routes["global_badges"].call_count == 1
+    assert routes["global_emotes"].call_count == 1
+    assert routes["users"].call_count == 1  # the channel opened before launch loaded too
+    assert state["emote_loads"] == ["chan"]
+
+
+@respx.mock
+async def test_catch_up_reloads_failed_channel(catch_up_env):
+    """TSR-13"""
+    make, routes, state, _, _ = catch_up_env
+    service, _ = make()
+    state["badges"] = 503
+    await service.join_channel("chan")
+    try:
+        await service.start()
+        await _until(lambda: routes["badges"].call_count == 1 and "chan" not in service._metadata_loaded)
+        assert routes["emotes"].call_count == 0
+
+        state["badges"] = 200  # Twitch is back
+        await _welcome(service)
+        await _until(lambda: routes["emotes"].call_count == 1)
+    finally:
+        await service.stop()
+    assert routes["badges"].call_count == 2
+    assert "chan" in service._metadata_loaded
+
+
+@respx.mock
+async def test_catch_up_leaves_loaded_channels(catch_up_env):
+    """TSR-14"""
+    make, routes, state, _, _ = catch_up_env
+    service, _ = make()
+    await service.join_channel("chan")
+    try:
+        await service.start()
+        await _until(lambda: routes["emotes"].call_count == 1 and state["emote_loads"])
+        users_before = routes["users"].call_count
+        badges_before = routes["badges"].call_count
+        globals_before = routes["global_badges"].call_count
+
+        await _welcome(service)
+        await _welcome(service)
+        for _ in range(10):
+            await asyncio.sleep(0)
+    finally:
+        await service.stop()
+    assert routes["users"].call_count == users_before
+    assert routes["badges"].call_count == badges_before
+    assert routes["emotes"].call_count == 1
+    assert routes["global_badges"].call_count == globals_before
+    assert state["emote_loads"] == ["chan"]
+
+
+@respx.mock
+async def test_channel_opened_during_outage_loads_on_welcome(catch_up_env):
+    """TSR-22"""
+    make, routes, state, _, _ = catch_up_env
+    service, _ = make()
+    try:
+        await service.start()
+        state["users"] = "offline"
+        assert await service.join_channel("chan")
+        await _until(lambda: routes["users"].call_count == 1 and "chan" not in service._metadata_loaded)
+        assert routes["emotes"].call_count == 0
+
+        state["users"] = 200
+        await _welcome(service)
+        await _until(lambda: routes["emotes"].call_count == 1)
+    finally:
+        await service.stop()
+    assert routes["users"].call_count == 2
+    assert state["emote_loads"] == ["chan"]
+
+
+@respx.mock
+async def test_anonymous_welcome_runs_no_catch_up(catch_up_env):
+    make, routes, _, _, _ = catch_up_env
+    service, _ = make(DictStore())
+    await service.join_channel("chan")
+    try:
+        await service.start()
+        await _welcome(service)
+        for _ in range(10):
+            await asyncio.sleep(0)
+    finally:
+        await service.stop()
+    assert service._catch_up_task is None
+    assert service.helix is None
+    assert routes["validate"].call_count == 0
+    assert routes["users"].call_count == 0
+    assert routes["global_badges"].call_count == 0
+
+
+@respx.mock
+async def test_catch_up_rejected_login_goes_read_only(catch_up_env):
+    """A check that was pending at launch ends in a definite rejection (e.g.
+    the background refresh got a 400): the welcome's catch-up falls back."""
+    make, routes, _, _, auth = catch_up_env
+    service, store = make()
+    routes["validate"].mock(side_effect=httpx.ConnectError("offline"))
+    try:
+        await service.start()
+        assert service._check_pending is True
+
+        routes["validate"].mock(side_effect=None, return_value=httpx.Response(401))
+        respx.post(TOKEN_URL).mock(return_value=httpx.Response(400))
+        await _welcome(service)
+    finally:
+        await service.stop()
+    assert ("twitch", False, EXPIRED_MESSAGE) in auth
+    assert store.get(TOKEN_KEY) is None
+    assert TOKEN_KEY in store.deleted
+    assert service.tokens is None
+    assert service.helix is None
+    assert service._check_pending is False
+    assert _LaunchIrc.built[-1].is_anonymous
+
+
+@respx.mock
+async def test_catch_up_unreachable_stays_pending(catch_up_env):
+    make, routes, _, _, auth = catch_up_env
+    service, store = make()
+    routes["validate"].mock(side_effect=httpx.ConnectError("offline"))
+    try:
+        await service.start()
+        await _welcome(service)  # chat connected but Helix/validate still down
+        assert service._check_pending is True
+        assert service.helix is None
+
+        routes["validate"].mock(side_effect=None, return_value=_validate_ok())
+        await _welcome(service)
+    finally:
+        await service.stop()
+    assert service._check_pending is False
+    assert service.helix is not None
+    assert auth == []
+    assert store.get(TOKEN_KEY) is not None
+
+
+@respx.mock
+async def test_catch_up_runs_once_at_a_time(catch_up_env):
+    make, routes, _, _, _ = catch_up_env
+    service, _ = make()
+    release = asyncio.Event()
+    started = []
+
+    async def slow_catch_up():
+        started.append(1)
+        await release.wait()
+
+    service._catch_up = slow_catch_up
+    try:
+        await service.start()
+        on_connected = _LaunchIrc.built[-1].kwargs["on_connected"]
+        on_connected()
+        on_connected()
+        await asyncio.sleep(0)
+        assert started == [1]
+        release.set()
+        await service._catch_up_task
+        on_connected()  # the previous run finished: a new one may start
+        await service._catch_up_task
+    finally:
+        await service.stop()
+    assert started == [1, 1]
