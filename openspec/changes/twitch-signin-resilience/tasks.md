@@ -60,7 +60,7 @@ Interfaces:
 
 ## 2. Service
 
-- [ ] 2.1 Launch with the saved login and report reachability — verify: uv run pytest tests/test_twitch_service.py tests/test_irc.py -q passes
+- [x] 2.1 Launch with the saved login and report reachability — verify: uv run pytest tests/test_twitch_service.py tests/test_irc.py -q passes
 
 Covers: TSR-6, TSR-7, TSR-8, TSR-9, TSR-21 · Test: scenario-first
 
