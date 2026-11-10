@@ -55,7 +55,7 @@ from ..services.moderation import STACK_MAX_MESSAGES, STACK_WINDOW, ModerationSt
 from ..services.send import SendCoordinator, SendResult, SendTargets
 from ..services.twitch.auth import DEFAULT_TWITCH_CLIENT_ID, MODERATION_SCOPE, TwitchAuthError
 from ..services.twitch.mapper import ClearChat, ClearMsg, RoomState, UserState
-from ..services.twitch.service import TwitchService
+from ..services.twitch.service import EXPIRED_MESSAGE, REJECTED_MESSAGE, TwitchService
 from ..services.youtube.auth import YouTubeAuthError
 from ..services.youtube.quota import Pool
 from ..services.youtube.resolver import MINE_TARGET
@@ -1018,7 +1018,10 @@ class MainWindow(QMainWindow):
         text = f"{platform}: {detail}"
         if platform == "twitch":
             self._twitch_retrying = False
-            self._twitch_auth_problem = detail
+            # Only the announced sign-in messages go to the Settings account
+            # row; sign-out and failed Connect flows keep today's row.
+            if detail in (EXPIRED_MESSAGE, REJECTED_MESSAGE):
+                self._twitch_auth_problem = detail
             if detail.startswith("Twitch"):
                 text = detail  # the new texts already name Twitch
         self.statusBar().showMessage(text)

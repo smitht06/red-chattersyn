@@ -8,7 +8,7 @@ from PySide6.QtCore import QSettings
 from chattersyn.config.settings import Settings
 from chattersyn.core.bus import bridge
 from chattersyn.services.twitch.auth import TwitchTokens
-from chattersyn.services.twitch.service import EXPIRED_MESSAGE
+from chattersyn.services.twitch.service import EXPIRED_MESSAGE, REJECTED_MESSAGE
 from chattersyn.ui.main_window import MainWindow
 
 RETRYING = "Twitch: can't reach Twitch — retrying…"
@@ -180,3 +180,23 @@ async def test_bridge_signal_is_wired(qapp, qsettings, monkeypatch):
         assert _status(w) == RETRYING
     finally:
         w.close()
+
+
+@pytest.mark.parametrize("text", [
+    "signed out — read-only mode",
+    "sign-in failed or timed out",
+    "sign-in succeeded but the token refresh failed — try connecting again",
+])
+async def test_unannounced_failures_stay_out_of_the_account_row(win, text):
+    win._twitch = types.SimpleNamespace(tokens=None)
+    win._on_connection_state(_event("unreachable"))
+    win._on_auth_state("twitch", False, text)
+    assert win._twitch_account_status() == "Not connected"
+    assert not win._twitch_retrying
+    assert win.statusBar().currentMessage() == f"twitch: {text}"
+
+
+async def test_rejected_message_is_stored(win):
+    win._twitch = types.SimpleNamespace(tokens=None)
+    win._on_auth_state("twitch", False, REJECTED_MESSAGE)
+    assert win._twitch_account_status() == f"Not connected — {REJECTED_MESSAGE}"
