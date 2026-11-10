@@ -78,7 +78,7 @@ Interfaces:
 3. Run the verify command, then `uv run pytest -q`. Expected: PASS.
 4. Commit `fix(twitch): connect with the saved login when Twitch can't be reached at launch`.
 
-- [ ] 2.2 Catch up on every signed-in welcome — verify: uv run pytest tests/test_twitch_service.py -q passes
+- [x] 2.2 Catch up on every signed-in welcome — verify: uv run pytest tests/test_twitch_service.py -q passes
 
 Covers: TSR-12, TSR-13, TSR-14, TSR-22 · Test: scenario-first
 
