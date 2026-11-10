@@ -187,6 +187,18 @@ async def test_begin_flow_includes_pkce_and_state():
     assert "client_secret" not in params
 
 
+async def test_sign_in_requests_follow_scope():
+    """TUF-9: Connect Twitch asks for moderator:read:followers too."""
+    auth = make_auth(DictStore(), ports=(0,))
+    try:
+        url = await auth.begin_flow()
+    finally:
+        await auth.close()
+    params = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+    assert params["scope"][0].split() == [
+        "chat:read", "chat:edit", "moderator:manage:banned_users", "moderator:read:followers"]
+
+
 @respx.mock
 async def test_full_loopback_flow_exchanges_and_saves():
     store = DictStore()

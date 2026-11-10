@@ -25,7 +25,9 @@ VALIDATE_URL = "https://id.twitch.tv/oauth2/validate"
 # Helix ban/timeout/unban; tokens granted before it was added lack it and
 # need a reconnect.
 MODERATION_SCOPE = "moderator:manage:banned_users"
-SCOPES = ["chat:read", "chat:edit", MODERATION_SCOPE]
+# The user card's "Followed <channel> since" row (/channels/followers?user_id=).
+FOLLOWERS_SCOPE = "moderator:read:followers"
+SCOPES = ["chat:read", "chat:edit", MODERATION_SCOPE, FOLLOWERS_SCOPE]
 TOKEN_KEY = "twitch_token"
 FLOW_TIMEOUT = 300.0  # user has 5 minutes to complete the browser flow
 

@@ -213,17 +213,23 @@ async def test_global_emotes():
 
 
 @respx.mock
-async def test_user_follows_and_channel_followers():
-    respx.get(f"{BASE}/users/follows", params={"from_id": "1", "to_id": "2"}).mock(
-        return_value=httpx.Response(
-            200,
-            json={"total": 1, "data": [
-                {"from_id": "1", "to_id": "2", "followed_at": "2020-05-01T00:00:00Z"}]},
-        )
-    )
-    respx.get(f"{BASE}/users/follows", params={"from_id": "1", "to_id": "9"}).mock(
-        return_value=httpx.Response(200, json={"total": 0, "data": []})
-    )
+async def test_channel_follower_since():
+    """TUF-4/5: /channels/followers?user_id= gives when a user followed a channel."""
+    respx.get(f"{BASE}/channels/followers", params={"broadcaster_id": "2", "user_id": "1"}).mock(
+        return_value=httpx.Response(200, json={"total": 50, "data": [
+            {"user_id": "1", "user_login": "bob", "followed_at": "2024-03-05T10:00:00Z"}]}))
+    respx.get(f"{BASE}/channels/followers", params={"broadcaster_id": "2", "user_id": "9"}).mock(
+        return_value=httpx.Response(200, json={"total": 50, "data": []}))
+    _, helix = make_helix(["tok-1"])
+    try:
+        assert await helix.channel_follower_since("2", "1") == "2024-03-05T10:00:00Z"
+        assert await helix.channel_follower_since("2", "9") is None
+    finally:
+        await helix.close()
+
+
+@respx.mock
+async def test_channel_followers_total():
     respx.get(f"{BASE}/channels/followers", params={"broadcaster_id": "2"}).mock(
         return_value=httpx.Response(200, json={"total": 12345})
     )
@@ -232,8 +238,6 @@ async def test_user_follows_and_channel_followers():
     )
     _, helix = make_helix(["tok-1"])
     try:
-        assert await helix.user_follows("1", "2") == "2020-05-01T00:00:00Z"
-        assert await helix.user_follows("1", "9") is None
         assert await helix.channel_followers("2") == 12345
         assert await helix.channel_followers("9") is None
     finally:

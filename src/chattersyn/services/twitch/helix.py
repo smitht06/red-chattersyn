@@ -155,9 +155,12 @@ class Helix:
             "created_at": user.get("created_at", ""),
         }
 
-    async def user_follows(self, from_id: str, to_id: str) -> str | None:
-        """The date from_id followed to_id (ISO), or None if they don't."""
-        data = await self._get("/users/follows", {"from_id": from_id, "to_id": to_id})
+    async def channel_follower_since(self, broadcaster_id: str, user_id: str) -> str | None:
+        """When user_id followed broadcaster_id (ISO), or None if they don't.
+        Needs moderator:read:followers and a token user who is the
+        broadcaster or one of their mods (/users/follows was removed)."""
+        data = await self._get(
+            "/channels/followers", {"broadcaster_id": broadcaster_id, "user_id": user_id})
         rows = data.get("data", [])
         if not rows:
             return None
