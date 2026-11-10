@@ -320,18 +320,16 @@ REST (send); Qt model/delegate chat rendering. See the plan in
 `~/.claude/plans/i-want-an-app-idempotent-pebble.md` for the full design.
 
 <!-- release-notes:start -->
-## Latest release: v0.10.4 (2026-11-10)
+## Latest release: v0.10.5 (2026-11-10)
 
-### Improved
-- **Clearer Twitch status.** While Twitch can't be reached, the status bar shows "Twitch: can't reach Twitch — retrying…" instead of an error row in every tab, and "Twitch connected" once it's back.
-- **Sign-in problems explained.** When Twitch really rejects your sign-in, chat keeps running read-only, and the status bar, each tab and Settings → Accounts say "Twitch sign-in expired — reconnect your account" (or "Twitch rejected the sign-in — reconnect your account").
+### Action needed
+- **Reconnect Twitch once.** To see when chatters followed a channel on the user card, reconnect your Twitch account in Settings → Accounts to grant the new follower permission. Everything else works without it.
+
+### New
+- **Follow date on the user card.** On a channel you own or moderate, a chatter's user card shows "Followed <channel> since: <date>".
 
 ### Fixed
-- **Signed out by a Twitch outage.** A Twitch server error, rate limit, timeout or network drop while ChatterSyn renewed your token deleted your saved Twitch login. Now it's only removed when Twitch says it's no longer valid.
-- **Twitch dead after an offline launch.** Starting without network (or behind a hotel or captive-portal login page) left Twitch chat disconnected until a restart. Chat now connects with your saved account as soon as the network is back, and user cards, bans, the live status, badges and emotes catch up on their own.
-- **Endless reconnects with an expired login.** After a few hours, a dropped Twitch chat connection could keep retrying with an expired login. ChatterSyn now renews the login and reconnects.
-- **Badges and emotes missing after an outage.** Channels opened while Twitch was unreachable stayed without their Twitch badges and emotes.
-- **Misleading launch message.** People who never signed in to Twitch saw "stored tokens invalid — reconnect account" at every launch.
+- **Empty user cards when signed in.** Twitch user cards showed no avatar, account age or follower count while you were signed in to Twitch. They fill in again, and each detail now shows up on its own even if another one can't be loaded.
 
 Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
 <!-- release-notes:end -->
