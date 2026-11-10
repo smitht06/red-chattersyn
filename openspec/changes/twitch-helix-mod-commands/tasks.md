@@ -53,7 +53,7 @@ Interfaces:
 3. Run the verify command, then `uv run pytest -q`. Expected: PASS.
 4. Commit `feat(twitch): Helix endpoints and scopes for moderation commands`.
 
-- [ ] 1.2 Command runner and confirmation texts — verify: uv run pytest tests/test_twitch_mod_commands.py -q passes
+- [x] 1.2 Command runner and confirmation texts — verify: uv run pytest tests/test_twitch_mod_commands.py -q passes
 
 Covers: THM-1, THM-2, THM-3, THM-4, THM-9, THM-10, THM-12, THM-13, THM-14, THM-15, THM-23 · Test: scenario-first
 
