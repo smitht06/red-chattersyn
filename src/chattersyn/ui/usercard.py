@@ -146,9 +146,11 @@ class UsercardPopup(BasePopup):
     def __init__(self, settings: Settings, target: UsercardTarget,
                  recent_entries: list[tuple[object, Message]], *,
                  self_is_mod: bool = False,
-                 custom_actions: list[dict] | None = None, parent=None):
+                 custom_actions: list[dict] | None = None,
+                 delete_message_id: str = "", parent=None):
         super().__init__(parent)
         self.target = target
+        self._delete_message_id = delete_message_id
         self._avatar_url = ""
         # Fixed width, content height: the card grows as enrichment rows
         # arrive instead of leaving a fixed-size box half empty.
@@ -334,6 +336,9 @@ class UsercardPopup(BasePopup):
         if twitch:
             self._add_button_grid([("Ban", f"/ban {login}", True),
                                    ("Unban", f"/unban {login}", False)], 2)
+            if self._delete_message_id:
+                self._add_button_grid(
+                    [("Delete message", f"/delete {self._delete_message_id}", True)], 1)
             self._add_caption("Timeout")
             self._add_button_grid(
                 [(duration, f"/timeout {login} {duration}", False) for duration in _TIMEOUT_STRIP],

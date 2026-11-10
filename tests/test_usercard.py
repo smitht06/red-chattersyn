@@ -263,3 +263,38 @@ def test_mod_buttons_have_room_for_their_labels(qapp):
             assert button.width() >= text_w + 8, button.text()
     finally:
         popup.close()
+
+
+# -- delete message (THM-19, THM-21, Review Focus 5) ----------------------------------------
+
+
+def _labels(popup):
+    return {button.text(): button for button in popup._mod_buttons}
+
+
+def test_delete_button_sends_delete(qapp):
+    """THM-19: the button asks for /delete <message id>."""
+    popup = UsercardPopup(Settings({}), _target(), [], self_is_mod=True,
+                          delete_message_id="m-1")
+    got = []
+    popup.action_requested.connect(got.append)
+    _labels(popup)["Delete message"].click()
+    assert got == ["/delete m-1"]
+
+
+def test_no_delete_button_without_message_id(qapp):
+    popup = UsercardPopup(Settings({}), _target(), [], self_is_mod=True)
+    assert "Delete message" not in _labels(popup)
+
+
+def test_no_delete_button_without_mod_rights(qapp):
+    """THM-21: the whole mod frame stays hidden."""
+    popup = UsercardPopup(Settings({}), _target(), [], self_is_mod=False,
+                          delete_message_id="m-1")
+    assert popup._mod_frame.isHidden()
+
+
+def test_no_delete_button_on_youtube_card(qapp):
+    popup = UsercardPopup(Settings({}), _target(platform=Platform.YOUTUBE), [],
+                          self_is_mod=True, delete_message_id="m-1")
+    assert "Delete message" not in _labels(popup)

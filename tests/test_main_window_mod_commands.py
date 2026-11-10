@@ -177,3 +177,57 @@ async def test_mod_refused_shows_row_no_popup(win):
         await win._twitch_helix_command(tab, HelixCommand("vips"))
         assert win._user_list_popup is None
         assert _rows(tab) == ["Twitch /vips failed: Only the broadcaster can view VIPs."]
+
+
+# -- user card "Delete message" (THM-19, THM-20) ---------------------------------------------
+
+
+def _open_card(win, msg, monkeypatch):
+    from chattersyn.ui import usercard
+
+    async def no_enrich(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(usercard.UsercardPopup, "show_at_cursor", lambda self: None)
+    monkeypatch.setattr(win, "_enrich_usercard", no_enrich)
+    monkeypatch.setattr(win._moderation, "has_twitch_rights", lambda channel: True)
+    win._show_usercard(msg, "bob")
+    popup = win._usercard_popup
+    return popup, {b.text(): b for b in popup._mod_buttons}
+
+
+def _bob_message(win, **extra):
+    import datetime as dt
+
+    from chattersyn.models.message import Message
+    tab = win._tabs[0]
+    return Message(id="m-1", platform=Platform.TWITCH, channel_id="alice",
+                   ts=dt.datetime(2026, 11, 10, 9, 0, 0),
+                   author=Author(name="Bob", login="bob", user_id="1"),
+                   plain="hi", extra=extra), tab
+
+
+async def test_delete_button_deletes_message(win, monkeypatch):
+    """THM-19: pressing it runs DELETE /moderation/chat?message_id=m-1."""
+    msg, _tab = _bob_message(win)
+    with respx.mock:
+        _users_route()
+        route = respx.delete(f"{BASE}/moderation/chat").mock(return_value=httpx.Response(204))
+        win._twitch = _Service([*BASE_SCOPES, auth.CHAT_MESSAGES_SCOPE])
+        win._commands = CommandController(win._settings, [])
+        _popup, buttons = _open_card(win, msg, monkeypatch)
+        buttons["Delete message"].click()
+        for _ in range(200):
+            if route.called:
+                break
+            await asyncio.sleep(0.01)
+        assert route.called
+        assert route.calls.last.request.url.params["message_id"] == "m-1"
+
+
+async def test_no_delete_button_from_usercard_command(win, monkeypatch):
+    """THM-20: a synthetic /usercard message has no real id."""
+    win._twitch = _Service(BASE_SCOPES)
+    msg, _tab = _bob_message(win, synthetic=True)
+    _popup, buttons = _open_card(win, msg, monkeypatch)
+    assert "Ban" in buttons and "Delete message" not in buttons

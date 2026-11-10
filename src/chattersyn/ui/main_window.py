@@ -1823,6 +1823,8 @@ class MainWindow(QMainWindow):
             self._settings, target, recent, parent=self,
             self_is_mod=self_is_mod,
             custom_actions=self._usercard_custom_actions(tab, msg, target),
+            delete_message_id=(msg.id if msg.platform is Platform.TWITCH and self_is_mod
+                               and self._is_own_message(msg, target) else ""),
         )
         popup.action_requested.connect(
             functools.partial(self._on_usercard_action, tab, target))
@@ -1832,6 +1834,14 @@ class MainWindow(QMainWindow):
         asyncio.ensure_future(
             self._enrich_usercard(popup, target, tab.twitch_channel, self_is_mod))
 
+    @staticmethod
+    def _is_own_message(msg: Message, target: UsercardTarget) -> bool:
+        """True when the card was opened from a real message by the target
+        (not an @mention click, a system row or a synthetic /usercard one)."""
+        return (msg.author is not None and not msg.is_system
+                and not msg.extra.get("synthetic")
+                and (msg.author.login or "").lower() == target.login)
+
     def _usercard_custom_actions(self, tab: Tab, msg: Message,
                                  target: UsercardTarget) -> list[dict]:
         """Settings → Moderation templates, fully expanded for this card
@@ -1840,9 +1850,7 @@ class MainWindow(QMainWindow):
         when there is no real message from the target (an @mention click, or
         a /usercard with nothing in the scrollback) — they'd act on the wrong
         message or an empty id."""
-        own_message = (msg.author is not None and not msg.is_system
-                       and not msg.extra.get("synthetic")
-                       and (msg.author.login or "").lower() == target.login)
+        own_message = self._is_own_message(msg, target)
         variables = {
             "user.name": target.display_name,
             "user.login": target.login,
