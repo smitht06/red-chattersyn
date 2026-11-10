@@ -72,6 +72,10 @@ class TwitchAuthError(Exception):
     pass
 
 
+class TwitchUnreachable(Exception):
+    pass
+
+
 @dataclasses.dataclass
 class TwitchTokens:
     access_token: str
@@ -112,6 +116,8 @@ class TwitchAuth:
         self._redirect_uri = ""
         self._code_verifier = ""
         self._state = ""
+        self._lock = asyncio.Lock()
+        self._refresh_task: asyncio.Future | None = None
 
     async def close(self) -> None:
         await self._stop_server()
@@ -136,27 +142,43 @@ class TwitchAuth:
     # -- token lifecycle --------------------------------------------------------
 
     async def validate(self, access_token: str) -> dict | None:
-        """Twitch user info for a token; None if the token is rejected."""
-        response = await self._client.get(
-            VALIDATE_URL, headers={"Authorization": f"OAuth {access_token}"}
-        )
+        """Twitch user info for a token; None if the token is rejected (401).
+
+        Raises TwitchUnreachable when Twitch can't answer (network error,
+        timeout, 5xx, 429) - the token's state is unknown, not rejected."""
+        try:
+            response = await self._client.get(
+                VALIDATE_URL, headers={"Authorization": f"OAuth {access_token}"}
+            )
+        except httpx.TransportError as exc:
+            raise TwitchUnreachable(f"validate failed: {exc!r}") from exc
         if response.status_code == 401:
             return None
+        if response.status_code == 429 or response.status_code >= 500:
+            raise TwitchUnreachable(f"validate answered {response.status_code}")
         response.raise_for_status()
         return response.json()
 
     async def refresh(self, tokens: TwitchTokens) -> TwitchTokens | None:
-        response = await self._client.post(
-            TOKEN_URL,
-            params={
-                "grant_type": "refresh_token",
-                "refresh_token": tokens.refresh_token,
-                "client_id": self.client_id,
-            },
-        )
-        if response.status_code != 200:
+        """Exchange the refresh token. None when Twitch rejects it (400/401);
+        TwitchUnreachable for network errors, timeouts and any other non-200."""
+        try:
+            response = await self._client.post(
+                TOKEN_URL,
+                params={
+                    "grant_type": "refresh_token",
+                    "refresh_token": tokens.refresh_token,
+                    "client_id": self.client_id,
+                },
+            )
+        except httpx.TransportError as exc:
+            raise TwitchUnreachable(f"token refresh failed: {exc!r}") from exc
+        if response.status_code in (400, 401):
             log.warning("token refresh rejected: %s", response.status_code)
             return None
+        if response.status_code != 200:
+            log.warning("token refresh unavailable: %s", response.status_code)
+            raise TwitchUnreachable(f"token refresh answered {response.status_code}")
         data = response.json()
         tokens.access_token = data.get("access_token", "")
         tokens.refresh_token = data.get("refresh_token") or tokens.refresh_token
@@ -164,36 +186,67 @@ class TwitchAuth:
         tokens.expires_at = time.time() + int(data.get("expires_in", 0))
         return tokens
 
-    async def ensure_valid(self) -> TwitchTokens | None:
+    async def ensure_valid(self, *, rejected_token: str | None = None) -> TwitchTokens | None:
         """Valid tokens for the stored session, refreshing if needed.
 
-        Returns None when (re)authorization is required; the stored session is
-        cleared so the UI can offer a fresh flow.
+        Returns None on a definite rejection (refresh answered 400/401, or the
+        token expired with no refresh token); the saved login is deleted so the
+        UI can offer a fresh flow. Raises TwitchUnreachable when Twitch can't be
+        reached - the saved login is left untouched. Checks run one at a time.
+
+        rejected_token is an access token IRC refused: if it is still the saved
+        one, refresh without validating first; if it was already replaced, just
+        validate and return the current tokens.
         """
-        tokens = self.load_tokens()
-        if tokens is None:
-            return None
-        info = await self.validate(tokens.access_token)
-        if info is None:
-            if not tokens.refresh_token:
-                self.clear()
+        async with self._lock:
+            tokens = self.load_tokens()
+            if tokens is None:
                 return None
-            refreshed = await self.refresh(tokens)
-            if refreshed is None or not refreshed.access_token:
-                self.clear()
-                return None
-            tokens = refreshed
-            info = await self.validate(tokens.access_token)
+            if rejected_token is not None and tokens.access_token == rejected_token:
+                info = None  # Twitch's chat already refused it - don't ask again
+            else:
+                info = await self.validate(tokens.access_token)
             if info is None:
-                self.clear()
-                return None
-        if info:
+                if not tokens.refresh_token:
+                    self.clear()
+                    return None
+                refreshed = await self._refresh_shielded(tokens)
+                if refreshed is None:
+                    return None
+                tokens = refreshed
+                info = await self.validate(tokens.access_token)
+                if info is None:
+                    self.clear()
+                    return None
             tokens.login = info.get("login", "")
             tokens.user_id = info.get("user_id", "")
             if "scopes" in info:  # what the token actually grants today
                 tokens.scopes = list(info.get("scopes") or [])
             self.save_tokens(tokens)
-        return tokens
+            return tokens
+
+    async def _refresh_shielded(self, tokens: TwitchTokens) -> TwitchTokens | None:
+        """Refresh and save in a task the caller's cancellation can't stop.
+
+        Public-client refresh tokens are single-use: cancelling the request
+        mid-flight could lose the new token and the next refresh would be
+        rejected. A caller that stops waiting leaves the task to finish and
+        save; a later check joins it instead of spending the token again."""
+        task = self._refresh_task
+        if task is None or task.done():
+            task = asyncio.ensure_future(self._refresh_and_save(tokens))
+            self._refresh_task = task  # strong reference until it finishes
+            # an abandoned task's failure is logged by refresh(); don't warn twice
+            task.add_done_callback(lambda t: t.cancelled() or t.exception())
+        return await asyncio.shield(task)
+
+    async def _refresh_and_save(self, tokens: TwitchTokens) -> TwitchTokens | None:
+        refreshed = await self.refresh(tokens)
+        if refreshed is None or not refreshed.access_token:
+            self.clear()
+            return None
+        self.save_tokens(refreshed)
+        return refreshed
 
     # -- interactive flow ---------------------------------------------------------
 

@@ -6,6 +6,7 @@ import hashlib
 import urllib.parse
 
 import httpx
+import pytest
 import respx
 
 from chattersyn.services.twitch.auth import (
@@ -16,6 +17,7 @@ from chattersyn.services.twitch.auth import (
     TwitchAuth,
     TwitchAuthError,
     TwitchTokens,
+    TwitchUnreachable,
 )
 
 
@@ -123,7 +125,7 @@ async def test_ensure_valid_refreshes_on_401():
 
 
 @respx.mock
-async def test_ensure_valid_clears_when_refresh_fails():
+async def test_ensure_valid_clears_when_refresh_rejected():
     store = DictStore({TOKEN_KEY: TwitchTokens(**tokens_json()).to_json()})
     respx.get(VALIDATE_URL).mock(return_value=httpx.Response(401))
     respx.post(TOKEN_URL).mock(return_value=httpx.Response(400))
@@ -341,3 +343,266 @@ async def test_ensure_valid_syncs_scopes_from_validate():
         await auth.close()
     assert tokens.scopes == ["chat:read", "chat:edit"]
     assert TwitchTokens.from_json(store.get(TOKEN_KEY)).scopes == ["chat:read", "chat:edit"]
+
+
+# -- outcome classification: keep the login unless Twitch rejects it -----------------------
+
+REFRESH_OK = httpx.Response(
+    200,
+    json={"access_token": "acc-2", "refresh_token": "ref-2", "scope": "chat:read chat:edit", "expires_in": 3600},
+)
+
+
+def stored_store(**overrides):
+    return DictStore({TOKEN_KEY: TwitchTokens(**tokens_json(**overrides)).to_json()})
+
+
+async def _ensure_unreachable(store):
+    auth = make_auth(store)
+    try:
+        with pytest.raises(TwitchUnreachable):
+            await auth.ensure_valid()
+    finally:
+        await auth.close()
+
+
+@respx.mock
+async def test_refresh_5xx_keeps_login():
+    store = stored_store()
+    respx.get(VALIDATE_URL).mock(return_value=httpx.Response(401))
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(503))
+    await _ensure_unreachable(store)
+    assert store.deleted == []
+    assert store.get(TOKEN_KEY) is not None
+
+
+@respx.mock
+async def test_refresh_network_error_keeps_login():
+    store = stored_store()
+    respx.get(VALIDATE_URL).mock(return_value=httpx.Response(401))
+    respx.post(TOKEN_URL).mock(side_effect=httpx.ConnectError("down"))
+    await _ensure_unreachable(store)
+    assert store.deleted == []
+
+
+@respx.mock
+async def test_refresh_timeout_keeps_login():
+    store = stored_store()
+    respx.get(VALIDATE_URL).mock(return_value=httpx.Response(401))
+    respx.post(TOKEN_URL).mock(side_effect=httpx.ReadTimeout("slow"))
+    await _ensure_unreachable(store)
+    assert store.deleted == []
+
+
+@respx.mock
+async def test_refresh_429_keeps_login():
+    store = stored_store()
+    respx.get(VALIDATE_URL).mock(return_value=httpx.Response(401))
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(429))
+    await _ensure_unreachable(store)
+    assert store.deleted == []
+
+
+@pytest.mark.parametrize("status", [400, 401])
+@respx.mock
+async def test_refresh_rejection_deletes_login(status):
+    store = stored_store()
+    respx.get(VALIDATE_URL).mock(return_value=httpx.Response(401))
+    respx.post(TOKEN_URL).mock(return_value=httpx.Response(status))
+    auth = make_auth(store)
+    try:
+        assert await auth.ensure_valid() is None
+    finally:
+        await auth.close()
+    assert TOKEN_KEY in store.deleted
+    assert store.get(TOKEN_KEY) is None
+
+
+@respx.mock
+async def test_expired_without_refresh_token_deletes_login():
+    store = stored_store(refresh_token="")
+    respx.get(VALIDATE_URL).mock(return_value=httpx.Response(401))
+    refresh_route = respx.post(TOKEN_URL)
+    auth = make_auth(store)
+    try:
+        assert await auth.ensure_valid() is None
+    finally:
+        await auth.close()
+    assert TOKEN_KEY in store.deleted
+    assert not refresh_route.called
+
+
+@respx.mock
+async def test_valid_without_refresh_token_kept():
+    store = stored_store(refresh_token="")
+    respx.get(VALIDATE_URL).mock(return_value=VALIDATE_OK)
+    auth = make_auth(store)
+    try:
+        tokens = await auth.ensure_valid()
+    finally:
+        await auth.close()
+    assert tokens is not None and tokens.access_token == "acc-1"
+    assert store.deleted == []
+
+
+@pytest.mark.parametrize(
+    "mock",
+    [
+        {"return_value": httpx.Response(500)},
+        {"return_value": httpx.Response(503)},
+        {"return_value": httpx.Response(429)},
+        {"side_effect": httpx.ConnectError("down")},
+        {"side_effect": httpx.ReadTimeout("slow")},
+    ],
+)
+@respx.mock
+async def test_validate_5xx_and_network_raise_unreachable(mock):
+    respx.get(VALIDATE_URL).mock(**mock)
+    auth = make_auth(DictStore())
+    try:
+        with pytest.raises(TwitchUnreachable):
+            await auth.validate("acc-1")
+    finally:
+        await auth.close()
+
+
+@respx.mock
+async def test_validate_unreachable_keeps_login():
+    store = stored_store()
+    respx.get(VALIDATE_URL).mock(return_value=httpx.Response(502))
+    await _ensure_unreachable(store)
+    assert store.deleted == []
+
+
+def _validate_by_token(request):
+    token = request.headers["Authorization"].removeprefix("OAuth ")
+    return httpx.Response(401) if token == "acc-1" else VALIDATE_OK
+
+
+@respx.mock
+async def test_concurrent_ensure_valid_one_refresh():
+    store = stored_store()
+    respx.get(VALIDATE_URL).mock(side_effect=_validate_by_token)
+    refresh_route = respx.post(TOKEN_URL).mock(return_value=REFRESH_OK)
+    auth = make_auth(store)
+    try:
+        first, second = await asyncio.gather(auth.ensure_valid(), auth.ensure_valid())
+    finally:
+        await auth.close()
+    assert refresh_route.call_count == 1
+    assert first is not None and second is not None
+    assert first.access_token == second.access_token == "acc-2"
+
+
+@respx.mock
+async def test_rejected_token_forces_refresh():
+    store = stored_store()
+    validate_route = respx.get(VALIDATE_URL).mock(return_value=VALIDATE_OK)
+    refresh_route = respx.post(TOKEN_URL).mock(return_value=REFRESH_OK)
+    auth = make_auth(store)
+    try:
+        tokens = await auth.ensure_valid(rejected_token="acc-1")
+    finally:
+        await auth.close()
+    assert refresh_route.call_count == 1
+    assert tokens is not None and tokens.access_token == "acc-2"
+    # the refused token was never validated: only the fresh one was
+    assert [c.request.headers["Authorization"] for c in validate_route.calls] == ["OAuth acc-2"]
+
+
+@respx.mock
+async def test_rejected_token_without_refresh_token_deletes_login():
+    store = stored_store(refresh_token="")
+    respx.get(VALIDATE_URL).mock(return_value=VALIDATE_OK)
+    refresh_route = respx.post(TOKEN_URL)
+    auth = make_auth(store)
+    try:
+        assert await auth.ensure_valid(rejected_token="acc-1") is None
+    finally:
+        await auth.close()
+    assert TOKEN_KEY in store.deleted
+    assert not refresh_route.called
+
+
+@respx.mock
+async def test_rejected_token_already_replaced_skips_refresh():
+    store = stored_store(access_token="acc-2", refresh_token="ref-2")
+    respx.get(VALIDATE_URL).mock(return_value=VALIDATE_OK)
+    refresh_route = respx.post(TOKEN_URL)
+    auth = make_auth(store)
+    try:
+        tokens = await auth.ensure_valid(rejected_token="acc-1")
+    finally:
+        await auth.close()
+    assert not refresh_route.called
+    assert tokens is not None and tokens.access_token == "acc-2"
+
+
+@respx.mock
+async def test_cancelled_caller_does_not_cancel_refresh():
+    store = stored_store()
+    respx.get(VALIDATE_URL).mock(side_effect=_validate_by_token)
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def slow_refresh(request):
+        started.set()
+        await release.wait()
+        return REFRESH_OK
+
+    refresh_route = respx.post(TOKEN_URL).mock(side_effect=slow_refresh)
+    auth = make_auth(store)
+    try:
+        waiter = asyncio.ensure_future(asyncio.wait_for(auth.ensure_valid(), timeout=0.2))
+        await started.wait()
+        with pytest.raises(TimeoutError):
+            await waiter
+        # the caller stopped waiting; the refresh is still in flight
+        assert TwitchTokens.from_json(store.get(TOKEN_KEY)).access_token == "acc-1"
+        release.set()
+        for _ in range(50):
+            if TwitchTokens.from_json(store.get(TOKEN_KEY)).access_token == "acc-2":
+                break
+            await asyncio.sleep(0.02)
+        saved = TwitchTokens.from_json(store.get(TOKEN_KEY))
+        assert saved.access_token == "acc-2" and saved.refresh_token == "ref-2"
+        # a later check is not wedged by the cancelled waiter and does not refresh again
+        tokens = await asyncio.wait_for(auth.ensure_valid(), timeout=2)
+        assert tokens is not None and tokens.access_token == "acc-2"
+        assert refresh_route.call_count == 1
+    finally:
+        release.set()
+        await auth.close()
+    assert store.deleted == []
+
+
+@respx.mock
+async def test_check_during_inflight_refresh_reuses_it():
+    """A new check arriving after the first waiter gave up joins the running
+    refresh instead of spending the single-use refresh token a second time."""
+    store = stored_store()
+    respx.get(VALIDATE_URL).mock(side_effect=_validate_by_token)
+    release = asyncio.Event()
+    started = asyncio.Event()
+
+    async def slow_refresh(request):
+        started.set()
+        await release.wait()
+        return REFRESH_OK
+
+    refresh_route = respx.post(TOKEN_URL).mock(side_effect=slow_refresh)
+    auth = make_auth(store)
+    try:
+        waiter = asyncio.ensure_future(asyncio.wait_for(auth.ensure_valid(), timeout=0.1))
+        await started.wait()
+        with pytest.raises(TimeoutError):
+            await waiter
+        second = asyncio.ensure_future(auth.ensure_valid(rejected_token="acc-1"))
+        await asyncio.sleep(0.05)
+        release.set()
+        tokens = await asyncio.wait_for(second, timeout=2)
+    finally:
+        release.set()
+        await auth.close()
+    assert refresh_route.call_count == 1
+    assert tokens is not None and tokens.access_token == "acc-2"
