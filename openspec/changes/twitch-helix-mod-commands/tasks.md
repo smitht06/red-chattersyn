@@ -120,7 +120,7 @@ Interfaces:
 3. Run the verify command, then `uv run pytest -q`. Expected: PASS.
 4. Commit `feat(ui): mods and VIPs list popup`.
 
-- [ ] 3.2 "Delete message" on the user card — verify: uv run pytest tests/test_usercard.py tests/test_main_window_mod_commands.py -q passes
+- [x] 3.2 "Delete message" on the user card — verify: uv run pytest tests/test_usercard.py tests/test_main_window_mod_commands.py -q passes
 
 Covers: THM-19, THM-20, THM-21 · Test: scenario-first
 
