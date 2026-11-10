@@ -97,6 +97,23 @@ def test_set_details_fills_rows(popup):
     assert popup._followage_value.text() == "2022-01-01"
 
 
+def test_followage_label_names_the_channel(popup):
+    """TUF-4: the follow row is about the card's channel, not "you"."""
+    popup.set_details(followage="2024-03-05T10:00:00Z", followage_channel="alice")
+    assert popup._followage_key.text() == "Followed alice since:"
+    assert popup._followage_value.text() == "2024-03-05"
+    assert not popup._followage_row.isHidden()
+
+
+def test_details_arrive_one_at_a_time(popup):
+    """TUF-1: each lookup fills its own row; earlier rows stay."""
+    popup.set_details(created_at="2021-03-04T05:06:07Z")
+    popup.set_details(followers=7)
+    assert not popup._created_row.isHidden()
+    assert popup._followers_value.text() == "7"
+    assert popup._followage_row.isHidden()
+
+
 def test_youtube_uses_subscribers_label(qapp):
     popup = UsercardPopup(Settings({}), _target(platform=Platform.YOUTUBE), [])
     labels = [w.text() for w in popup._followers_row.findChildren(QLabel)]

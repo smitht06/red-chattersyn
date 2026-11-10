@@ -198,6 +198,7 @@ class UsercardPopup(BasePopup):
         self._followers_row, self._followers_value = self._add_row(
             "Subscribers:" if target.platform is Platform.YOUTUBE else "Followers:")
         self._followage_row, self._followage_value = self._add_row("Follows you since:")
+        self._followage_key = self._followage_row.findChild(QLabel)
 
         layout.addWidget(self._divider())
 
@@ -241,8 +242,11 @@ class UsercardPopup(BasePopup):
     # -- API ----------------------------------------------------------------------
 
     def set_details(self, *, created_at: str = "", followers: int | None = None,
-                    followage: str = "", avatar_url: str | None = None) -> None:
-        """Async enrichment from MainWindow (Helix / YouTube channels.list)."""
+                    followage: str = "", followage_channel: str = "",
+                    avatar_url: str | None = None) -> None:
+        """Async enrichment from MainWindow (Helix / YouTube channels.list).
+        Called once per detail as each lookup answers; shown rows stay.
+        `followage_channel` names the channel the follow date is about."""
         if avatar_url and avatar_url != self._avatar_url:
             self._load_avatar(avatar_url)
         if created_at:
@@ -255,6 +259,8 @@ class UsercardPopup(BasePopup):
             self._followers_value.setText(f"{followers:,}")
             self._followers_row.show()
         if followage:
+            if followage_channel:
+                self._followage_key.setText(f"Followed {followage_channel} since:")
             self._followage_value.setText(followage[:10])
             self._followage_row.show()
         if self.isVisible():
@@ -292,7 +298,8 @@ class UsercardPopup(BasePopup):
         key = QLabel(label_text, row)
         key.setStyleSheet(_KEY_STYLE)
         # One key column for every row, sized to the longest label.
-        key.setFixedWidth(key.fontMetrics().horizontalAdvance("Follows you since:") + 6)
+        # A longer label ("Followed <channel> since:") may widen its own row.
+        key.setMinimumWidth(key.fontMetrics().horizontalAdvance("Follows you since:") + 6)
         value = QLabel("", row)
         value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         lay.addWidget(key)

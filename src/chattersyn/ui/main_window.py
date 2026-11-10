@@ -53,7 +53,12 @@ from ..services.highlights import HighlightController
 from ..services.logger import ChatLogger
 from ..services.moderation import STACK_MAX_MESSAGES, STACK_WINDOW, ModerationState
 from ..services.send import SendCoordinator, SendResult, SendTargets
-from ..services.twitch.auth import DEFAULT_TWITCH_CLIENT_ID, MODERATION_SCOPE, TwitchAuthError
+from ..services.twitch.auth import (
+    DEFAULT_TWITCH_CLIENT_ID,
+    FOLLOWERS_SCOPE,
+    MODERATION_SCOPE,
+    TwitchAuthError,
+)
 from ..services.twitch.mapper import ClearChat, ClearMsg, RoomState, UserState
 from ..services.twitch.service import EXPIRED_MESSAGE, REJECTED_MESSAGE, TwitchService
 from ..services.youtube.auth import YouTubeAuthError
@@ -1769,7 +1774,8 @@ class MainWindow(QMainWindow):
         popup.closed.connect(self._on_usercard_closed)
         self._usercard_popup = popup
         popup.show_at_cursor()
-        asyncio.ensure_future(self._enrich_usercard(popup, target))
+        asyncio.ensure_future(
+            self._enrich_usercard(popup, target, tab.twitch_channel, self_is_mod))
 
     def _usercard_custom_actions(self, tab: Tab, msg: Message,
                                  target: UsercardTarget) -> list[dict]:
@@ -1844,38 +1850,55 @@ class MainWindow(QMainWindow):
     def _on_usercard_closed(self) -> None:
         self._usercard_popup = None
 
-    async def _enrich_usercard(self, popup: UsercardPopup, target: UsercardTarget) -> None:
-        """Helix/YouTube field expansion; the popup may have closed meanwhile."""
+    async def _enrich_usercard(self, popup: UsercardPopup, target: UsercardTarget,
+                               channel: str = "", self_is_mod: bool = False) -> None:
+        """Helix/YouTube field expansion; the popup may have closed meanwhile.
+        `channel` is the Twitch channel of the tab the card came from."""
         try:
             if target.platform is Platform.TWITCH:
-                await self._enrich_twitch_usercard(popup, target)
+                await self._enrich_twitch_usercard(popup, target, channel, self_is_mod)
             else:
                 await self._enrich_youtube_usercard(popup, target)
         except Exception as exc:  # enrichment is best-effort
             log.debug("usercard enrichment failed: %s", exc)
 
-    async def _enrich_twitch_usercard(self, popup: UsercardPopup,
-                                      target: UsercardTarget) -> None:
+    async def _enrich_twitch_usercard(self, popup: UsercardPopup, target: UsercardTarget,
+                                      channel: str = "", self_is_mod: bool = False) -> None:
+        """Each detail is its own lookup and fills its own row as it answers,
+        so one failing lookup never hides the others. The follow date is
+        about `channel` and only its broadcaster and mods may ask for it."""
         if self._twitch is None or self._twitch.helix is None:
             return  # anonymous read: Author fields only
-        user = await self._twitch.helix.user_by_login(target.login)
+        helix = self._twitch.helix
+        user = await helix.user_by_login(target.login)
         if user is None or self._usercard_popup is not popup:
             return
-        followers = followage = None
-        broadcaster_id = user.get("id") or target.user_id
-        if broadcaster_id:
-            followers = await self._twitch.helix.channel_followers(broadcaster_id)
-            me = self._twitch.self_author()
-            if me and me.user_id and me.user_id != broadcaster_id:
-                followage = await self._twitch.helix.user_follows(me.user_id, broadcaster_id)
-        if self._usercard_popup is not popup:
+        popup.set_details(created_at=user.get("created_at", ""),
+                          avatar_url=user.get("profile_image_url") or None)
+        user_id = user.get("id") or target.user_id
+        if not user_id:
             return
-        popup.set_details(
-            created_at=user.get("created_at", ""),
-            followers=followers,
-            followage=followage or "",
-            avatar_url=user.get("profile_image_url") or None,
-        )
+        try:
+            followers = await helix.channel_followers(user_id)
+        except Exception as exc:
+            log.debug("usercard follower count failed: %s", exc)
+        else:
+            if followers is not None and self._usercard_popup is popup:
+                popup.set_details(followers=followers)
+        tokens = self._twitch.tokens
+        if not (self_is_mod and channel and tokens is not None
+                and FOLLOWERS_SCOPE in tokens.scopes):
+            return
+        try:
+            broadcaster = await helix.user_by_login(channel)
+            if broadcaster is None or not broadcaster.get("id") or broadcaster["id"] == user_id:
+                return  # unknown channel, or the broadcaster's own card
+            followed_at = await helix.channel_follower_since(broadcaster["id"], user_id)
+        except Exception as exc:
+            log.debug("usercard follow lookup failed: %s", exc)
+            return
+        if followed_at and self._usercard_popup is popup:
+            popup.set_details(followage=followed_at, followage_channel=channel)
 
     async def _enrich_youtube_usercard(self, popup: UsercardPopup,
                                        target: UsercardTarget) -> None:
