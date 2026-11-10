@@ -48,6 +48,10 @@ class TwitchService:
         self._check_pending = False
         self._global_badges_loaded = False
         self._catch_up_task: asyncio.Task | None = None
+        # One re-login at a time; set once a re-login's new token was handed
+        # to a rebuilt connection, cleared by that connection's welcome.
+        self._relogin_task: asyncio.Task | None = None
+        self._relogin_spent = False
 
     @property
     def unreachable(self) -> bool:
@@ -83,10 +87,12 @@ class TwitchService:
     async def _fall_back_read_only(self, message: str, *, delete: bool) -> None:
         """Swap to an anonymous read-only connection and announce why.
         `delete` also removes the saved login (when Twitch rejected it)."""
+        await self._cancel_relogin()
         if delete:
             self.auth.clear()
         self.tokens = None
         self._check_pending = False
+        self._relogin_spent = False
         if self.helix is not None:
             await self.helix.close()
             self.helix = None
@@ -98,6 +104,14 @@ class TwitchService:
         self._join_desired()
         bridge.auth_state.emit("twitch", False, message)
 
+    async def _cancel_relogin(self) -> None:
+        """Stop a running re-login (never the calling one). Safe mid-refresh:
+        the token refresh itself is shielded and finishes on its own."""
+        task, self._relogin_task = self._relogin_task, None
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
     def _set_unreachable(self) -> None:
         self._unreachable = True
         self._emit_connection("unreachable", "")
@@ -108,6 +122,8 @@ class TwitchService:
 
     def _on_irc_connected(self, signed_in: bool) -> None:
         self._unreachable = False
+        if signed_in:
+            self._relogin_spent = False
         self._emit_connection("connected", "signed_in" if signed_in else "anonymous")
         if signed_in and (self._catch_up_task is None or self._catch_up_task.done()):
             self._catch_up_task = asyncio.ensure_future(self._catch_up())
@@ -217,21 +233,26 @@ class TwitchService:
             self_user_id=(self.tokens.user_id if self.tokens else None),
             theme=self._theme,
         )
-        return TwitchIrc(
+        token = self.tokens.access_token if self.tokens else None
+        born: list[TwitchIrc] = []  # the client this callback belongs to
+        irc = TwitchIrc(
             mapper,
             # Twitch requires the NICK to be the authenticated login, and
             # self_author() reports it — a justinfan nick on a token'd
             # connection would surface as "you".
             nick=(self.tokens.login if self.tokens else None),
-            token=self.tokens.access_token if self.tokens else None,
+            token=token,
             on_message=self._on_message,
             on_event=self._on_event,
-            on_auth=self._on_auth,
-            on_connected=functools.partial(self._on_irc_connected, self.tokens is not None),
+            on_auth=lambda event: self._on_auth(event, born[0], token),
+            on_connected=functools.partial(self._on_irc_connected, token is not None),
             on_connect_failed=self._set_unreachable,
         )
+        born.append(irc)
+        return irc
 
     async def stop(self) -> None:
+        await self._cancel_relogin()
         task = self._catch_up_task
         if task is not None and not task.done() and task is not asyncio.current_task():
             task.cancel()
@@ -376,6 +397,51 @@ class TwitchService:
     def _on_event(self, event) -> None:
         bridge.event.emit(event)
 
-    def _on_auth(self, event: AuthFailed) -> None:
+    def _on_auth(self, event: AuthFailed, source: TwitchIrc, token: str | None) -> None:
+        """Twitch refused the login on `source`, a client built with `token`.
+        Twitch then closes the socket and that client reconnects with the
+        same token, so a refusal during a running re-login is just noise."""
         log.warning("Twitch auth notice: %s", event.reason)
-        bridge.auth_state.emit("twitch", False, event.reason)
+        if source is not self.irc:
+            return  # a replaced client's late refusal
+        if token is None:
+            return  # anonymous connections have no login to refresh
+        if self._relogin_task is not None and not self._relogin_task.done():
+            return  # single flight
+        self._relogin_task = asyncio.ensure_future(self._relogin(source, token))
+
+    async def _relogin(self, source: TwitchIrc, rejected_token: str) -> None:
+        """Answer an IRC auth refusal: one refresh, one rebuilt connection. A
+        second refusal before the rebuilt connection is welcomed means the new
+        token is refused too — then go read-only and keep the login."""
+        try:
+            if self._relogin_spent:
+                log.warning("Twitch refused the refreshed token — running read-only")
+                await self._fall_back_read_only(REJECTED_MESSAGE, delete=False)
+                return
+            try:
+                tokens = await self.auth.ensure_valid(rejected_token=rejected_token)
+            except TwitchUnreachable as exc:
+                log.warning("Twitch token refresh failed (%r) — will retry at the next refusal", exc)
+                if self.irc is source:
+                    self._set_unreachable()  # the client's backoff reconnect retries
+                return
+            if self.irc is not source:
+                return  # reconnect / sign-out / read-only swapped the connection meanwhile
+            if tokens is None:
+                log.warning("Twitch login rejected on re-login — running read-only until re-auth")
+                await self._fall_back_read_only(EXPIRED_MESSAGE, delete=True)
+                return
+            self.tokens = tokens
+            self._check_pending = False
+            if self.helix is not None:
+                self.helix.invalidate_token()
+            await self.irc.stop()
+            self.irc = self._make_irc()
+            self.irc.start()
+            self._join_desired()
+            self._relogin_spent = True
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Twitch re-login failed")

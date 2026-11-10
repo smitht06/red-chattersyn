@@ -5,13 +5,16 @@ import asyncio
 import httpx
 import pytest
 import respx
+from fakeirc import FakeIrcServer
 
 from chattersyn.config.settings import Settings
 from chattersyn.core.bus import bridge
 from chattersyn.services.twitch import service as service_module
 from chattersyn.services.twitch.auth import TOKEN_KEY, TOKEN_URL, VALIDATE_URL, TwitchTokens
 from chattersyn.services.twitch.helix import BASE
-from chattersyn.services.twitch.service import EXPIRED_MESSAGE, TwitchService
+from chattersyn.services.twitch.irc import TwitchIrc
+from chattersyn.services.twitch.mapper import AuthFailed
+from chattersyn.services.twitch.service import EXPIRED_MESSAGE, REJECTED_MESSAGE, TwitchService
 
 
 class DictStore:
@@ -786,3 +789,251 @@ async def test_catch_up_runs_once_at_a_time(catch_up_env):
     finally:
         await service.stop()
     assert started == [1, 1]
+
+
+# -- re-login on an IRC auth refusal ------------------------------------------------------------
+
+
+class _AuthServer(FakeIrcServer):
+    """A fake IRC server that welcomes only the tokens in `accepted` (and
+    anonymous connections). Any other login gets Twitch's auth NOTICE and a
+    close. `attempts` lists the token of every connection, in order."""
+
+    def __init__(self, accepted=()):
+        super().__init__()
+        self.accepted = set(accepted)
+        self.attempts: list[str | None] = []
+
+    async def _handle(self, ws) -> None:
+        self.connections.append(ws)
+        self.connected.set()
+        token = None
+        try:
+            async for raw in ws:
+                line = str(raw)
+                self.received.append(line)
+                if line.startswith("PASS oauth:"):
+                    token = line.removeprefix("PASS oauth:")
+                elif line.startswith("NICK"):
+                    self.attempts.append(token)
+                    if token is None or token in self.accepted:
+                        await ws.send(f":tmi.twitch.tv 001 {line[5:]} :Welcome, GLHF!")
+                    else:
+                        await ws.send(":tmi.twitch.tv NOTICE * :Login authentication failed")
+                        await ws.close()
+        except Exception:
+            pass
+        finally:
+            if ws in self.connections:
+                self.connections.remove(ws)
+
+    def welcomed(self, token) -> bool:
+        return token in self.attempts and token in self.accepted
+
+
+def _refreshed(access, refresh):
+    return httpx.Response(200, json={
+        "access_token": access, "refresh_token": refresh,
+        "expires_in": 3600, "scope": ["chat:read", "chat:edit"]})
+
+
+@pytest.fixture
+async def relogin_env(monkeypatch):
+    """A signed-in service on a real TwitchIrc talking to `_AuthServer`.
+    Yields (service, server, store, refresh_route, conn, auth, clients)."""
+    server = _AuthServer()
+    await server.start()
+    clients: list[TwitchIrc] = []
+
+    def build(mapper, **kwargs):
+        client = TwitchIrc(mapper, ws_url=server.url, backoff_base=0.05, backoff_cap=0.1, **kwargs)
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(service_module, "TwitchIrc", build)
+    conn, auth = [], []
+
+    def on_auth(*args):
+        auth.append(args)
+
+    bridge.connection_state.connect(conn.append)
+    bridge.auth_state.connect(on_auth)
+    store = DictStore({TOKEN_KEY: TwitchTokens(**tokens_json(login="saveduser")).to_json()})
+    service = make_service({"twitch": {"client_id": "cid"}}, store)
+    monkeypatch.setattr(service, "_kick_metadata", lambda name: None)
+    with respx.mock:
+        respx.get(VALIDATE_URL).mock(return_value=_validate_ok())
+        _mock_helix_globals()
+        refresh_route = respx.post(TOKEN_URL)
+        yield service, server, store, refresh_route, conn, auth, clients
+    bridge.connection_state.disconnect(conn.append)
+    bridge.auth_state.disconnect(on_auth)
+    await service.stop()
+    await server.stop()
+
+
+async def test_expired_token_relogin_rejoins(relogin_env):
+    """TSR-15"""
+    service, server, store, refresh, conn, auth, _ = relogin_env
+    server.accepted = {"acc-2"}
+    refresh.mock(return_value=_refreshed("acc-2", "ref-2"))
+    await service.join_channel("chan")
+    await service.start()
+    await server.wait_for(lambda ln: ln == "JOIN #chan" and server.welcomed("acc-2"))
+    assert refresh.call_count == 1
+    assert service.tokens.access_token == "acc-2"
+    assert TwitchTokens.from_json(store.get(TOKEN_KEY)).access_token == "acc-2"
+    assert not service.irc.is_anonymous
+    assert auth == []
+
+
+async def test_relogin_replaces_connection_once(relogin_env):
+    """Review Focus 2: one live client after a refusal + a successful refresh."""
+    service, server, _, refresh, _, _, clients = relogin_env
+    server.accepted = {"acc-2"}
+    refresh.mock(return_value=_refreshed("acc-2", "ref-2"))
+    await service.start()
+    await _until(lambda: server.welcomed("acc-2") and server.connections)
+    await asyncio.sleep(0.4)  # a leftover acc-1 client would keep reconnecting
+    settled = len(server.attempts)
+    await asyncio.sleep(0.4)
+    assert len(server.attempts) == settled
+    assert server.attempts[-1] == "acc-2"
+    live = [c for c in clients if c._run_task is not None and not c._run_task.done()]
+    assert live == [service.irc]
+    assert len(server.connections) == 1
+
+
+async def test_relogin_single_flight(relogin_env):
+    """Review Focus 3: refusals during a running re-login start no second refresh."""
+    service, server, _, refresh, _, _, _ = relogin_env
+    server.accepted = {"acc-2"}
+    gate = asyncio.Event()
+
+    posts = []
+
+    async def slow_refresh(request):
+        posts.append(1)
+        await gate.wait()
+        return _refreshed("acc-2", "ref-2")
+
+    refresh.mock(side_effect=slow_refresh)
+    relogins = []
+    real_relogin = service._relogin
+
+    def counting_relogin(*args):
+        relogins.append(args)
+        return real_relogin(*args)
+
+    service._relogin = counting_relogin
+    await service.start()
+    # the acc-1 client keeps reconnecting and being refused while the refresh waits
+    await _until(lambda: server.attempts.count("acc-1") >= 3)
+    assert posts == [1]
+    assert len(relogins) == 1  # later refusals start no second re-login
+    gate.set()
+    await _until(lambda: server.welcomed("acc-2") and server.connections)
+    assert posts == [1]
+    assert len(relogins) == 1
+
+
+async def test_new_token_refused_goes_read_only_keeps_login(relogin_env):
+    """TSR-16"""
+    service, server, store, refresh, _, auth, _ = relogin_env
+    refresh.mock(return_value=_refreshed("acc-2", "ref-2"))  # nothing is accepted
+    await service.start()
+    await _until(lambda: auth)
+    await _until(lambda: service.irc.is_anonymous and server.connections)
+    assert auth == [("twitch", False, REJECTED_MESSAGE)]
+    assert refresh.call_count == 1
+    assert service.tokens is None
+    assert store.deleted == []
+    assert TwitchTokens.from_json(store.get(TOKEN_KEY)).access_token == "acc-2"
+    await asyncio.sleep(0.3)
+    assert refresh.call_count == 1
+
+
+async def test_revoked_login_goes_read_only(relogin_env):
+    """TSR-17"""
+    service, server, store, refresh, _, auth, _ = relogin_env
+    refresh.mock(return_value=httpx.Response(400))
+    await service.start()
+    await _until(lambda: auth)
+    await _until(lambda: service.irc.is_anonymous and server.connections)
+    assert auth == [("twitch", False, EXPIRED_MESSAGE)]
+    assert TOKEN_KEY in store.deleted
+    assert store.get(TOKEN_KEY) is None
+    assert service.tokens is None
+
+
+async def test_refresh_unreachable_retries_at_next_refusal(relogin_env):
+    """TSR-18"""
+    service, server, store, refresh, conn, auth, _ = relogin_env
+    server.accepted = {"acc-2"}
+    refresh.mock(side_effect=[httpx.Response(503), _refreshed("acc-2", "ref-2")])
+    await service.start()
+    await _until(lambda: refresh.call_count >= 1)
+    await _until(lambda: _unreachable_events(conn))
+    assert service.unreachable
+    assert TwitchTokens.from_json(store.get(TOKEN_KEY)).access_token == "acc-1"
+    assert store.deleted == []
+    assert auth == []
+    # the still-running client reconnects, is refused again, and the refresh retries
+    await _until(lambda: server.welcomed("acc-2") and server.connections)
+    assert refresh.call_count == 2
+    assert service.tokens.access_token == "acc-2"
+    assert not service.unreachable
+
+
+async def test_later_expiry_refreshes_again(relogin_env):
+    """TSR-19"""
+    service, server, store, refresh, _, auth, _ = relogin_env
+    server.accepted = {"acc-2"}
+    refresh.mock(side_effect=[_refreshed("acc-2", "ref-2"), _refreshed("acc-3", "ref-3")])
+    await service.start()
+    await _until(lambda: server.welcomed("acc-2") and server.connections)
+    await _until(lambda: not service._relogin_spent)  # the welcome cleared it
+    server.accepted = {"acc-3"}  # acc-2 expires later
+    await server.close_all()
+    await _until(lambda: server.attempts.count("acc-3") >= 1 and server.connections)
+    assert refresh.call_count == 2
+    assert service.tokens.access_token == "acc-3"
+    assert auth == []
+
+
+@respx.mock
+async def test_fall_back_read_only_replaces_connection_and_rejoins(launch):
+    make, _, auth = launch
+    service, _ = make()
+    respx.get(VALIDATE_URL).mock(return_value=_validate_ok())
+    _mock_helix_globals()
+    await service.join_channel("chan")
+    await service.start()
+    old = _LaunchIrc.built[-1]
+    await service._fall_back_read_only(REJECTED_MESSAGE, delete=False)
+    new = _LaunchIrc.built[-1]
+    assert old.stopped
+    assert new is not old and new.started and new.is_anonymous
+    assert new.joined == ["chan"]
+    assert service.irc is new
+    assert auth == [("twitch", False, REJECTED_MESSAGE)]
+
+
+@respx.mock
+async def test_stale_and_anonymous_refusals_are_ignored(launch):
+    make, _, auth = launch
+    service, store = make()
+    respx.get(VALIDATE_URL).mock(return_value=_validate_ok())
+    _mock_helix_globals()
+    refresh = respx.post(TOKEN_URL).mock(return_value=_refreshed("acc-2", "ref-2"))
+    await service.start()
+    signed_in = _LaunchIrc.built[-1]
+    await service.disconnect()  # swaps in an anonymous client
+    anonymous = _LaunchIrc.built[-1]
+    refusal = AuthFailed("Login authentication failed")
+    signed_in.kwargs["on_auth"](refusal)  # stale: no longer service.irc
+    anonymous.kwargs["on_auth"](refusal)  # anonymous: nothing to refresh
+    await asyncio.sleep(0.05)
+    assert refresh.call_count == 0
+    assert service._relogin_task is None
+    assert auth == []
