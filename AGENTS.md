@@ -12,4 +12,5 @@ This repository uses grillspec phases (grill → spec → plan → execute); run
 - [constraint] Twitch public-client refresh tokens are single-use: never cancel a refresh mid-flight; every token save must check the store is unchanged (twitch-signin-resilience)
 - [gotcha] Helix /users/follows is gone: follow checks use /channels/followers?user_id=, need moderator:read:followers and broadcaster/mod rights (twitch-usercard-follows)
 - [gotcha] Helix lists of moderators (/moderation/moderators) and VIPs (/channels/vips) answer only the broadcaster's token; mods get a refusal (twitch-helix-mod-commands)
+- [gotcha] Own-message ids: one USERSTATE id or msg_* NOTICE per sent chat line, per connection; never queue server commands (/help), clear waiting sends on disconnect (twitch-own-message-ids)
 <!-- grillspec:memory:end -->

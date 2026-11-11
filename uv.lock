@@ -176,7 +176,7 @@ wheels = [
 
 [[package]]
 name = "chattersyn"
-version = "0.10.6"
+version = "0.10.7"
 source = { editable = "." }
 dependencies = [
     { name = "google-api-python-client" },

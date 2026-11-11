@@ -320,21 +320,10 @@ REST (send); Qt model/delegate chat rendering. See the plan in
 `~/.claude/plans/i-want-an-app-idempotent-pebble.md` for the full design.
 
 <!-- release-notes:start -->
-## Latest release: v0.10.6 (2026-11-10)
-
-### Action needed
-- **Reconnect Twitch once.** The moderation and broadcaster commands below need new Twitch permissions. Reconnect your account in Settings → Accounts; until you do, those commands tell you to reconnect instead of running.
-
-### New
-- **Mods and VIPs list.** /mods and /vips open a list you can filter by name; clicking a name opens that person's user card. Twitch only shows these lists to the broadcaster.
-- **Delete message on the user card.** Opening a user card from one of their chat messages shows a "Delete message" button when you're the broadcaster or a mod.
-- **Command suggestions.** Typing / or . and a letter at the start of a message shows matching commands; Tab or Enter picks one, and Enter sends a command you've typed in full.
-- **Title, category and uptime.** /settitle, /setgame (picks the closest category and says which) and /uptime work.
+## Latest release: v0.10.7 (2026-11-10)
 
 ### Fixed
-- **Moderation commands did nothing.** /warn, /mod, /unmod, /vip, /unvip, /announce (all colours), /slow, /followers, /emoteonly, /subscribers, /uniquechat (and their "off" forms), /shield, /clear, /delete, /raid, /unraid, /shoutout, /commercial and /marker work again. Each shows a short confirmation, or Twitch's reason when it fails.
-- **Right-click "Delete message".** It said it wasn't supported; it now deletes the message.
-- **/host and /unhost.** They now explain that Twitch retired hosting and point to /raid.
+- **Your own messages in Twitch chat.** When a mod deleted one of your messages or timed you out, your own rows didn't grey out; deleting your own message (right-click or /delete) and replying to it used the wrong message. Your messages now carry Twitch's real message id, so all of these work.
 
 Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
 <!-- release-notes:end -->
