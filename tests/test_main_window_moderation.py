@@ -575,6 +575,8 @@ async def test_youtube_live_unknown_identity_schedules_retry(win, monkeypatch):
     state["done"] = True
     win._on_youtube_state(event)
     assert len(captured) == 2
+    for coro in captured:  # never scheduled: close them so none is left un-awaited
+        coro.close()
 
 
 # -- YouTube lifecycle (verification pass: UNAVAILABLE orphaned ownership) -------------

@@ -90,10 +90,14 @@ uv run ruff check src/ tests/ && uv run pytest -q
 Releasing: [docs/releasing.md](docs/releasing.md).
 
 <!-- release-notes:start -->
-## Latest release: v0.10.7 (2026-11-10)
+## Latest release: v0.10.8 (2026-11-11)
+
+### Improved
+- **Settings backup.** ChatterSyn keeps a copy of your last good settings. If the settings file is ever damaged, your tabs and settings come back from that copy and you see a message, instead of everything resetting.
+- **Oversized images skipped.** Images over 8 MB from emote providers are no longer downloaded.
 
 ### Fixed
-- **Your own messages in Twitch chat.** When a mod deleted one of your messages or timed you out, your own rows didn't grey out; deleting your own message (right-click or /delete) and replying to it used the wrong message. Your messages now carry Twitch's real message id, so all of these work.
+- **Leftover plain-text sign-in file.** If your system keyring was unavailable at some point, your sign-ins were saved to a plain file that stayed on disk afterwards. Once the keyring works again, they're moved into it and the file is deleted.
 
 Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
 <!-- release-notes:end -->

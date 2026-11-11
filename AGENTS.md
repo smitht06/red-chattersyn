@@ -13,4 +13,5 @@ This repository uses grillspec phases (grill → spec → plan → execute); run
 - [gotcha] Helix /users/follows is gone: follow checks use /channels/followers?user_id=, need moderator:read:followers and broadcaster/mod rights (twitch-usercard-follows)
 - [gotcha] Helix lists of moderators (/moderation/moderators) and VIPs (/channels/vips) answer only the broadcaster's token; mods get a refusal (twitch-helix-mod-commands)
 - [gotcha] Own-message ids: one USERSTATE id or msg_* NOTICE per sent chat line, per connection; never queue server commands (/help), clear waiting sends on disconnect (twitch-own-message-ids)
+- [constraint] SecretsStore: a keyring write must drop that key from secrets.json, or a later file-to-keyring migration restores a stale single-use token (audit-low-and-housekeeping)
 <!-- grillspec:memory:end -->

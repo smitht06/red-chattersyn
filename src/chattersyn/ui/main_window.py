@@ -55,12 +55,11 @@ from ..services.moderation import STACK_MAX_MESSAGES, STACK_WINDOW, ModerationSt
 from ..services.send import SendCoordinator, SendResult, SendTargets
 from ..services.twitch.auth import (
     DEFAULT_TWITCH_CLIENT_ID,
-    FOLLOWERS_SCOPE,
     MODERATION_SCOPE,
     TwitchAuthError,
 )
 from ..services.twitch.mapper import ClearChat, ClearMsg, RoomState, UserState
-from ..services.twitch.mod_commands import COMMAND_SCOPES, HelixCommand, run_helix_command
+from ..services.twitch.mod_commands import HelixCommand
 from ..services.twitch.service import EXPIRED_MESSAGE, REJECTED_MESSAGE, TwitchService
 from ..services.youtube.auth import YouTubeAuthError
 from ..services.youtube.quota import Pool
@@ -71,7 +70,7 @@ from ..services.youtube.service import (
     YouTubeService,
     YoutubeState,
 )
-from . import theme
+from . import theme, twitch_commands, usercard_controller
 from .emote_picker import EmotePickerPopup
 from .empty_tab_page import EmptyTabPage
 from .fake_feed import FakeFeed
@@ -170,6 +169,9 @@ class MainWindow(QMainWindow):
 
         self._secrets = SecretsStore(config_dir(), on_fallback=self._warn_secrets_fallback)
         if not demo:
+            # A keyring that works again takes over a leftover plaintext
+            # secrets.json before any service reads its tokens.
+            self._secrets.migrate_file_to_keyring()
             self._twitch = TwitchService(settings, self._secrets)
             self._youtube = YouTubeService(settings, self._secrets)
             self._send = SendCoordinator(
@@ -248,6 +250,18 @@ class MainWindow(QMainWindow):
             self._new_streamer_tab()
 
         theme.theme_notifier.changed.connect(self._on_theme_changed)
+        self._announce_settings_problem()
+
+    def _announce_settings_problem(self) -> None:
+        """Settings.load recovered from a damaged settings.json: say so once."""
+        problem = getattr(self._settings, "load_problem", "")
+        if not problem:
+            return
+        self.statusBar().showMessage(problem)
+        if self._tabs:
+            tab = self._tabs[0]
+            tab.add_message(Message.system(
+                Platform.SYSTEM, self._system_channel(tab, Platform.TWITCH), problem))
 
     # -- menus -----------------------------------------------------------------------
 
@@ -1249,53 +1263,12 @@ class MainWindow(QMainWindow):
         if action.kind == "unban":
             self._twitch_note(tab, f"You removed the ban/timeout on {action.user}.")
 
+    # Helix command running lives in twitch_commands.py.
     async def _twitch_helix_command(self, tab: Tab, cmd: HelixCommand) -> None:
-        """Run one moderation/broadcaster command through Helix and show the
-        confirmation, the name list, or why it failed."""
-        twitch = self._twitch
-        helix = twitch.helix if twitch is not None else None
-        tokens = twitch.tokens if twitch is not None else None
-        if helix is None or tokens is None:
-            self._twitch_note(tab, "Connect a Twitch account to moderate.")
-            return
-        scope = COMMAND_SCOPES.get(cmd.name)
-        if scope is not None and scope not in tokens.scopes:
-            self._twitch_note(
-                tab, "Reconnect your Twitch account (Connect Twitch Account…) "
-                     f"to grant ChatterSyn permission for /{cmd.name}.")
-            return
-        try:
-            channel = await helix.user_by_login(tab.twitch_channel)
-            if not channel or not channel.get("id"):
-                self._twitch_note(tab, f"No Twitch channel named {tab.twitch_channel}.")
-                return
-            result = await run_helix_command(
-                helix, cmd, channel=tab.twitch_channel, broadcaster_id=channel["id"],
-                moderator_id=tokens.user_id, now=dt.datetime.now(dt.UTC))
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            reason = (str(exc).splitlines() or [""])[0].strip() or type(exc).__name__
-            self._twitch_note(tab, f"Twitch /{cmd.name} failed: {reason}")
-            return
-        if result.names is not None:
-            self._show_user_list(tab, cmd.name, result.names)
-        elif result.row:
-            self._twitch_note(tab, result.row)
+        await twitch_commands.twitch_helix_command(self, tab, cmd)
 
     def _show_user_list(self, tab: Tab, name: str, names: list[str]) -> None:
-        """/mods and /vips result: the filterable list popup at the cursor."""
-        if name == "mods":
-            title, empty = f"Moderators ({len(names)})", "No moderators."
-        else:
-            title, empty = f"VIPs ({len(names)})", "No VIPs."
-        if self._user_list_popup is not None:
-            self._user_list_popup.close()
-        popup = UserListPopup(title, names, empty, parent=self)
-        popup.user_clicked.connect(lambda login: self._open_usercard_by_login(tab, login))
-        popup.closed.connect(self._on_user_list_closed)
-        self._user_list_popup = popup
-        popup.show_at_cursor()
+        twitch_commands.show_user_list(self, tab, name, names)
 
     def _on_user_list_closed(self) -> None:
         self._user_list_popup = None
@@ -1915,92 +1888,26 @@ class MainWindow(QMainWindow):
     def _on_usercard_closed(self) -> None:
         self._usercard_popup = None
 
+    # User-card enrichment lives in usercard_controller.py.
     async def _enrich_usercard(self, popup: UsercardPopup, target: UsercardTarget,
                                channel: str, self_is_mod: bool) -> None:
-        """Helix/YouTube field expansion; the popup may have closed meanwhile.
-        `channel` is the Twitch channel of the tab the card came from."""
-        try:
-            if target.platform is Platform.TWITCH:
-                await self._enrich_twitch_usercard(popup, target, channel, self_is_mod)
-            else:
-                await self._enrich_youtube_usercard(popup, target)
-        except Exception as exc:  # enrichment is best-effort
-            log.debug("usercard enrichment failed: %s", exc)
+        await usercard_controller.enrich_usercard(self, popup, target, channel, self_is_mod)
 
     async def _enrich_twitch_usercard(self, popup: UsercardPopup, target: UsercardTarget,
                                       channel: str, self_is_mod: bool) -> None:
-        """Each detail is its own lookup and fills its own row as it answers,
-        so one failing lookup never hides the others. The follow date is
-        about `channel` and only its broadcaster and mods may ask for it."""
-        if self._twitch is None or self._twitch.helix is None:
-            return  # anonymous read: Author fields only
-        helix = self._twitch.helix
-        user_id = target.user_id
-        try:
-            user = await helix.user_by_login(target.login)
-        except Exception as exc:  # keep going with the id from the chat row
-            log.debug("usercard user lookup failed: %s", exc)
-        else:
-            if user is None:
-                return  # no such Twitch user (renamed or deleted)
-            if self._usercard_popup is not popup:
-                return
-            popup.set_details(created_at=user.get("created_at", ""),
-                              avatar_url=user.get("profile_image_url") or None)
-            user_id = user.get("id") or user_id
-        if not user_id or self._usercard_popup is not popup:
-            return
-        await asyncio.gather(
-            self._usercard_follower_total(popup, user_id),
-            self._usercard_follow_date(popup, user_id, channel, self_is_mod),
-        )
+        await usercard_controller.enrich_twitch_usercard(
+            self, popup, target, channel, self_is_mod)
 
     async def _usercard_follower_total(self, popup: UsercardPopup, user_id: str) -> None:
-        try:
-            followers = await self._twitch.helix.channel_followers(user_id)
-        except Exception as exc:
-            log.debug("usercard follower count failed: %s", exc)
-            return
-        if followers is not None and self._usercard_popup is popup:
-            popup.set_details(followers=followers)
+        await usercard_controller.usercard_follower_total(self, popup, user_id)
 
     async def _usercard_follow_date(self, popup: UsercardPopup, user_id: str,
                                     channel: str, self_is_mod: bool) -> None:
-        tokens = self._twitch.tokens
-        if not (self_is_mod and channel and tokens is not None
-                and FOLLOWERS_SCOPE in tokens.scopes):
-            return
-        try:
-            broadcaster = await self._twitch.helix.user_by_login(channel)
-            if broadcaster is None or not broadcaster.get("id") or broadcaster["id"] == user_id:
-                return  # unknown channel, or the broadcaster's own card
-            followed_at = await self._twitch.helix.channel_follower_since(
-                broadcaster["id"], user_id)
-        except Exception as exc:
-            log.debug("usercard follow lookup failed: %s", exc)
-            return
-        if followed_at and self._usercard_popup is popup:
-            popup.set_details(followage=followed_at, followage_channel=channel)
+        await usercard_controller.usercard_follow_date(self, popup, user_id, channel, self_is_mod)
 
     async def _enrich_youtube_usercard(self, popup: UsercardPopup,
                                        target: UsercardTarget) -> None:
-        if self._youtube is None or not target.user_id:
-            return
-        try:
-            data = await self._youtube.api.channel_by_id(target.user_id)
-        except Exception:  # no OAuth/API key: skip silently
-            return
-        if data is None or self._usercard_popup is not popup:
-            return
-        items = data.get("items", [])
-        if not items:
-            return
-        item = items[0]
-        subscribers = str(item.get("statistics", {}).get("subscriberCount") or "")
-        popup.set_details(
-            created_at=item.get("snippet", {}).get("publishedAt", ""),
-            followers=int(subscribers) if subscribers.isdigit() else None,
-        )
+        await usercard_controller.enrich_youtube_usercard(self, popup, target)
 
     def _warn_secrets_fallback(self, path: Path) -> None:
         # Deferred: this fires from inside a sign-in or token-refresh call.

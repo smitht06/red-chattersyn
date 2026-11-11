@@ -18,6 +18,7 @@ from .sandbox_fix import heal_before_decode
 log = logging.getLogger(__name__)
 
 MAX_BYTES = 256 * 1024 * 1024
+MAX_IMAGE_BYTES = 8 * 1024 * 1024  # one download; emotes and avatars are far smaller
 MAX_MOVIES = 64
 TIMEOUT = httpx.Timeout(connect=10.0, read=20.0, write=20.0, pool=10.0)
 
@@ -49,6 +50,8 @@ class ImageCache(QObject):
         self._movies = 0
         self._client: httpx.AsyncClient | None = None
         self.max_bytes = MAX_BYTES
+        self._tasks: set[asyncio.Task] = set()
+        self._refused: set[str] = set()  # URLs over MAX_IMAGE_BYTES
         self.max_movies = MAX_MOVIES
         # Optional on-disk copy of downloaded bytes (DiskCache; wired by app.py).
         self.disk: DiskCache | None = None
@@ -67,9 +70,17 @@ class ImageCache(QObject):
         if cached is not None:
             self._cache.move_to_end(key)
             return cached[0] if isinstance(cached, tuple) else cached
+        if url in self._refused:
+            return None  # over the size cap: never downloaded again
         if key not in self._inflight:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return None  # no event loop (plain synchronous code): nothing can fetch
             self._inflight.add(key)
-            asyncio.ensure_future(self._fetch(url, animated, key))
+            task = loop.create_task(self._fetch(url, animated, key))
+            self._tasks.add(task)  # keep a reference until it finishes
+            task.add_done_callback(self._tasks.discard)
         return None
 
     def invalidate(self, url: str) -> None:
@@ -90,6 +101,28 @@ class ImageCache(QObject):
     def _key(url: str, animated: bool) -> str:
         return ("a:" if animated else "i:") + url
 
+    def _refuse(self, url: str) -> None:
+        self._refused.add(url)
+        log.info("image too large (> 8 MB), skipped: %s", url)
+
+    async def _download(self, url: str) -> bytes | None:
+        """The image's bytes, or None when it's larger than MAX_IMAGE_BYTES —
+        checked against Content-Length and again while reading, so a body
+        without that header is cut off too."""
+        async with self._client.stream("GET", url) as response:
+            response.raise_for_status()
+            declared = response.headers.get("content-length", "")
+            if declared.isdigit() and int(declared) > MAX_IMAGE_BYTES:
+                return self._refuse(url)
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in response.aiter_bytes():
+                size += len(chunk)
+                if size > MAX_IMAGE_BYTES:
+                    return self._refuse(url)
+                chunks.append(chunk)
+            return b"".join(chunks)
+
     async def _fetch(self, url: str, animated: bool, key: str) -> None:
         loop = asyncio.get_running_loop()
         data = await self._disk_call(loop, "get", url)
@@ -98,13 +131,15 @@ class ImageCache(QObject):
             try:
                 if self._client is None:
                     self._client = httpx.AsyncClient(timeout=TIMEOUT)
-                response = await self._client.get(url)
-                response.raise_for_status()
-                data = response.content
+                data = await self._download(url)
             except Exception as exc:
                 log.debug("image fetch failed for %s: %s", url, exc)
                 self._inflight.discard(key)
                 return
+
+        if data is None:  # over the size cap: logged by _download
+            self._inflight.discard(key)
+            return
 
         # Imageformat plugins load lazily at first decode; the sandbox may have
         # re-hidden them since startup, so dev launchers heal right before

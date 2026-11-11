@@ -111,7 +111,9 @@ Propose `release vX.Y.Z: <a few words from the notes' headline items>`
 Show one summary:
 - **Version:** `vX.Y.Z` (previous `vA.B.C`).
 - **Commit:** the message, plus the files that will be committed
-  (`git status --short`) and any parked files.
+  (`git status --short`) and any parked files. Every release is ONE commit:
+  list the unpushed commits (`git log --oneline origin/main..HEAD`) that
+  step 9 squashes into it.
 - **Dependencies:** unchanged, or what was upgraded.
 - **Release notes:** the approved notes.
 - **What happens next:** push `main`, then push tag `vX.Y.Z`. That starts
@@ -126,7 +128,16 @@ Then ask "Release vX.Y.Z now?" with the options "Yes, release it" and
 
 ## 9. Release
 
-Run `scripts/release.sh "<commit message>"` unsandboxed. It checks push
+First squash: every release lands on GitHub as a single commit (the
+developer's rule, 2026-11-11). Run `git fetch -q origin main`, note the
+current HEAD (`git rev-parse HEAD`) as the undo point and tell the developer
+it, then `git reset --soft origin/main`. That keeps every change staged and
+in the working tree; only the unpushed commits disappear, folded into the
+commit `release.sh` makes next. Never squash anything already on
+`origin/main`. If the release is abandoned or `release.sh` fails before
+committing, `git reset --soft <undo point>` restores the commits.
+
+Then run `scripts/release.sh "<commit message>"` unsandboxed. It checks push
 access and divergence before committing, then commits, pushes main, tags and
 pushes the tag.
 - If the tool call is denied (Claude Code permissions or auto mode block

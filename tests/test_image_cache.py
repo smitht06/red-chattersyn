@@ -1,5 +1,6 @@
 """ImageCache: animated requests only become QMovies for multi-frame data."""
 
+import asyncio
 import base64
 
 import httpx
@@ -77,3 +78,76 @@ async def test_undecodable_bytes_never_hit_disk(qapp, tmp_path):
     finally:
         await cache._client.aclose()
     assert cache.disk.get("https://cdn.example/junk") is None
+
+
+# -- size cap (LD-7, LD-8) -----------------------------------------------------------------
+
+
+async def _fetch_recording(cache, url, monkeypatch):
+    """Fetch `url`; returns (decoded byte payloads, image_ready urls)."""
+    from chattersyn.core import image_cache as mod
+    decoded, ready = [], []
+    real = mod._decode_image
+    monkeypatch.setattr(mod, "_decode_image", lambda data: decoded.append(len(data)) or real(data))
+    cache.image_ready.connect(ready.append)
+    try:
+        await cache._fetch(url, False, cache._key(url, False))
+    finally:
+        if cache._client is not None:
+            await cache._client.aclose()
+    return decoded, ready
+
+
+@respx.mock
+async def test_oversized_image_skipped(qapp, caplog, monkeypatch):
+    """LD-7: a 9 MB body is never decoded or shown, and the log names the URL."""
+    url = "https://cdn.test/huge.png"
+    respx.get(url).mock(return_value=httpx.Response(200, content=b"\0" * (9 * 1024 * 1024)))
+    caplog.set_level("DEBUG", logger="chattersyn.core.image_cache")
+    decoded, ready = await _fetch_recording(ImageCache(), url, monkeypatch)
+    assert decoded == [] and ready == []
+    assert url in caplog.text and "too large" in caplog.text
+
+
+@respx.mock
+async def test_normal_image_loads(qapp, monkeypatch):
+    """LD-8."""
+    url = "https://cdn.test/emote.gif"
+    respx.get(url).mock(return_value=httpx.Response(200, content=ONE_FRAME_GIF))
+    decoded, ready = await _fetch_recording(ImageCache(), url, monkeypatch)
+    assert decoded == [len(ONE_FRAME_GIF)]
+    assert ready == [url]
+
+
+@respx.mock
+async def test_cap_without_content_length(qapp, caplog, monkeypatch):
+    """Review Focus 3: a streamed body without Content-Length is cut off too."""
+    url = "https://cdn.test/chunked.webp"
+    chunk = b"\0" * (1024 * 1024)
+
+    async def body():
+        for _ in range(9):
+            yield chunk
+    respx.get(url).mock(return_value=httpx.Response(200, content=body()))
+    caplog.set_level("DEBUG", logger="chattersyn.core.image_cache")
+    decoded, ready = await _fetch_recording(ImageCache(), url, monkeypatch)
+    assert decoded == [] and ready == []
+    assert "too large" in caplog.text
+
+
+@respx.mock
+async def test_refused_image_is_not_downloaded_again(qapp, monkeypatch):
+    """Final review #1: a refused URL isn't re-fetched on every repaint."""
+    url = "https://cdn.test/huge-again.png"
+    route = respx.get(url).mock(
+        return_value=httpx.Response(200, content=b"\0" * (9 * 1024 * 1024)))
+    cache = ImageCache()
+    try:
+        await cache._fetch(url, False, cache._key(url, False))
+        for _ in range(3):  # repaints ask again
+            assert cache.request(url) is None
+        await asyncio.sleep(0.05)
+    finally:
+        if cache._client is not None:
+            await cache._client.aclose()
+    assert route.call_count == 1

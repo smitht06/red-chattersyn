@@ -1,5 +1,6 @@
 """SecretsStore: keyring first, an owner-only file fallback, a one-time warning."""
 
+import json
 import os
 import stat
 import sys
@@ -76,3 +77,94 @@ def test_fallback_file_is_never_readable_by_others(tmp_path, monkeypatch):
     _store(tmp_path, None, []).set("twitch_tokens", "abc")
     assert modes == [0o600]
     assert stat.S_IMODE((tmp_path / "secrets.json").stat().st_mode) == 0o600
+
+
+# -- moving a leftover secrets.json into the keyring (LD-5, LD-6) --------------------------
+
+
+class _RefusingKeyring(_MemoryKeyring):
+    """Stores everything except one key."""
+
+    def __init__(self, refuse):
+        super().__init__()
+        self.refuse = refuse
+
+    def set_password(self, service, key, value):
+        if key == self.refuse:
+            raise RuntimeError("keyring refused")
+        super().set_password(service, key, value)
+
+
+class _ForgetfulKeyring(_MemoryKeyring):
+    """Accepts writes but reads back nothing (a broken backend)."""
+
+    def get_password(self, service, key):
+        return None
+
+
+def _plaintext(tmp_path, data):
+    path = tmp_path / "secrets.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def test_file_moved_into_working_keyring(tmp_path):
+    """LD-5."""
+    path = _plaintext(tmp_path, {"twitch_token": "tok", "youtube_api_key": "key"})
+    keyring = _MemoryKeyring()
+    store = _store(tmp_path, keyring, [])
+    assert store.migrate_file_to_keyring() is True
+    assert not path.exists()
+    assert store.get("twitch_token") == "tok"
+    assert store.get("youtube_api_key") == "key"
+
+
+def test_refused_entry_keeps_file(tmp_path):
+    """LD-6: the file stays byte-identical."""
+    path = _plaintext(tmp_path, {"twitch_token": "tok", "youtube_api_key": "key"})
+    before = path.read_bytes()
+    store = _store(tmp_path, _RefusingKeyring("youtube_api_key"), [])
+    assert store.migrate_file_to_keyring() is False
+    assert path.read_bytes() == before
+
+
+def test_migration_verifies_by_reading_back(tmp_path):
+    """Review Focus 2: a keyring that accepts but can't read back keeps the file."""
+    path = _plaintext(tmp_path, {"twitch_token": "tok"})
+    store = _store(tmp_path, _ForgetfulKeyring(), [])
+    assert store.migrate_file_to_keyring() is False
+    assert path.exists()
+
+
+def test_no_file_no_change(tmp_path):
+    store = _store(tmp_path, _MemoryKeyring(), [])
+    assert store.migrate_file_to_keyring() is False
+    assert not (tmp_path / "secrets.json").exists()
+
+
+def test_no_keyring_keeps_file(tmp_path):
+    path = _plaintext(tmp_path, {"twitch_token": "tok"})
+    store = _store(tmp_path, None, [])
+    assert store.migrate_file_to_keyring() is False
+    assert path.exists()
+
+
+def test_keyring_write_clears_stale_file_entry(tmp_path):
+    """Final review #2: once a key's write reaches the keyring, the file's older
+    copy is dropped, so a later migration can't restore a stale token."""
+    path = _plaintext(tmp_path, {"twitch_token": "old", "youtube_api_key": "key"})
+    keyring = _MemoryKeyring()
+    store = _store(tmp_path, keyring, [])
+    store.set("twitch_token", "new")
+    assert json.loads(path.read_text(encoding="utf-8")) == {"youtube_api_key": "key"}
+    assert store.migrate_file_to_keyring() is True
+    assert store.get("twitch_token") == "new"
+
+
+def test_unreadable_file_is_not_deleted(tmp_path):
+    """Final review #8: a secrets.json that can't be parsed is left alone."""
+    path = tmp_path / "secrets.json"
+    path.write_text("{not json", encoding="utf-8")
+    store = _store(tmp_path, _MemoryKeyring(), [])
+    assert store.migrate_file_to_keyring() is False
+    assert path.exists()

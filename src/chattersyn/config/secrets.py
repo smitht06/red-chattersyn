@@ -48,6 +48,10 @@ class SecretsStore:
             except Exception as exc:
                 log.warning("keyring set failed for %s: %s — using file fallback", key, exc)
             else:
+                # The keyring holds the newest value now: an older copy left in
+                # the plaintext file must not be migrated over it later.
+                if self._fallback_path().exists():
+                    self._file_delete(key)
                 return
         self._file_set(key, value)
         self._report_fallback()
@@ -66,6 +70,36 @@ class SecretsStore:
             with contextlib.suppress(Exception):
                 self._keyring.delete_password(SERVICE, key)
         self._file_delete(key)
+
+    def migrate_file_to_keyring(self) -> bool:
+        """Move a leftover plaintext secrets.json into a keyring that works
+        again, then delete the file. Every entry is read back from the keyring
+        first; if any can't be stored or read back, the file stays untouched.
+        True when the file was moved and deleted."""
+        path = self._fallback_path()
+        if self._keyring is None or not path.exists():
+            return False
+        entries = self._file_read()
+        if not entries and path.stat().st_size > 0:
+            log.warning("keeping %s: it could not be read", path)
+            return False
+        try:
+            for key, value in entries.items():
+                self._keyring.set_password(SERVICE, key, value)
+            for key, value in entries.items():
+                if self._keyring.get_password(SERVICE, key) != value:
+                    raise RuntimeError(f"{key} did not read back from the keyring")
+        except Exception as exc:
+            log.warning("keeping %s: could not move it into the keyring (%s)", path, exc)
+            return False
+        try:
+            path.unlink()
+        except OSError as exc:
+            log.warning("moved credentials into the keyring but could not delete %s: %s",
+                        path, exc)
+            return False
+        log.info("moved %d credential(s) from %s into the keyring", len(entries), path)
+        return True
 
     # -- JSON file fallback --------------------------------------------------
 

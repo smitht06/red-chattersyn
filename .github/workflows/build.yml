@@ -6,6 +6,12 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+# Least privilege: jobs only read the repo; the release job asks for write
+# access itself. Other publishing uses its own secrets (Cloudflare token,
+# tap deploy key), not this token.
+permissions:
+  contents: read
+
 concurrency:
   # Per-ref AND per-event: a workflow_dispatch smoke test must not cancel
   # (or be cancelled by) a regular push run on the same ref.
@@ -31,13 +37,12 @@ jobs:
     env:
       QT_QPA_PLATFORM: offscreen
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -70,13 +75,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.13"
 
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
         with:
           enable-cache: true
           cache-dependency-glob: uv.lock
@@ -135,7 +139,7 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path dist\chattersyn -DestinationPath "dist\chattersyn-${{ env.APP_VERSION }}-${{ matrix.artifact }}.zip"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: chattersyn-${{ env.APP_VERSION }}-${{ matrix.artifact }}
           path: dist/chattersyn-*
@@ -147,11 +151,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: artifacts
           merge-multiple: true
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: artifacts/*
           # Release candidates (vX.Y.ZrcN) are marked pre-release, so the
@@ -183,9 +187,8 @@ jobs:
       # deleted artifacts/ despite clean: false (sparse-checkout worktree
       # update), so nothing git-flavored may run between the download and
       # the steps that read it.
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           # No `pattern`: download all artifacts merged flat, exactly like the
           # release job. The `pattern` input was silently matching nothing.
@@ -287,7 +290,7 @@ jobs:
           echo "aptrepo=$root" >> "$GITHUB_ENV"
 
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v4
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -300,7 +303,7 @@ jobs:
           # site.
           command: pages deploy ${{ env.aptrepo }} --project-name=chattersyn-apt --branch=main
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: apt-repo-index
@@ -331,9 +334,8 @@ jobs:
       # deleted artifacts/ despite clean: false (sparse-checkout worktree
       # update), so nothing git-flavored may run between the download and
       # the steps that read it.
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           # No `pattern`: download all artifacts merged flat, exactly like the
           # release and apt-repo jobs. The `pattern` input was silently
@@ -404,7 +406,7 @@ jobs:
           cat "$RUNNER_TEMP/tap/Casks/chattersyn.rb"
 
       - name: Set up tap deploy key
-        uses: webfactory/ssh-agent@v0.10.0
+        uses: webfactory/ssh-agent@e83874834305fe9a4a2997156cb26c5de65a8555 # v0.10.0
         with:
           ssh-private-key: ${{ secrets.TAP_DEPLOY_KEY }}
 
@@ -427,7 +429,7 @@ jobs:
           git pull --rebase origin main
           git push origin main
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: homebrew-cask
@@ -445,8 +447,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Assemble site
         run: |
           set -euo pipefail
@@ -462,14 +463,14 @@ jobs:
       - name: Create the Pages project (first deploy only)
         # Fails harmlessly once the project exists.
         continue-on-error: true
-        uses: cloudflare/wrangler-action@v4
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages project create chattersyn-site --production-branch=main
 
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v4
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -487,12 +488,11 @@ jobs:
       image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.11
       options: --privileged
     steps:
-      - uses: actions/checkout@v4
-
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Stamp version
         run: echo "APP_VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1)" >> "$GITHUB_ENV"
 
-      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6
         with:
           # Named like the other release files.
           bundle: chattersyn-${{ env.APP_VERSION }}-linux-x86_64.flatpak

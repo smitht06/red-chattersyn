@@ -69,6 +69,8 @@ reading, sending and moderating. The app's Google client secret isn't in the
 app: sign-in goes through ChatterSyn's sign-in relay on
 `chattersyn.redcyberdragon.net` (`site/functions/`), which adds it, passes the
 request to Google and stores nothing.
+Its rate limit is a Cloudflare dashboard rule: see
+[Rate-limit the Google sign-in relay](relay-rate-limit.md).
 
 With your own Google Cloud project
 ([console.cloud.google.com](https://console.cloud.google.com/), enable

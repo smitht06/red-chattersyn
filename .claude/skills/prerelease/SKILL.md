@@ -107,7 +107,8 @@ line, no trailers). Ask "Commit message?" with the options
 Show one summary:
 - **Version:** `vX.Y.ZrcN` (last stable `vA.B.C`).
 - **Commit:** the message, the files (`git status --short`) and any parked
-  files.
+  files. The pre-release is ONE commit: list the unpushed commits
+  (`git log --oneline origin/main..HEAD`) that step 9 squashes into it.
 - **Release notes:** the approved notes.
 - **Who gets it:**
   - a GitHub **pre-release** (not "Latest");
@@ -125,7 +126,14 @@ continues. On "No", leave the version bump in place and say how to resume
 
 ## 9. Publish
 
-Run `scripts/release.sh "<commit message>"` unsandboxed. It tags
+First squash, as in `/release`: `git fetch -q origin main`, note
+`git rev-parse HEAD` as the undo point and tell the developer it, then
+`git reset --soft origin/main` so the unpushed commits fold into the commit
+`release.sh` makes. Never squash anything already on `origin/main`. If
+publishing is abandoned or fails before committing,
+`git reset --soft <undo point>` restores them.
+
+Then run `scripts/release.sh "<commit message>"` unsandboxed. It tags
 `v<pyproject version>`, which is `vX.Y.ZrcN`.
 - If the tool call is denied (permissions or auto mode), don't retry or
   work around it. Ask the developer to type

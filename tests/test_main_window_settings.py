@@ -234,3 +234,35 @@ async def test_connect_youtube_without_any_client_asks_for_client_secrets(win, m
     calls = _route(win, monkeypatch, configured=False)
     await asyncio.sleep(0)
     assert calls == ["file dialog"]
+
+
+async def test_load_problem_shown_at_start(qapp, qsettings):
+    """LD-2: a recovered settings file is announced once at start."""
+    from chattersyn.config.settings import RESTORED_MESSAGE
+    settings = Settings({"tabs": [{"twitch_channel": "chan"}]})
+    settings.load_problem = RESTORED_MESSAGE
+    w = MainWindow(settings, demo=True, qsettings=qsettings)
+    try:
+        for feed in list(w._feeds):
+            feed.stop()
+        assert w.statusBar().currentMessage() == RESTORED_MESSAGE
+        tab = w._tabs[0]
+        tab._flush()
+        rows = [m.plain for m in tab.view.message_model.all_messages() if m.is_system]
+        assert rows.count(RESTORED_MESSAGE) == 1
+    finally:
+        w.close()
+
+
+async def test_no_load_problem_no_row(qapp, qsettings):
+    w = MainWindow(Settings({"tabs": [{"twitch_channel": "chan"}]}), demo=True,
+                   qsettings=qsettings)
+    try:
+        for feed in list(w._feeds):
+            feed.stop()
+        tab = w._tabs[0]
+        tab._flush()
+        assert not [m for m in tab.view.message_model.all_messages()
+                    if m.is_system and "settings file" in m.plain]
+    finally:
+        w.close()
