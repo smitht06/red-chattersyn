@@ -64,9 +64,12 @@ packaging / other.
 Flag scratch files (`todo.md`), build output, large binaries and anything
 that could hold secrets. Then ask "Include all of these changes?" with:
 - "Include everything" (Recommended unless something was flagged);
-- "Exclude some files": park them with
-  `git stash push --include-untracked -m prerelease-excluded -- <paths>`
-  and restore them in step 10.
+- "Exclude some files": park them OUTSIDE the repo: copy each one to a
+  scratch folder (your scratchpad, or `mktemp -d`) keeping its relative
+  path, check the copy matches (`cmp`), then remove the original. Don't use
+  `git stash` for this: on 2026-11-10 `git stash push --include-untracked --
+  <path>` said "No local changes to save" and the untracked file was gone.
+  Restore them in step 10.
 
 Dependencies stay as they are. Don't offer upgrades for an rc: testers
 should be testing the same dependencies the final release will ship.
@@ -134,8 +137,9 @@ Run `scripts/release.sh "<commit message>"` unsandboxed. It tags
 
 ## 10. Restore parked files
 
-If step 3 parked files, run `git stash pop` (the `prerelease-excluded`
-entry) and confirm they're back.
+If step 3 parked files, move each one back to its original path, then
+confirm it's there and unchanged (`cmp` against the parked copy before you
+delete it) and that `git status --short` lists it again.
 
 ## 11. Track CI/CD and verify
 

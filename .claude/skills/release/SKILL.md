@@ -64,9 +64,13 @@ secrets (never commit those). Then ask "Include all of these changes?"
 with these options:
 - "Include everything" (Recommended, unless something was flagged).
 - "Exclude some files". Ask which (multiSelect for up to 4 of them, or let
-  them type paths), then park them with
-  `git stash push --include-untracked -m release-excluded -- <paths>`.
-  Remember to restore them in step 10.
+  them type paths), then park them OUTSIDE the repo: copy each one to a
+  scratch folder (your scratchpad, or `mktemp -d`) keeping its relative
+  path, check the copy matches (`cmp`), then remove the original. Don't use
+  `git stash` for this: on 2026-11-10 `git stash push --include-untracked --
+  <path>` said "No local changes to save" and the untracked file was gone
+  (recovered from an older stash commit). Note where each file went and
+  restore it in step 10.
 
 ## 4. Packages and dependencies
 
@@ -136,8 +140,9 @@ pushes the tag.
 
 ## 10. Restore parked files
 
-If step 3 parked files, run `git stash pop` (the `release-excluded` entry)
-and confirm they're back.
+If step 3 parked files, move each one back to its original path, then
+confirm it's there and unchanged (`cmp` against the parked copy before you
+delete it) and that `git status --short` lists it again.
 
 ## 11. Track CI/CD
 
