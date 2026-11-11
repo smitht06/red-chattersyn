@@ -48,7 +48,15 @@ jobs:
           cache-dependency-glob: uv.lock
 
       - name: Install (ubuntu GUI libs for Qt)
-        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libfontconfig1 libxkbcommon-x11-0
+        # Tolerant (v0.10.8 hit "exit code 100" here twice): skip when the image
+        # already has the libraries, don't let a broken third-party apt source
+        # fail `apt-get update`, and retry downloads.
+        run: |
+          pkgs="libegl1 libgl1 libfontconfig1 libxkbcommon-x11-0"
+          if dpkg -s $pkgs >/dev/null 2>&1; then echo "already installed: $pkgs"; exit 0; fi
+          sudo apt-get update -o Acquire::Retries=3 \
+            || echo "::warning::apt-get update failed; installing from the image's package lists"
+          sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 $pkgs
 
       - run: uv sync --locked
 
@@ -87,7 +95,15 @@ jobs:
 
       - name: Install (ubuntu GUI libs for Qt)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libegl1 libgl1 libfontconfig1 libxkbcommon-x11-0
+        # Tolerant (v0.10.8 hit "exit code 100" here twice): skip when the image
+        # already has the libraries, don't let a broken third-party apt source
+        # fail `apt-get update`, and retry downloads.
+        run: |
+          pkgs="libegl1 libgl1 libfontconfig1 libxkbcommon-x11-0"
+          if dpkg -s $pkgs >/dev/null 2>&1; then echo "already installed: $pkgs"; exit 0; fi
+          sudo apt-get update -o Acquire::Retries=3 \
+            || echo "::warning::apt-get update failed; installing from the image's package lists"
+          sudo apt-get install -y --no-install-recommends -o Acquire::Retries=3 $pkgs
 
       - run: uv sync --group build --locked
 

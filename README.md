@@ -90,7 +90,7 @@ uv run ruff check src/ tests/ && uv run pytest -q
 Releasing: [docs/releasing.md](docs/releasing.md).
 
 <!-- release-notes:start -->
-## Latest release: v0.10.8 (2026-11-11)
+## Latest release: v0.10.9 (2026-11-11)
 
 ### Improved
 - **Settings backup.** ChatterSyn keeps a copy of your last good settings. If the settings file is ever damaged, your tabs and settings come back from that copy and you see a message, instead of everything resetting.
