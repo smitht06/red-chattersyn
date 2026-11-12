@@ -175,3 +175,16 @@ def test_same_second_corrupt_names_do_not_collide(tmp_path):
         Settings.load(tmp_path, now=lambda: FIXED_NOW)
     names = sorted(p.name for p in tmp_path.glob("settings.json.corrupt-*"))
     assert len(names) == 2
+
+
+
+def test_browser_source_defaults():
+    """OBS-1 / OBS-15 defaults."""
+    s = Settings({})
+    assert s.get("browser_source") == {
+        "enabled": False, "port": 17830, "font_family": "", "font_size": 20,
+        "text_color": "#ffffff", "background": "#00000000",
+        "background_fills_source": True, "outline": True,
+        "show_platform_icons": True, "show_badges": True, "show_emotes": True,
+        "show_timestamps": False, "fade_seconds": 30, "max_messages": 50,
+    }

@@ -29,6 +29,8 @@ datas = [
     (str(SRC / "chattersyn" / "assets" / "ping.wav"), "chattersyn/assets"),
     (str(SRC / "chattersyn" / "assets" / "emoji.json"), "chattersyn/assets"),
     (str(SRC / "chattersyn" / "assets" / "icon.png"), "chattersyn/assets"),
+    # The OBS browser source page (services/overlay_server.py).
+    (str(SRC / "chattersyn" / "assets" / "overlay" / "chat.html"), "chattersyn/assets/overlay"),
 ]
 # TLS roots for grpc secure_channel (hooks-contrib does not bundle them).
 datas += collect_data_files("grpc", includes=["**/roots.pem"])

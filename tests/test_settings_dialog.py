@@ -32,15 +32,16 @@ def _dialog(settings, tmp_path):
 
 def test_dialog_builds_all_pages(qapp, tmp_path):
     dialog = _dialog(Settings({}), tmp_path)
-    assert dialog._nav.count() == 9
-    assert dialog._stack.count() == 9
+    assert dialog._nav.count() == 10
+    assert dialog._stack.count() == 10
     assert dialog._nav.item(0).text() == "General"
     assert dialog._nav.item(3).text() == "Emotes"
-    assert dialog._nav.item(8).text() == "About"
+    assert dialog._nav.item(8).text() == "Browser Sources"
+    assert dialog._nav.item(9).text() == "About"
 
 
 def test_about_page_shows_the_running_version_and_required_links(qapp, tmp_path):
-    page = _dialog(Settings({}), tmp_path)._stack.widget(8)
+    page = _dialog(Settings({}), tmp_path)._stack.widget(9)
     text = " ".join(label.text() for label in page.findChildren(QLabel))
     assert f"ChatterSyn {version()}" in text  # was a stale hard-coded 0.1.0
     for url in (links.PRIVACY_POLICY, links.TERMS, links.YOUTUBE_TERMS,
@@ -364,3 +365,129 @@ def test_api_key_note_hidden_when_key_is_fine(qapp, tmp_path):
     dialog = SettingsDialog(Settings({}), tmp_path, youtube_api_key_note="")
     assert dialog._api_key_note.isHidden()
     assert _dialog(Settings({}), tmp_path)._api_key_note.isHidden()
+
+
+
+# -- Browser Sources (OBS-1, OBS-3, OBS-4) -------------------------------------------------
+
+
+def test_browser_sources_defaults(qapp, tmp_path):
+    """OBS-1: off by default, port 17830, the spec's default look."""
+    dialog = _dialog(Settings({}), tmp_path)
+    assert not dialog._bs_enabled.isChecked()
+    assert dialog._bs_enabled.text() == "Show chat as a browser source for OBS"
+    assert dialog._bs_port.value() == 17830
+    assert dialog._bs_url.text() == "http://localhost:17830/chat"
+    assert dialog._bs_size.value() == 20
+    assert dialog._bs_outline.isChecked()
+    assert dialog._bs_icons.isChecked() and dialog._bs_badges.isChecked()
+    assert dialog._bs_emotes.isChecked() and not dialog._bs_timestamps.isChecked()
+    assert dialog._bs_fade.value() == 30 and dialog._bs_limit.value() == 50
+    assert dialog._bs_status.text() == "Off."
+
+
+def test_browser_sources_ranges(qapp, tmp_path):
+    dialog = _dialog(Settings({}), tmp_path)
+    assert (dialog._bs_port.minimum(), dialog._bs_port.maximum()) == (1024, 65535)
+    assert (dialog._bs_size.minimum(), dialog._bs_size.maximum()) == (10, 72)
+    assert (dialog._bs_fade.minimum(), dialog._bs_fade.maximum()) == (1, 600)
+    assert (dialog._bs_limit.minimum(), dialog._bs_limit.maximum()) == (5, 200)
+
+
+def test_browser_sources_url_follows_port_and_copies(qapp, tmp_path):
+    """OBS-3."""
+    from PySide6.QtGui import QGuiApplication
+    dialog = _dialog(Settings({}), tmp_path)
+    dialog._bs_port.setValue(17900)
+    assert dialog._bs_url.text() == "http://localhost:17900/chat"
+    dialog._bs_copy.click()
+    assert QGuiApplication.clipboard().text() == "http://localhost:17900/chat"
+
+
+def test_browser_sources_status_passed_in(qapp, tmp_path):
+    """OBS-4: the window's status text is shown."""
+    dialog = SettingsDialog(Settings({}), tmp_path,
+                            browser_source_status="Port 17830 is in use — choose another.")
+    assert dialog._bs_status.text() == "Port 17830 is in use — choose another."
+
+
+def test_browser_sources_saved_on_accept(qapp, tmp_path, settings_path):
+    settings = Settings({}, settings_path)
+    dialog = SettingsDialog(settings, tmp_path)
+    dialog._bs_enabled.setChecked(True)
+    dialog._bs_port.setValue(18000)
+    dialog._bs_size.setValue(28)
+    dialog._bs_text_color = "#ffcc00"
+    dialog._bs_background = "#80000000"
+    dialog._bs_outline.setChecked(False)
+    dialog._bs_icons.setChecked(False)
+    dialog._bs_badges.setChecked(False)
+    dialog._bs_emotes.setChecked(False)
+    dialog._bs_timestamps.setChecked(True)
+    dialog._bs_keep.setChecked(True)
+    dialog._bs_limit.setValue(20)
+    dialog.accept()
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))["browser_source"]
+    assert saved["enabled"] is True and saved["port"] == 18000
+    assert saved["font_size"] == 28 and saved["text_color"] == "#ffcc00"
+    assert saved["background"] == "#80000000" and saved["outline"] is False
+    assert saved["show_platform_icons"] is False and saved["show_badges"] is False
+    assert saved["show_emotes"] is False and saved["show_timestamps"] is True
+    assert saved["fade_seconds"] == 0 and saved["max_messages"] == 20
+    assert isinstance(saved["font_family"], str)
+
+
+def test_background_fills_source_checkbox(qapp, tmp_path, settings_path):
+    """User request: the background fills the whole source, or sits behind each
+    message only."""
+    settings = Settings({}, settings_path)
+    dialog = SettingsDialog(settings, tmp_path)
+    box = dialog._bs_bg_fill
+    assert box.text() == "Background fills the whole source (not just behind messages)"
+    assert box.isChecked()
+    box.setChecked(False)
+    dialog.accept()
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))["browser_source"]
+    assert saved["background_fills_source"] is False
+
+
+def test_keep_messages_checkbox(qapp, tmp_path, settings_path):
+    """User request: 'never disappear until the limit is reached' as its own switch."""
+    settings = Settings({}, settings_path)
+    dialog = SettingsDialog(settings, tmp_path)
+    assert dialog._bs_keep.text() == "Keep messages until the limit is reached"
+    assert not dialog._bs_keep.isChecked() and dialog._bs_fade.isEnabled()
+    dialog._bs_keep.setChecked(True)
+    assert not dialog._bs_fade.isEnabled()
+    dialog.accept()
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))["browser_source"]
+    assert saved["fade_seconds"] == 0
+
+
+def test_keep_messages_reflects_saved_zero_and_restores_a_time(qapp, tmp_path):
+    dialog = SettingsDialog(Settings({"browser_source": {"fade_seconds": 0}}), tmp_path)
+    assert dialog._bs_keep.isChecked() and not dialog._bs_fade.isEnabled()
+    dialog._bs_keep.setChecked(False)
+    assert dialog._bs_fade.isEnabled() and dialog._bs_fade.value() == 30
+
+
+def test_untouched_font_stays_default(qapp, tmp_path, settings_path):
+    """Final review #12: OK without touching the font keeps "" (the page default)."""
+    settings = Settings({}, settings_path)
+    SettingsDialog(settings, tmp_path).accept()
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))["browser_source"]
+    assert saved["font_family"] == ""
+
+
+def test_colour_buttons_show_the_colour(qapp, tmp_path):
+    """Final review #13."""
+    dialog = SettingsDialog(Settings({"browser_source": {"text_color": "#ffcc00"}}), tmp_path)
+    assert "#ffcc00" in dialog._bs_text_button.styleSheet().lower()
+
+
+def test_hint_mentions_starting_chattersyn_first(qapp, tmp_path):
+    """Final review #4: OBS doesn't retry a page that failed to load."""
+    dialog = _dialog(Settings({}), tmp_path)
+    page = dialog._stack.widget(8)
+    text = " ".join(label.text() for label in page.findChildren(QLabel))
+    assert "Refresh" in text

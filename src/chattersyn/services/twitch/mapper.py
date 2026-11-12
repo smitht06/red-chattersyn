@@ -392,7 +392,9 @@ class TwitchMapper:
         author = author_from_tags(tags, self.badge_lookup, nick)
         plain = body or system_msg
         flags = MessageFlags.SYSTEM
-        extra: dict[str, Any] = {"msg_id": msg_id}
+        # "usernotice": a chat event (sub, raid, announcement…), as opposed to a
+        # NOTICE row (errors, command feedback) — the OBS overlay shows only these.
+        extra: dict[str, Any] = {"msg_id": msg_id, "usernotice": True}
         if tags.get("room-id"):
             extra["room_id"] = tags["room-id"]
 

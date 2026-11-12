@@ -30,6 +30,15 @@ DEFAULTS: dict[str, Any] = {
     # when `emoji` is on (map None = built-in DEFAULT_EMOJI; an edited table
     # replaces it wholesale). ChatterSyn always renders emotes on YouTube rows.
     "youtube_emotes": {"emoji": False, "map": None},
+    # The OBS browser source (Settings → Browser Sources): the Stream tab's chat
+    # on http://localhost:<port>/chat. font_family "" = the page's default font.
+    "browser_source": {
+        "enabled": False, "port": 17830, "font_family": "", "font_size": 20,
+        "text_color": "#ffffff", "background": "#00000000",
+        "background_fills_source": True, "outline": True,
+        "show_platform_icons": True, "show_badges": True, "show_emotes": True,
+        "show_timestamps": False, "fade_seconds": 30, "max_messages": 50,
+    },
     "tabs": [],
     # jump_to_latest_when_idle: a chat scrolled up jumps back to the newest
     # messages after 15 s without activity in it (ChatView.IDLE_RESUME_MS).

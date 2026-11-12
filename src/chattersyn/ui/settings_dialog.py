@@ -12,7 +12,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QKeySequence
+from PySide6.QtGui import QColor, QDesktopServices, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFontComboBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -232,6 +233,7 @@ class SettingsDialog(QDialog):
         connect_youtube: Callable[[], None] | None = None,
         disconnect_youtube: Callable[[], None] | None = None,
         use_own_youtube_client: Callable[[], None] | None = None,
+        browser_source_status: str = "Off.",
         parent=None,
     ):
         super().__init__(parent)
@@ -283,6 +285,7 @@ class SettingsDialog(QDialog):
         self._add_page("Moderation", self._build_moderation())
         self._add_page("Notifications", self._build_notifications())
         self._add_page("Hotkeys", self._build_hotkeys())
+        self._add_page("Browser Sources", self._build_browser_sources(browser_source_status))
         self._add_page("About", self._build_about())
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok
@@ -754,6 +757,155 @@ class SettingsDialog(QDialog):
         form.addRow("", self._notify_live)
         return page
 
+    def _build_browser_sources(self, status: str) -> QWidget:
+        """The OBS browser source: on/off, the URL to paste into OBS, and the look."""
+        conf = self._settings.get("browser_source") or {}
+        page = QWidget(self)
+        form = QFormLayout(page)
+        self._bs_enabled = QCheckBox("Show chat as a browser source for OBS", page)
+        self._bs_enabled.setChecked(bool(conf.get("enabled", False)))
+        form.addRow("", self._bs_enabled)
+
+        self._bs_port = QSpinBox(page)
+        self._bs_port.setRange(1024, 65535)
+        self._bs_port.setValue(int(conf.get("port", 17830)))
+        self._bs_url = QLineEdit(page)
+        self._bs_url.setReadOnly(True)
+        self._bs_copy = QPushButton("Copy", page)
+        self._bs_copy.clicked.connect(
+            lambda: QGuiApplication.clipboard().setText(self._bs_url.text()))
+        url_row = QHBoxLayout()
+        url_row.addWidget(self._bs_url, 1)
+        url_row.addWidget(self._bs_copy)
+        form.addRow("URL:", url_row)
+        self._bs_port.valueChanged.connect(self._update_browser_source_url)
+        self._update_browser_source_url()
+        form.addRow("Port:", self._bs_port)
+        self._bs_status = QLabel(status, page)
+        self._bs_status.setWordWrap(True)
+        form.addRow("Status:", self._bs_status)
+        hint = QLabel("In OBS: Sources → + → Browser, paste the URL, size 400 × 600. "
+                      "Start ChatterSyn before OBS — or press Refresh on the source if "
+                      "OBS loaded it first.", page)
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #8a8a8a;")
+        form.addRow("", hint)
+
+        self._bs_font = QFontComboBox(page)
+        # "" = the page's own default font. The combo always shows *some*
+        # font, so only a font the user actually picks is saved.
+        self._bs_font_family = str(conf.get("font_family") or "")
+        if self._bs_font_family:
+            self._bs_font.setCurrentFont(self._bs_font_family)
+        self._bs_font.currentFontChanged.connect(
+            lambda font: setattr(self, "_bs_font_family", font.family()))
+        self._bs_size = QSpinBox(page)
+        self._bs_size.setRange(10, 72)
+        self._bs_size.setSuffix(" px")
+        self._bs_size.setValue(int(conf.get("font_size", 20)))
+        font_row = QHBoxLayout()
+        font_row.addWidget(self._bs_font, 1)
+        font_row.addWidget(self._bs_size)
+        form.addRow("Font:", font_row)
+
+        self._bs_text_color = str(conf.get("text_color", "#ffffff"))
+        self._bs_background = str(conf.get("background", "#00000000"))
+        self._bs_text_button = QPushButton("Text colour…", page)
+        self._bs_text_button.clicked.connect(lambda: self._pick_browser_source_color("text"))
+        self._bs_background_button = QPushButton("Background…", page)
+        self._bs_background_button.clicked.connect(
+            lambda: self._pick_browser_source_color("background"))
+        colour_row = QHBoxLayout()
+        colour_row.addWidget(self._bs_text_button)
+        colour_row.addWidget(self._bs_background_button)
+        colour_row.addStretch(1)
+        form.addRow("Colours:", colour_row)
+        self._show_browser_source_colors()
+        self._bs_bg_fill = QCheckBox(
+            "Background fills the whole source (not just behind messages)", page)
+        self._bs_bg_fill.setChecked(bool(conf.get("background_fills_source", True)))
+        form.addRow("", self._bs_bg_fill)
+
+        self._bs_outline = QCheckBox("Outline the text (easier to read over video)", page)
+        self._bs_outline.setChecked(bool(conf.get("outline", True)))
+        self._bs_icons = QCheckBox("Platform icons (Twitch / YouTube)", page)
+        self._bs_icons.setChecked(bool(conf.get("show_platform_icons", True)))
+        self._bs_badges = QCheckBox("Badges", page)
+        self._bs_badges.setChecked(bool(conf.get("show_badges", True)))
+        self._bs_emotes = QCheckBox("Emotes as images", page)
+        self._bs_emotes.setChecked(bool(conf.get("show_emotes", True)))
+        self._bs_timestamps = QCheckBox("Timestamps", page)
+        self._bs_timestamps.setChecked(bool(conf.get("show_timestamps", False)))
+        for box in (self._bs_outline, self._bs_icons, self._bs_badges,
+                    self._bs_emotes, self._bs_timestamps):
+            form.addRow("", box)
+
+        fade = int(conf.get("fade_seconds", 30))
+        self._bs_keep = QCheckBox("Keep messages until the limit is reached", page)
+        self._bs_keep.setChecked(fade <= 0)
+        self._bs_fade = QSpinBox(page)
+        self._bs_fade.setRange(1, 600)
+        self._bs_fade.setSuffix(" s")
+        self._bs_fade.setValue(fade if fade > 0 else 30)
+        self._bs_fade.setEnabled(fade > 0)
+        self._bs_keep.toggled.connect(lambda keep: self._bs_fade.setEnabled(not keep))
+        form.addRow("", self._bs_keep)
+        form.addRow("Fade messages after:", self._bs_fade)
+        self._bs_limit = QSpinBox(page)
+        self._bs_limit.setRange(5, 200)
+        self._bs_limit.setValue(int(conf.get("max_messages", 50)))
+        form.addRow("Show at most:", self._bs_limit)
+        return page
+
+    def _update_browser_source_url(self) -> None:
+        self._bs_url.setText(f"http://localhost:{self._bs_port.value()}/chat")
+
+    def _pick_browser_source_color(self, which: str) -> None:
+        current = self._bs_text_color if which == "text" else self._bs_background
+        options = (QColorDialog.ColorDialogOption.ShowAlphaChannel
+                   if which == "background" else QColorDialog.ColorDialogOption(0))
+        color = QColorDialog.getColor(_qcolor(current), self, "Pick a colour", options)
+        if not color.isValid():
+            return
+        if which == "text":
+            self._bs_text_color = color.name(QColor.NameFormat.HexRgb)
+        else:
+            self._bs_background = color.name(QColor.NameFormat.HexArgb)
+        self._show_browser_source_colors()
+
+    def _show_browser_source_colors(self) -> None:
+        """Each colour button shows its colour as a swatch along its left edge."""
+        text = _qcolor(self._bs_text_color)
+        background = _qcolor(self._bs_background)
+        self._bs_text_button.setStyleSheet(
+            f"QPushButton {{ border-left: 14px solid {text.name()}; padding-left: 6px; }}")
+        swatch = (f"rgba({background.red()},{background.green()},{background.blue()},"
+                  f"{background.alphaF():.2f})")
+        self._bs_background_button.setStyleSheet(
+            f"QPushButton {{ border-left: 14px solid {swatch}; padding-left: 6px; }}")
+        self._bs_text_button.setToolTip(f"Text colour: {self._bs_text_color}")
+        transparent = " (transparent)" if background.alpha() == 0 else ""
+        self._bs_background_button.setToolTip(
+            f"Background: {self._bs_background}{transparent} — fills the whole source")
+
+    def _browser_source_values(self) -> dict:
+        return {
+            "enabled": self._bs_enabled.isChecked(),
+            "port": self._bs_port.value(),
+            "font_family": self._bs_font_family,
+            "font_size": self._bs_size.value(),
+            "text_color": self._bs_text_color,
+            "background": self._bs_background,
+            "background_fills_source": self._bs_bg_fill.isChecked(),
+            "outline": self._bs_outline.isChecked(),
+            "show_platform_icons": self._bs_icons.isChecked(),
+            "show_badges": self._bs_badges.isChecked(),
+            "show_emotes": self._bs_emotes.isChecked(),
+            "show_timestamps": self._bs_timestamps.isChecked(),
+            "fade_seconds": 0 if self._bs_keep.isChecked() else self._bs_fade.value(),
+            "max_messages": self._bs_limit.value(),
+        }
+
     def _build_hotkeys(self) -> QWidget:
         page = QWidget(self)
         layout = QVBoxLayout(page)
@@ -911,8 +1063,15 @@ class SettingsDialog(QDialog):
             "notifications.sound": self._notify_sound.isChecked(),
             "notifications.live": self._notify_live.isChecked(),
             "hotkeys": self._hotkeys,
+            "browser_source": self._browser_source_values(),
         })
         if self._on_youtube_api_key is not None:
             self._on_youtube_api_key(self._api_key.text().strip())
         save_user_commands(self._config_dir, self._commands_snapshot())
         super().accept()
+
+
+def _qcolor(value: str) -> QColor:
+    """#RRGGBB or #AARRGGBB (Qt's order) to a QColor."""
+    color = QColor(value)
+    return color if color.isValid() else QColor("#ffffff")

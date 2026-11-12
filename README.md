@@ -19,6 +19,8 @@ both.
 - **Moderation commands.** `/ban`, `/timeout`, `/slow`, `/vip`, `/mod`,
   `/announce`, `/raid`, `/shoutout`, `/mods`, `/vips` and more, with
   suggestions as you type `/`.
+- **Chat on stream.** Show your Stream tab's chat in OBS as a browser source, with
+  your own font, colours and fade-out; deleted messages disappear from it at once.
 - **Also:** highlights and mentions, Ctrl+F search, live status and uptime,
   chat logs, custom commands, hotkeys, dark and light themes.
 
@@ -72,6 +74,23 @@ Your sign-ins are stored in the system keychain, never in the settings file.
 Using your own Twitch or Google app, or a YouTube API key, is covered in
 [Advanced setup](docs/advanced-setup.md).
 
+## Chat on stream (OBS)
+
+1. In ChatterSyn: **Settings → Browser Sources**, tick **Show chat as a browser
+   source for OBS**, press **OK**, then **Copy** the URL
+   (`http://localhost:17830/chat`).
+2. In OBS: **Sources → + → Browser**, paste the URL, set the size to about
+   400 × 600, and leave the background transparent.
+
+It shows your Stream tab's chat (your Twitch channel, and your YouTube stream once
+you're live). Font, size, colours, outline, icons, badges, emotes, timestamps, fade
+time and message count are set on the same Settings page and update OBS right
+away. Tick **Keep messages until the limit is reached** to turn the fade off. The
+page is only reachable from your own computer.
+
+Start ChatterSyn before OBS. If OBS was opened first, the source stays empty:
+press **Refresh** in the source's properties.
+
 ## Settings and files
 
 Settings live in `settings.json` (macOS: `~/Library/Preferences/ChatterSyn/chattersyn/`).
@@ -90,14 +109,15 @@ uv run ruff check src/ tests/ && uv run pytest -q
 Releasing: [docs/releasing.md](docs/releasing.md).
 
 <!-- release-notes:start -->
-## Latest release: v0.10.9 (2026-11-11)
+## Latest release: v0.10.10 (2026-11-12)
 
-### Improved
-- **Settings backup.** ChatterSyn keeps a copy of your last good settings. If the settings file is ever damaged, your tabs and settings come back from that copy and you see a message, instead of everything resetting.
-- **Oversized images skipped.** Images over 8 MB from emote providers are no longer downloaded.
-
-### Fixed
-- **Leftover plain-text sign-in file.** If your system keyring was unavailable at some point, your sign-ins were saved to a plain file that stayed on disk afterwards. Once the keyring works again, they're moved into it and the file is deleted.
+### New
+- **Chat on stream (OBS):** ChatterSyn can show your Stream tab's chat as an OBS Browser Source. Turn it on in **Settings → Browser Sources**, press **Copy**, then in OBS add **Sources → + → Browser** and paste the URL (`http://localhost:17830/chat`; about 400 × 600 works well). It shows your Twitch and YouTube chat together, including subs, raids, announcements and Super Chats. ChatterSyn's own notes, like "connected" messages and errors, don't appear on stream.
+- **Appearance settings:** on the same page you can set the font and size, text and background colours, and a text outline. You can also turn platform icons, badges, emotes and timestamps on or off. Changes reach OBS as soon as you press OK, with no Refresh.
+- **Background options:** the background colour can fill the whole source or sit only behind each message.
+- **Message lifetime:** messages fade after a set time. Tick **Keep messages until the limit is reached** to keep them on screen until newer ones push them out. The "Show at most" setting caps how many are shown.
+- **Removed messages leave the stream:** messages deleted by a mod, and the messages of timed-out or banned users, disappear from the OBS source right away.
+- **Local only:** the page can only be opened from your own computer. If port 17830 is taken, Settings says so and you can pick another port. Start ChatterSyn before OBS; if OBS was opened first, press **Refresh** on the source.
 
 Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
 <!-- release-notes:end -->

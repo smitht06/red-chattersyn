@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChatterSyn chat</title>
+<!--
+  ChatterSyn's OBS browser source. Served on 127.0.0.1 by the app
+  (services/overlay_server.py); settings arrive as `config` events, chat rows as
+  `message` events, deletions/timeouts as `remove` events.
+  Chat content is only ever inserted with textContent / element attributes —
+  never parsed as HTML.
+-->
+<style>
+  :root {
+    --font: system-ui, "Segoe UI", Roboto, "Noto Sans", sans-serif;
+    --size: 20px;
+    --text: #ffffff;
+    --bg: transparent;
+    --outline: 0 0 2px #000, 0 0 2px #000, 1px 1px 2px #000;
+  }
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  /* The background colour fills the whole source. A separate layer, because
+     OBS's default custom CSS forces the body background to transparent. */
+  #bg { position: fixed; inset: 0; background: var(--bg); z-index: -1; }
+  body {
+    font-family: var(--font);
+    font-size: var(--size);
+    color: var(--text);
+    line-height: 1.35;
+  }
+  #chat {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    display: flex; flex-direction: column; justify-content: flex-end;
+    padding: 6px 8px; box-sizing: border-box; max-height: 100vh;
+  }
+  .row {
+    padding: 2px 6px; margin-top: 3px; border-radius: 4px;
+    text-shadow: var(--outline);
+    overflow-wrap: anywhere;
+    transition: opacity 0.5s ease;
+  }
+  /* "Background fills the whole source" off: behind each message instead. */
+  body.bg-rows #bg { display: none; }
+  body.bg-rows .row { background: var(--bg); }
+  .row.bar { border-left: 4px solid var(--bar); padding-left: 8px; }
+  .row.event { font-style: italic; opacity: 0.95; }
+  .row.fading { opacity: 0; }  /* last: wins over .row.event's opacity */
+  .ts { opacity: 0.7; margin-right: 0.35em; font-size: 0.85em; }
+  .icon, .badge, .emote { vertical-align: middle; }
+  .icon { width: 1em; height: 1em; margin-right: 0.3em; display: inline-block; }
+  .icon svg { width: 100%; height: 100%; vertical-align: top; }
+  .badge { height: 1em; margin-right: 0.2em; }
+  .emote { height: 1.4em; margin: 0 0.05em; }
+  .name { font-weight: 700; }
+  .action .text { font-style: italic; }
+</style>
+</head>
+<body>
+<div id="bg"></div>
+<div id="chat"></div>
+<template id="icon-twitch"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ffffff" d="M20.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z"/><path fill="#9146ff" d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z"/></svg></template>
+<template id="icon-youtube"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ff0000" d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814z"/><path fill="#ffffff" d="M9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg></template>
+<script>
+"use strict";
+(function () {
+  const chat = document.getElementById("chat");
+  const root = document.documentElement.style;
+  const rows = new Map();  // message id -> {el, arrived}
+  // Defaults match Settings → Browser Sources (config/settings.py).
+  let config = {
+    font_family: "", font_size: 20, text_color: "#ffffff", background: "#00000000",
+    background_fills_source: true, outline: true, show_platform_icons: true, show_badges: true, show_emotes: true,
+    show_timestamps: false, fade_seconds: 30, max_messages: 50,
+  };
+  let lastEvents = [];  // the rows' events, to rebuild them after a restyle
+
+  // "#AARRGGBB" (Qt) or "#RRGGBB" -> a CSS colour.
+  function cssColor(value, fallback) {
+    if (typeof value !== "string") return fallback;
+    let m = /^#([0-9a-f]{2})([0-9a-f]{6})$/i.exec(value);
+    if (m) {
+      const a = parseInt(m[1], 16) / 255;
+      const rgb = m[2];
+      if (a === 0) return "transparent";
+      return "rgba(" + parseInt(rgb.slice(0, 2), 16) + "," + parseInt(rgb.slice(2, 4), 16) + ","
+        + parseInt(rgb.slice(4, 6), 16) + "," + a.toFixed(3) + ")";
+    }
+    return /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+  }
+
+  function safeUrl(url) {
+    return typeof url === "string" && /^https?:\/\//i.test(url) ? url : null;
+  }
+
+  function applyConfig(next) {
+    config = Object.assign({}, config, next || {});
+    const family = typeof config.font_family === "string" && config.font_family.trim()
+      ? '"' + config.font_family.replace(/["\\]/g, "") + '", system-ui, sans-serif'
+      : 'system-ui, "Segoe UI", Roboto, "Noto Sans", sans-serif';
+    root.setProperty("--font", family);
+    root.setProperty("--size", Math.max(10, Math.min(72, Number(config.font_size) || 20)) + "px");
+    root.setProperty("--text", cssColor(config.text_color, "#ffffff"));
+    root.setProperty("--bg", cssColor(config.background, "transparent"));
+    document.body.classList.toggle("bg-rows", config.background_fills_source === false);
+    root.setProperty("--outline", config.outline ? "0 0 2px #000, 0 0 2px #000, 1px 1px 2px #000" : "none");
+    // Rebuild what's on screen so show_* switches apply to rows already shown.
+    const events = lastEvents.slice();
+    chat.textContent = "";
+    rows.clear();
+    lastEvents = [];
+    events.forEach(addRow);
+    enforce();
+  }
+
+  function icon(platform) {
+    const tpl = document.getElementById(platform === "youtube" ? "icon-youtube" : "icon-twitch");
+    const span = document.createElement("span");
+    span.className = "icon";
+    span.appendChild(tpl.content.cloneNode(true));
+    return span;
+  }
+
+  function buildRow(ev) {
+    const row = document.createElement("div");
+    row.className = "row " + (ev.kind || "normal");
+    if (typeof ev.bar === "string" && /^#[0-9a-f]{6}$/i.test(ev.bar)) {
+      row.classList.add("bar");
+      row.style.setProperty("--bar", ev.bar);
+    }
+    if (config.show_timestamps && ev.ts) {
+      const ts = document.createElement("span");
+      ts.className = "ts";
+      ts.textContent = ev.ts;
+      row.appendChild(ts);
+    }
+    if (config.show_platform_icons && ev.name) row.appendChild(icon(ev.platform));
+    if (config.show_badges && Array.isArray(ev.badges)) {
+      ev.badges.forEach(function (b) {
+        const url = safeUrl(b && b.url);
+        if (!url) return;
+        const img = document.createElement("img");
+        img.className = "badge";
+        img.src = url;
+        img.alt = "";
+        img.title = String(b.title || "");
+        row.appendChild(img);
+      });
+    }
+    if (ev.name) {
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = ev.name;
+      if (typeof ev.color === "string" && /^#[0-9a-f]{6}$/i.test(ev.color)) name.style.color = ev.color;
+      row.appendChild(name);
+      const sep = document.createElement("span");
+      sep.textContent = ev.kind === "action" ? " " : ": ";
+      row.appendChild(sep);
+    }
+    const text = document.createElement("span");
+    text.className = "text";
+    if (ev.kind === "action" && typeof ev.color === "string" && /^#[0-9a-f]{6}$/i.test(ev.color)) {
+      text.style.color = ev.color;
+    }
+    (Array.isArray(ev.parts) ? ev.parts : []).forEach(function (part) {
+      if (part && part.t === "emote") {
+        const url = safeUrl(part.url);
+        if (config.show_emotes && url) {
+          const img = document.createElement("img");
+          img.className = "emote";
+          img.src = url;
+          img.alt = String(part.name || "");
+          img.title = String(part.name || "");
+          text.appendChild(img);
+        } else {
+          text.appendChild(document.createTextNode(String(part.name || "")));
+        }
+      } else if (part) {
+        text.appendChild(document.createTextNode(String(part.v || "")));
+      }
+    });
+    row.appendChild(text);
+    return row;
+  }
+
+  function addRow(ev) {
+    if (!ev || typeof ev.id !== "string" || rows.has(ev.id)) return;
+    const el = buildRow(ev);
+    chat.appendChild(el);
+    rows.set(ev.id, { el: el, arrived: Number(ev.arrived) || Date.now() / 1000 });
+    lastEvents.push(ev);
+  }
+
+  function removeRow(id) {
+    const entry = rows.get(id);
+    if (!entry) return;
+    rows.delete(id);
+    entry.el.remove();
+    lastEvents = lastEvents.filter(function (ev) { return ev.id !== id; });
+  }
+
+  // Message limit and fade-out (fade_seconds 0 = keep).
+  function enforce() {
+    const max = Math.max(1, Number(config.max_messages) || 50);
+    while (rows.size > max) removeRow(rows.keys().next().value);
+    const fade = Number(config.fade_seconds) || 0;
+    if (fade <= 0) return;
+    const now = Date.now() / 1000;
+    rows.forEach(function (entry, id) {
+      if (now - entry.arrived > fade && !entry.el.classList.contains("fading")) {
+        entry.el.classList.add("fading");
+        setTimeout(function () { removeRow(id); }, 500);
+      }
+    });
+  }
+  setInterval(enforce, 1000);
+
+  // EventSource reconnects by itself (sending Last-Event-ID), and the rows on
+  // screen stay while ChatterSyn is away.
+  const source = new EventSource("/events");
+  source.addEventListener("config", function (e) {
+    try { applyConfig(JSON.parse(e.data)); } catch (err) { /* ignore a bad frame */ }
+  });
+  source.addEventListener("message", function (e) {
+    try { addRow(JSON.parse(e.data)); enforce(); } catch (err) { /* ignore a bad frame */ }
+  });
+  source.addEventListener("remove", function (e) {
+    try { (JSON.parse(e.data) || []).forEach(removeRow); } catch (err) { /* ignore */ }
+  });
+})();
+</script>
+</body>
+</html>

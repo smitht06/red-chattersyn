@@ -52,6 +52,7 @@ from ..services.emotes.youtube_emoji import emote_runs
 from ..services.highlights import HighlightController
 from ..services.logger import ChatLogger
 from ..services.moderation import STACK_MAX_MESSAGES, STACK_WINDOW, ModerationState
+from ..services.overlay_server import OverlayServer, load_page
 from ..services.send import SendCoordinator, SendResult, SendTargets
 from ..services.twitch.auth import (
     DEFAULT_TWITCH_CLIENT_ID,
@@ -76,6 +77,7 @@ from .empty_tab_page import EmptyTabPage
 from .fake_feed import FakeFeed
 from .mentions_popup import MentionsPopup
 from .notebook import Notebook
+from .overlay_bridge import OverlayBridge
 from .search_popup import SearchPopup
 from .settings_dialog import SettingsDialog
 from .tab import Tab
@@ -133,6 +135,11 @@ class MainWindow(QMainWindow):
         self._demo = demo
         self._tabs: list[Tab] = []
         self._streamer_tabs: list[Tab] = []  # Stream tabs: own Twitch + own live YouTube
+        # The OBS browser source (Settings → Browser Sources).
+        self._overlay: OverlayServer | None = None
+        self._overlay_bridge: OverlayBridge | None = None
+        self._overlay_status = "Off."
+        self._overlay_lock = asyncio.Lock()  # one start/stop/restyle at a time
         self._feeds: list[FakeFeed] = []
         self._twitch: TwitchService | None = None
         self._youtube: YouTubeService | None = None
@@ -251,6 +258,78 @@ class MainWindow(QMainWindow):
 
         theme.theme_notifier.changed.connect(self._on_theme_changed)
         self._announce_settings_problem()
+        asyncio.ensure_future(self._apply_overlay())
+
+    # -- OBS browser source ----------------------------------------------------------
+
+    _OVERLAY_PAGE_KEYS = ("font_family", "font_size", "text_color", "background",
+                          "background_fills_source", "outline",
+                          "show_platform_icons", "show_badges", "show_emotes",
+                          "show_timestamps", "fade_seconds", "max_messages")
+
+    async def _apply_overlay(self) -> None:
+        """Start, stop, move or restyle the browser source from the settings.
+        Runs one at a time: startup and a Settings OK can overlap."""
+        async with self._overlay_lock:
+            await self._apply_overlay_locked()
+
+    async def _apply_overlay_locked(self) -> None:
+        conf = self._settings.get("browser_source") or {}
+        if not conf.get("enabled"):
+            await self._stop_overlay()
+            self._overlay_status = "Off."
+            return
+        raw_port = conf.get("port", 17830)
+        try:
+            port = int(raw_port)
+            if not 0 <= port <= 65535:
+                raise ValueError(port)
+        except (TypeError, ValueError):  # a hand-edited settings.json
+            await self._stop_overlay()
+            self._overlay_status = f"Port {raw_port} can't be used — choose another."
+            return
+        if self._overlay is not None and port not in (0, self._overlay.port):
+            await self._stop_overlay()
+        if self._overlay is None:
+            try:
+                server = OverlayServer(port=port, page=load_page())
+                started = await server.start()
+            except (OSError, OverflowError) as exc:
+                log.warning("browser source could not start: %s", exc)
+                started = False
+            if not started:
+                self._overlay_status = f"Port {port} is in use — choose another."
+                return
+            self._overlay = server
+        self._overlay_status = "Running — add it in OBS as a Browser Source."
+        self._overlay.set_limits(max_messages=int(conf.get("max_messages", 50)),
+                                 fade_seconds=float(conf.get("fade_seconds", 30)))
+        self._overlay.set_config({key: conf.get(key) for key in self._OVERLAY_PAGE_KEYS})
+        self._bind_overlay()
+
+    async def _stop_overlay(self) -> None:
+        if self._overlay_bridge is not None:
+            self._overlay_bridge.detach()
+            self._overlay_bridge = None
+        server, self._overlay = self._overlay, None
+        if server is not None:
+            await server.stop()
+
+    def _bind_overlay(self) -> None:
+        """Feed the first Stream tab's chat to the running browser source."""
+        model = self._streamer_tabs[0].view.message_model if self._streamer_tabs else None
+        bridge_model = self._overlay_bridge.model if self._overlay_bridge is not None else None
+        if self._overlay is None or model is None:
+            if self._overlay_bridge is not None:
+                self._overlay_bridge.detach()
+                self._overlay_bridge = None
+            return
+        if bridge_model is model:
+            return
+        if self._overlay_bridge is not None:
+            self._overlay_bridge.detach()
+        self._overlay_bridge = OverlayBridge(
+            model, self._overlay.publish_message, self._overlay.publish_remove)
 
     def _announce_settings_problem(self) -> None:
         """Settings.load recovered from a damaged settings.json: say so once."""
@@ -414,6 +493,7 @@ class MainWindow(QMainWindow):
         dialog = SettingsDialog(
             self._settings, config_dir(),
             twitch_status=twitch_status,
+            browser_source_status=self._overlay_status,
             youtube_status=youtube_status,
             youtube_api_key="" if self._demo else (self._secrets.get("youtube_api_key") or ""),
             youtube_api_key_note=(
@@ -440,6 +520,7 @@ class MainWindow(QMainWindow):
 
     def _apply_settings(self) -> None:
         """Push the just-accepted settings snapshot into the live UI."""
+        asyncio.ensure_future(self._apply_overlay())
         theme.apply(QApplication.instance(), self._settings.get("theme", "dark"),
                     self._settings.get("ui_scale", 1.0))
         scrollback = int(self._settings.get("scrollback", 1000) or 1000)
@@ -599,6 +680,8 @@ class MainWindow(QMainWindow):
         return " · ".join(parts) or "live"
 
     async def shutdown(self) -> None:
+        async with self._overlay_lock:  # an apply still running must not restart it
+            await self._stop_overlay()
         if self._send is not None:
             await self._send.stop()
         if self._youtube is not None:
@@ -1623,6 +1706,7 @@ class MainWindow(QMainWindow):
         auto-attaches when they go live (waiting placeholder before that)."""
         tab = self.add_tab("", MINE_TARGET, side_by_side=side_by_side)
         self._streamer_tabs.append(tab)
+        self._bind_overlay()
         tab.set_youtube("Your Stream")  # don't leak the "mine:" sentinel into the header
         tab.set_youtube_status("waiting for your live stream…")
         tab.header.show_viewer_counts(True)
@@ -1700,6 +1784,7 @@ class MainWindow(QMainWindow):
             self._tabs.remove(widget)
             if widget in self._streamer_tabs:
                 self._streamer_tabs.remove(widget)
+                self._bind_overlay()
             self._offers.pop(widget.tab_key, None)
             still_joined = widget.twitch_channel and any(
                 tab.twitch_channel == widget.twitch_channel for tab in self._tabs)

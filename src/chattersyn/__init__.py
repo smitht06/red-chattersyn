@@ -3,7 +3,7 @@
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _installed_version
 
-__version__ = "0.10.9"
+__version__ = "0.10.10"
 
 
 def version() -> str:
