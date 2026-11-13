@@ -109,15 +109,10 @@ uv run ruff check src/ tests/ && uv run pytest -q
 Releasing: [docs/releasing.md](docs/releasing.md).
 
 <!-- release-notes:start -->
-## Latest release: v0.10.10 (2026-11-12)
+## Latest release: v0.10.11 (2026-11-13)
 
-### New
-- **Chat on stream (OBS):** ChatterSyn can show your Stream tab's chat as an OBS Browser Source. Turn it on in **Settings → Browser Sources**, press **Copy**, then in OBS add **Sources → + → Browser** and paste the URL (`http://localhost:17830/chat`; about 400 × 600 works well). It shows your Twitch and YouTube chat together, including subs, raids, announcements and Super Chats. ChatterSyn's own notes, like "connected" messages and errors, don't appear on stream.
-- **Appearance settings:** on the same page you can set the font and size, text and background colours, and a text outline. You can also turn platform icons, badges, emotes and timestamps on or off. Changes reach OBS as soon as you press OK, with no Refresh.
-- **Background options:** the background colour can fill the whole source or sit only behind each message.
-- **Message lifetime:** messages fade after a set time. Tick **Keep messages until the limit is reached** to keep them on screen until newer ones push them out. The "Show at most" setting caps how many are shown.
-- **Removed messages leave the stream:** messages deleted by a mod, and the messages of timed-out or banned users, disappear from the OBS source right away.
-- **Local only:** the page can only be opened from your own computer. If port 17830 is taken, Settings says so and you can pick another port. Start ChatterSyn before OBS; if OBS was opened first, press **Refresh** on the source.
+### Fixed
+- **Autocomplete dropdown froze typing:** once the dropdown opened (`/` and `.` commands, `@` names, `:` emotes), the keyboard stopped working. Typing, the arrow keys, Tab and Enter all did nothing until you clicked elsewhere. Now you can keep typing, move with Up/Down, pick an entry with Enter or Tab, and send a fully typed command such as `/slowoff` with Enter.
 
 Older releases and downloads: [GitHub Releases](https://github.com/smitht06/red-chattersyn/releases).
 <!-- release-notes:end -->

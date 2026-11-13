@@ -212,6 +212,7 @@ class InputWidget(QWidget):
     def _ensure_popup(self) -> AutoCompletePopup:
         if self._completion_popup is None:
             self._completion_popup = AutoCompletePopup()
+            self._completion_popup.set_key_target(self._edit)  # keys typed while it's open
             self._completion_popup.closed.connect(self._on_popup_closed)
         return self._completion_popup
 

@@ -1,16 +1,27 @@
 """AutoCompletePopup: the frameless completion list floating above the input.
 
 DontFocus — keyboard events keep going to the QLineEdit, which drives the
-popup (Up/Down/Enter/Tab/Escape). Rows: emote thumbnail or emoji glyph +
+popup (Up/Down/Enter/Tab/Escape). While a Qt.Popup is open Qt delivers every
+key press to it instead, so the popup hands each key on to its key target
+(the line edit), the way QCompleter's popup does. Rows: emote thumbnail or emoji glyph +
 name, provider/user label right-aligned. Selection resets on every
 set_candidates (every keystroke — parity).
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QAbstractListModel, QModelIndex, QPoint, QRect, QSize, Qt
+from PySide6.QtCore import (
+    QAbstractListModel,
+    QCoreApplication,
+    QEvent,
+    QModelIndex,
+    QPoint,
+    QRect,
+    QSize,
+    Qt,
+)
 from PySide6.QtGui import QFont, QFontMetrics, QPainter, QPixmap
-from PySide6.QtWidgets import QListView, QStyle, QStyledItemDelegate
+from PySide6.QtWidgets import QListView, QStyle, QStyledItemDelegate, QWidget
 
 from ..core.image_cache import image_cache
 from ..services.autocomplete import CompletionCandidate
@@ -123,9 +134,24 @@ class AutoCompletePopup(BasePopup):
         self._view.setFixedWidth(POPUP_WIDTH)
         self._start = 0
         self._end = 0
+        self._key_target: QWidget | None = None
         image_cache.image_ready.connect(self._on_image_ready)
 
     # -- API ----------------------------------------------------------------------
+
+    def set_key_target(self, widget: QWidget | None) -> None:
+        """The widget that gets the keys typed while the popup is open."""
+        self._key_target = widget
+
+    def event(self, event: QEvent) -> bool:
+        # Catches Tab too, before QWidget turns it into focus navigation.
+        # (getattr: QFrame's constructor already sends events.)
+        target = getattr(self, "_key_target", None)
+        if target is not None and event.type() in (QEvent.Type.KeyPress,
+                                                   QEvent.Type.KeyRelease):
+            QCoreApplication.sendEvent(target, event)
+            return True
+        return super().event(event)
 
     def set_candidates(self, candidates: list[CompletionCandidate],
                        start: int, end: int) -> None:

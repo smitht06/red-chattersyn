@@ -242,3 +242,36 @@ def test_tab_still_inserts_fully_typed_command(qapp, monkeypatch):
     QTest.keyClick(widget._edit, Qt.Key.Key_Tab)
     assert widget.text() == "/slowoff "
     assert sent == []
+
+
+
+# -- keys that reach the popup itself -------------------------------------------------
+
+
+def test_keys_sent_to_the_popup_reach_the_input(qapp, monkeypatch):
+    """User bug: once the `/` dropdown opened, typing, Up/Down and Enter all went
+    nowhere ("locks the keyboard"). While a Qt.Popup is open, Qt delivers every
+    key press to the popup, not to the focused input, so the popup must hand them
+    on. Keys are sent to the popup here, as Qt does."""
+    widget = _make_input(monkeypatch, commands=("/ban", "/banner", "/slow"))
+    widget.set_text("/b")
+    popup = widget._completion_popup
+    assert popup is not None and popup.isVisible()
+    QTest.keyClicks(popup, "a")
+    assert widget.text() == "/ba"  # typing keeps going into the input
+    popup = widget._completion_popup
+    QTest.keyClick(popup, Qt.Key.Key_Down)
+    assert popup.current().name == "/banner"
+    QTest.keyClick(popup, Qt.Key.Key_Return)
+    assert widget.text() == "/banner "  # Enter picks the highlighted command
+    assert widget._completion_popup is None
+
+
+def test_tab_and_escape_sent_to_the_popup(qapp, monkeypatch):
+    widget = _make_input(monkeypatch, users=("forsen",))
+    widget.set_text("@fo")
+    QTest.keyClick(widget._completion_popup, Qt.Key.Key_Tab)
+    assert widget.text() == "@forsen "
+    widget.set_text("@fo")
+    QTest.keyClick(widget._completion_popup, Qt.Key.Key_Escape)
+    assert widget._completion_popup is None and widget.text() == "@fo"
